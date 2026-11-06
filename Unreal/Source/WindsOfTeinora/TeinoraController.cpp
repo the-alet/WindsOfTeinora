@@ -229,7 +229,7 @@ void ATeinoraController::ApplySettings()
 	}
 	if (ATeinoraWorld* World = GetTeinoraWorld())
 	{
-		World->SetView(Settings.GetViewRadius(), Settings.GeometryDetail, Settings.bClouds);
+		World->SetView(Settings.GetViewRadius(), Settings.GeometryDetail, Settings.bClouds, Settings.World.CloudCover);
 		World->SetTimeRate(FTeinoraWorldSettings::GetTimeRate(Settings.World.TimeSpeed));
 	}
 }

@@ -80,6 +80,7 @@ void FTeinoraSettings::Load()
 	ReadInt(TEXT("WindDirection"), World.WindDirection, -1, FTeinoraWorldSettings::WindDirections - 1);
 	ReadInt(TEXT("TimeSpeed"), World.TimeSpeed, 0, FTeinoraWorldSettings::TimeRates - 1);
 	ReadDouble(TEXT("WaveHeight"), World.WaveHeight, 0.0, FTeinoraWorldSettings::MaxWaveHeight);
+	ReadDouble(TEXT("CloudCover"), World.CloudCover, 0.0, FTeinoraWorldSettings::MaxCloudCover);
 	for (int32 Action = 0; Action < static_cast<int32>(ETeinoraAction::Count); ++Action)
 	{
 		FString Name;
@@ -106,6 +107,7 @@ void FTeinoraSettings::Save() const
 	GConfig->SetInt(Section, TEXT("WindDirection"), World.WindDirection, GGameUserSettingsIni);
 	GConfig->SetInt(Section, TEXT("TimeSpeed"), World.TimeSpeed, GGameUserSettingsIni);
 	GConfig->SetDouble(Section, TEXT("WaveHeight"), World.WaveHeight, GGameUserSettingsIni);
+	GConfig->SetDouble(Section, TEXT("CloudCover"), World.CloudCover, GGameUserSettingsIni);
 	for (int32 Action = 0; Action < static_cast<int32>(ETeinoraAction::Count); ++Action)
 	{
 		GConfig->SetString(Section, ActionKeys[Action], *Keys[Action].ToString(), GGameUserSettingsIni);

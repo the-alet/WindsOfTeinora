@@ -56,6 +56,7 @@ namespace
 	constexpr float PlanetAlbedo = 0.125f; // it gives back 10 to 15% of what the suns send it
 	constexpr float PlanetShine = 0.55f;
 	constexpr double SkyDomeRadius = 2.0e7; // 200 km, past all the ground there is to see
+	constexpr double CloudCoverReach = 0.5; // what the most and the least of the setting do to the cloud material's coverage
 
 	constexpr int32 SurfaceTextureSize = 1024;
 
@@ -339,16 +340,23 @@ void ATeinoraWorld::SetClock(double Hour, double Day)
 	}
 }
 
-void ATeinoraWorld::SetView(int32 ViewRadius, int32 GeometryDetail, bool bClouds)
+void ATeinoraWorld::SetView(int32 ViewRadius, int32 GeometryDetail, bool bClouds, double CloudCover)
 {
 	if (Sim != nullptr)
 	{
 		Sim->World.SetViewRadius(ViewRadius);
 		Sim->World.SetDetail(GeometryDetail);
 	}
+
+	// A run can ask for a cover of its own, to see what the setting does.
+	FParse::Value(FCommandLine::Get(), TEXT("TeinoraCover="), CloudCover);
 	if (Clouds != nullptr)
 	{
-		Clouds->SetVisibility(bClouds);
+		Clouds->SetVisibility(bClouds && CloudCover > 0.0);
+	}
+	if (CloudMaterial != nullptr)
+	{
+		CloudMaterial->SetScalarParameterValue(TEXT("Cloud_GlobalCoverage"), static_cast<float>((CloudCover - 1.0) * CloudCoverReach));
 	}
 }
 
@@ -462,7 +470,8 @@ void ATeinoraWorld::SpawnSky()
 
 	AVolumetricCloud* CloudActor = Level->SpawnActor<AVolumetricCloud>();
 	Clouds = CloudActor->FindComponentByClass<UVolumetricCloudComponent>();
-	Clouds->SetMaterial(LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineSky/VolumetricClouds/m_SimpleVolumetricCloud_Inst.m_SimpleVolumetricCloud_Inst")));
+	CloudMaterial = UMaterialInstanceDynamic::Create(LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineSky/VolumetricClouds/m_SimpleVolumetricCloud_Inst.m_SimpleVolumetricCloud_Inst")), this);
+	Clouds->SetMaterial(CloudMaterial);
 }
 
 void ATeinoraWorld::SpawnSkyDome()

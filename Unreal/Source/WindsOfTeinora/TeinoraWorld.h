@@ -64,7 +64,7 @@ public:
 	void SetPaused(bool bInPaused) { bPaused = bInPaused; }
 	void SetClock(double Hour, double Day);
 	void SetTimeRate(double Rate) { TimeRate = Rate; }
-	void SetView(int32 ViewRadius, int32 GeometryDetail, bool bClouds);
+	void SetView(int32 ViewRadius, int32 GeometryDetail, bool bClouds, double CloudCover);
 	void ThrowBall(const Teinora::Vec3& Eye, const Teinora::Vec3& LineOfSight, double Speed);
 	void ToggleMagicView() { bMagicView = !bMagicView; }
 
@@ -104,6 +104,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UVolumetricCloudComponent> Clouds;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> CloudMaterial;
 
 	UPROPERTY()
 	TObjectPtr<UStaticMeshComponent> SkyDome;

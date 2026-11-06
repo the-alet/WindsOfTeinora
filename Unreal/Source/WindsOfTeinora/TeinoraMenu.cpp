@@ -274,6 +274,10 @@ void STeinoraMenu::ShowWorld()
 		[World]() { return FText::FromString(FString::Printf(TEXT("%d%%"), FMath::RoundToInt(World->WaveHeight * 100.0))); },
 		[World]() { World->WaveHeight = World->WaveHeight >= FTeinoraWorldSettings::MaxWaveHeight ? 0.0 : World->WaveHeight + FTeinoraWorldSettings::WaveStep; });
 
+	AddSetting(ToText(TEXT("Cloud Cover")),
+		[World]() { return FText::FromString(FString::Printf(TEXT("%d%%"), FMath::RoundToInt(World->CloudCover * 100.0))); },
+		[World]() { World->CloudCover = World->CloudCover >= FTeinoraWorldSettings::MaxCloudCover ? 0.0 : World->CloudCover + FTeinoraWorldSettings::CloudStep; });
+
 	AddSetting(ToText(TEXT("Reset to Defaults")), []() { return FText::GetEmpty(); }, [World]() { *World = FTeinoraWorldSettings(); });
 }
 
