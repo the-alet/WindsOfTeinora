@@ -62,6 +62,7 @@ namespace
 	constexpr double RippleWrap = 3200.0;   // metres of drift that the ripples' two tiles both repeat over
 	constexpr double ChunkWaterSearch = 512.0; // far enough from a chunk's corner to take in any lake that touches it
 	constexpr double DeepestShown = 64.0;   // and what lies deeper than this looks the same
+	const FLinearColor LowSky(0.3f, 0.37f, 0.44f); // the sky just over the water, against the light on it
 
 	constexpr int32 SurfaceTextureSize = 1024;
 
@@ -725,6 +726,7 @@ void ATeinoraWorld::UpdateLiquid(const Vec3& Eye)
 		Surface->SetVectorParameterValue(TEXT("LiquidArea"), Area);
 		Surface->SetVectorParameterValue(TEXT("Drift"), Drift);
 		Surface->SetVectorParameterValue(TEXT("EyeAt"), FLinearColor(EyeAt));
+		Surface->SetVectorParameterValue(TEXT("SkyGlow"), Sim->WaterLight * LowSky);
 		Surface->SetScalarParameterValue(TEXT("BedReach"), BedReach);
 	}
 }

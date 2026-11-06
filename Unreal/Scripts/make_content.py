@@ -366,6 +366,13 @@ WATER_ROUGHNESS = WATER_READ + '''
 return lerp(0.05, 0.6, Foam);
 '''
 
+# Rays reflected low across the water run into the next wave. Translucency stops at that hit with no
+# reflection of its own, which would show black, so the wave gives back the low sky it hides. Only a
+# reflection can meet the top of the water on its way up.
+WATER_GLOW = '''
+return Parameters.TwoSidedSign > 0.0 && Parameters.CameraVector.z < 0.0 ? SkyGlow : float3(0.0, 0.0, 0.0);
+'''
+
 
 def make_water():
     material = begin('M_Water')
@@ -404,6 +411,10 @@ def make_water():
     link(share, '', color, 'WaveShare')
     link(texture_parameter(material, 'SnowNormal', -1400, 800), '', normal, 'SnowNormal')
     link(normal, '', opacity, 'Normal')
+
+    glow = custom_node(material, WATER_GLOW, ('SkyGlow',), -300, 1500)
+    link(vector_parameter(material, 'SkyGlow', -800, 1500), '', glow, 'SkyGlow')
+    connect(glow, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
     connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
     connect(metal, '', unreal.MaterialProperty.MP_METALLIC)

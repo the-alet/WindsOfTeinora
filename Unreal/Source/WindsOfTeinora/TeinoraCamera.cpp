@@ -78,6 +78,11 @@ void ATeinoraCamera::BeginPlay()
 			Pitch = FCString::Atod(*Parts[4]);
 		}
 	}
+	double GroundHeight = -1.0;
+	if (FParse::Value(FCommandLine::Get(), TEXT("TeinoraGround="), GroundHeight) && GroundHeight >= 0.0)
+	{
+		Eye.Z = Sim::TerrainHeight(Eye.X, Eye.Y, Sim::WorldSeed) + GroundHeight;
+	}
 	if (FParse::Value(FCommandLine::Get(), TEXT("TeinoraGaze="), Text, false))
 	{
 		TArray<FString> Parts;
