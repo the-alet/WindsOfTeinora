@@ -80,6 +80,9 @@ private:
 	void UpdateSky(ATeinoraCamera* Eye);
 	void UpdateWater(const Teinora::Vec3& Eye);
 	void UpdateLakes(const Teinora::Vec3& Eye);
+	void UpdateLiquid(const Teinora::Vec3& Eye);
+	void UpdatePlants(const Teinora::Vec3& Eye);
+	void UpdateEyeInWater(ATeinoraCamera& Eye);
 	void UpdateBodies();
 	void UpdateMagic(ATeinoraCamera& Eye, float DeltaSeconds);
 	void RunAutomation();
@@ -118,16 +121,25 @@ private:
 	TObjectPtr<UTexture2D> StarCells;
 
 	UPROPERTY()
-	TObjectPtr<UMaterialInterface> TerrainMaterial;
+	TObjectPtr<UMaterialInstanceDynamic> TerrainMaterial;
 
 	UPROPERTY()
-	TObjectPtr<UMaterialInterface> LeafMaterial;
+	TObjectPtr<UMaterialInstanceDynamic> LeafMaterial;
 
 	UPROPERTY()
-	TObjectPtr<UMaterialInterface> WaterMaterial;
+	TObjectPtr<UMaterialInstanceDynamic> SeaMaterial;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> LakeMaterial;
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> BodyMaterial;
+
+	UPROPERTY()
+	TObjectPtr<UTexture2D> LiquidMap;
+
+	UPROPERTY()
+	TObjectPtr<UTexture2D> PlantMap;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMesh>> Primitives;

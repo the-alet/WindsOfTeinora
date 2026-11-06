@@ -110,6 +110,12 @@ void ATeinoraCamera::BeginPlay()
 		}
 	}
 
+	if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Underwater.M_Underwater")))
+	{
+		UnderwaterMaterial = UMaterialInstanceDynamic::Create(Base, this);
+		Camera->PostProcessSettings.WeightedBlendables.Array.Add(FWeightedBlendable(0.0f, UnderwaterMaterial));
+	}
+
 	if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Focus.M_Focus")))
 	{
 		FocusMaterial = UMaterialInstanceDynamic::Create(Base, this);
@@ -128,13 +134,49 @@ void ATeinoraCamera::SetExposure(double Multiplier)
 	Camera->PostProcessSettings.AutoExposureBias = DayExposureBias + static_cast<float>(FMath::Log2(Multiplier));
 }
 
-void ATeinoraCamera::SetUnderwater(double Depth)
+void ATeinoraCamera::SetUnderwater(double Depth, const FLinearColor& Light)
 {
-	// Water takes the red out of what is seen through it, and more the deeper the eye goes.
-	FPostProcessSettings& Post = Camera->PostProcessSettings;
-	Post.bOverride_SceneColorTint = Depth > 0.0;
-	const float Down = FMath::Exp(-static_cast<float>(Depth) * 0.09f);
-	Post.SceneColorTint = FLinearColor(0.22f * Down, 0.62f * Down, 0.66f * Down);
+	if (UnderwaterMaterial == nullptr)
+	{
+		return;
+	}
+
+	for (FWeightedBlendable& Item : Camera->PostProcessSettings.WeightedBlendables.Array)
+	{
+		if (Item.Object == UnderwaterMaterial)
+		{
+			Item.Weight = Depth > 0.0 ? 1.0f : 0.0f; // nothing is drawn at no weight
+		}
+	}
+	if (Depth <= 0.0)
+	{
+		return;
+	}
+
+	const auto ToColor = [](const Vec3& Value)
+	{
+		return FLinearColor(static_cast<float>(Value.X), static_cast<float>(Value.Y), static_cast<float>(Value.Z));
+	};
+
+	FVector2D Size(16.0, 9.0);
+	if (GEngine->GameViewport != nullptr)
+	{
+		GEngine->GameViewport->GetViewportSize(Size);
+	}
+	const double TanY = FMath::Tan(Teinora::Gaze::VerticalFov * 0.5);
+	const double TanX = TanY * Size.X / FMath::Max(Size.Y, 1.0);
+
+	// The rays run in the world's own axes and metres, as the magic's do.
+	const Vec3 Forward = View.GetForward();
+	const Vec3 Right{ FMath::Sin(View.Yaw), -FMath::Cos(View.Yaw), 0.0 };
+	const Vec3 Up = Teinora::Cross(Right, Forward);
+	UnderwaterMaterial->SetVectorParameterValue(TEXT("ViewForward"), ToColor(Forward));
+	UnderwaterMaterial->SetVectorParameterValue(TEXT("ViewRight"), ToColor(Right * TanX));
+	UnderwaterMaterial->SetVectorParameterValue(TEXT("ViewUp"), ToColor(Up * TanY));
+
+	// Less and less light comes down this far, and the haze it lights goes with it.
+	UnderwaterMaterial->SetScalarParameterValue(TEXT("WaterAbove"), static_cast<float>(Depth));
+	UnderwaterMaterial->SetVectorParameterValue(TEXT("WaterHaze"), FLinearColor(0.03f, 0.17f, 0.19f) * Light * FMath::Exp(-static_cast<float>(Depth) * 0.09f));
 }
 
 void ATeinoraCamera::ShowMagic(float ViewAmount, bool bBends, UTexture2D* NearAtlas, UTexture2D* FarAtlas, const Vec3& NearCorner, const Vec3& NearSize,

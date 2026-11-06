@@ -88,27 +88,55 @@ float Snow = smoothstep(160.0, 182.0, Height + Waver * 20.0) * (1.0 - Rock) * sa
 float Grass = saturate(1.0 - Rock - Sand - Snow);
 '''
 
+# Water comes in as how far under it this point lies and how much of it is the sea's. The net of light
+# on the bed is the standalone game's GetCaustics. What that game does in its water pass, fading the
+# colours along the way through, is done here to the bed itself, since the surface above it is drawn by
+# rays, which know nothing of the depth behind it. A ray bent by the surface is steep, one that is not
+# can be at any angle, so the path is held to what the bent one would be. From inside the water the
+# camera's own pass does this, over the whole distance.
 SURFACE_COLOR = SURFACE_WEIGHTS + '''
-if (Kind < 0.125)
+float3 Result = Tint;
+if (Kind >= 0.375)
 {
-    return Tint;
+    float3 Stone = lerp(Texture2DSample(RockColor, RockColorSampler, Close).rgb, Texture2DSampleLevel(RockColor, RockColorSampler, Large, 5.0).rgb, 0.3);
+    if (Kind < 0.75)
+    {
+        Result = Stone * Tint * 4.5;
+    }
+    else
+    {
+        Result = Stone * Rock;
+        Result += lerp(Texture2DSample(GrassColor, GrassColorSampler, Close).rgb, Texture2DSampleLevel(GrassColor, GrassColorSampler, Large, 5.0).rgb, 0.3) * Grass;
+        Result += lerp(Texture2DSample(SandColor, SandColorSampler, Close).rgb, Texture2DSampleLevel(SandColor, SandColorSampler, Large, 5.0).rgb, 0.3) * Sand;
+        Result += lerp(Texture2DSample(SnowColor, SnowColorSampler, Close).rgb, Texture2DSampleLevel(SnowColor, SnowColorSampler, Large, 5.0).rgb, 0.3) * Snow;
+        Result *= lerp(float3(1.0, 1.0, 1.0), lerp(float3(1.16, 1.0, 0.8), float3(0.82, 1.0, 1.1), Tint.g), Grass);
+        Result *= (0.8 + 0.4 * Broad) * Tint.r * 2.0;
+        Result *= lerp(1.0, 0.6, 1.0 - smoothstep(0.1, 0.9, Above + Waver * 0.5)); // ground the water has been at stays dark
+    }
 }
-if (Kind < 0.375)
+else if (Kind >= 0.125)
 {
     float2 Round = float2((Flat.x + Flat.y) * 0.8, Height * 0.3) / 8.0;
-    return Texture2DSample(BarkColor, BarkColorSampler, Round).rgb * Tint * 4.5;
+    Result = Texture2DSample(BarkColor, BarkColorSampler, Round).rgb * Tint * 4.5;
 }
-float3 Stone = lerp(Texture2DSample(RockColor, RockColorSampler, Close).rgb, Texture2DSampleLevel(RockColor, RockColorSampler, Large, 5.0).rgb, 0.3);
-if (Kind < 0.75)
+
+float Under = Water.x;
+if (Under > 0.0)
 {
-    return Stone * Tint * 4.5;
+    float A = Texture2DSampleLevel(SandNormal, SandNormalSampler, Flat / 7.0 + WorldTime * float2(0.024, 0.017), 2.0).a;
+    float B = Texture2DSampleLevel(SandNormal, SandNormalSampler, Flat.yx / 4.0 - WorldTime * float2(0.03, 0.021), 2.0).a;
+    float Net = saturate(1.0 - abs(A - B) * 7.0);
+    Result *= 1.0 + Net * Net * Net * Net * 2.2 * exp(-Under * 0.32) * saturate(Under * 3.0);
+
+    if (EyeUnder < 0.5)
+    {
+        float Path = Under / max(abs(normalize(Ray).z), 0.6);
+        float3 Passing = exp(-float3(0.36, 0.085, 0.06) * Path);
+        float3 Haze = lerp(float3(0.025, 0.15, 0.13), float3(0.02, 0.14, 0.2), Water.y);
+        Result = Result * Passing + Haze * (1.0 - Passing);
+    }
 }
-float3 Result = Stone * Rock;
-Result += lerp(Texture2DSample(GrassColor, GrassColorSampler, Close).rgb, Texture2DSampleLevel(GrassColor, GrassColorSampler, Large, 5.0).rgb, 0.3) * Grass;
-Result += lerp(Texture2DSample(SandColor, SandColorSampler, Close).rgb, Texture2DSampleLevel(SandColor, SandColorSampler, Large, 5.0).rgb, 0.3) * Sand;
-Result += lerp(Texture2DSample(SnowColor, SnowColorSampler, Close).rgb, Texture2DSampleLevel(SnowColor, SnowColorSampler, Large, 5.0).rgb, 0.3) * Snow;
-Result *= lerp(float3(1.0, 1.0, 1.0), lerp(float3(1.16, 1.0, 0.8), float3(0.82, 1.0, 1.1), Tint.g), Grass);
-return Result * (0.8 + 0.4 * Broad) * Tint.r * 2.0;
+return Result;
 '''
 
 SURFACE_NORMAL = SURFACE_WEIGHTS + '''
@@ -143,12 +171,56 @@ return (Which.x > 0.5 ? Texture2DSampleBias(NeedleColor, NeedleColorSampler, Pla
 '''
 
 
+# The standalone game's Shaders/Terrain.hlsl moves its vertices like this. The world's axes and metres
+# inside, Unreal's on the way out. The moves come from CollectMoves in Game/Plants.cpp, in two rows of a sheet.
+PLANT_SWAY = '''
+float3 Move = float3(0.0, 0.0, 0.0);
+if (Sway > 0.0)
+{
+    float3 Here = float3(World.x, -World.y, World.z) * 0.01;
+    float Gust = 0.65 + 0.35 * sin(WorldTime * 1.9 + dot(Here.xy, float2(0.21, 0.13)));
+    Move.xy = Wind.xy * 0.075 * Sway * Gust;
+    if (Kind < 0.19)
+    {
+        float Flutter = sin(WorldTime * 7.0 + dot(Here, float3(3.1, 2.3, 1.7)));
+        Move += float3(0.5, 0.4, 0.3) * Flutter * Sway * 0.035 * (0.4 + length(Wind.xy) * 0.2);
+    }
+
+    for (int Index = 0; Index < int(PlantCount); ++Index)
+    {
+        float4 Moved = PlantMap.Load(int3(Index, 0, 0));
+        float3 Away = Here + Move - Moved.xyz;
+        float Share = saturate(1.0 - dot(Away, Away) / (Moved.w * Moved.w));
+        Move += PlantMap.Load(int3(Index, 1, 0)).xyz * (Share * Share);
+    }
+}
+return float3(Move.x, -Move.y, Move.z) * 100.0;
+'''
+
+PLANT_SWAY_INPUTS = ('World', 'Sway', 'Kind', 'Wind', 'WorldTime', 'PlantCount', 'PlantMap')
+
+
+def connect_sway(material, kind, x, y):
+    """Plants lean, shiver and swing back, all in the vertices."""
+    sway = custom_node(material, PLANT_SWAY, PLANT_SWAY_INPUTS, x, y)
+    link(materials.create_material_expression(material, unreal.MaterialExpressionWorldPosition, x - 400, y), '', sway, 'World')
+
+    color = materials.create_material_expression(material, unreal.MaterialExpressionVertexColor, x - 400, y + 100)
+    link(color, 'A', sway, 'Sway')
+    link(kind, '', sway, 'Kind')
+    link(vector_parameter(material, 'Wind', x - 400, y + 200), '', sway, 'Wind')
+    link(scalar_parameter(material, 'WorldTime', 0.0, x - 400, y + 300), '', sway, 'WorldTime')
+    link(scalar_parameter(material, 'PlantCount', 0.0, x - 400, y + 400), '', sway, 'PlantCount')
+    link(texture_parameter(material, 'PlantMap', x - 400, y + 500), '', sway, 'PlantMap')
+    connect(sway, '', unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
+
+
 def make_terrain():
     material = begin('M_Terrain')
     material.set_editor_property('tangent_space_normal', False)
 
     names = ('World', 'Normal', 'Tint', 'Kind') + SURFACE_TEXTURES
-    color = custom_node(material, SURFACE_COLOR, names, -300, 0)
+    color = custom_node(material, SURFACE_COLOR, names + ('Water', 'Ray', 'EyeUnder', 'WorldTime'), -300, 0)
     normal = custom_node(material, SURFACE_NORMAL, names, -300, 300)
 
     world = materials.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -800, 0)
@@ -173,9 +245,17 @@ def make_terrain():
         link(texture, '', color, name)
         link(texture, '', normal, name)
 
+    water = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, -300)
+    water.set_editor_property('coordinate_index', 1)
+    link(water, '', color, 'Water')
+    link(materials.create_material_expression(material, unreal.MaterialExpressionCameraVectorWS, -800, -200), '', color, 'Ray')
+    link(scalar_parameter(material, 'EyeUnder', 0.0, -800, -100), '', color, 'EyeUnder')
+    link(scalar_parameter(material, 'WorldTime', 0.0, -1000, -100), '', color, 'WorldTime')
+
     connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
     connect(normal, '', unreal.MaterialProperty.MP_NORMAL)
     connect(constant(material, 0.9, -300, 600), '', unreal.MaterialProperty.MP_ROUGHNESS)
+    connect_sway(material, kind, -300, 900)
     finish(material)
 
 
@@ -204,6 +284,7 @@ def make_leaf():
     connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
     connect(mask, '', unreal.MaterialProperty.MP_OPACITY_MASK)
     connect(constant(material, 0.75, -300, 500), '', unreal.MaterialProperty.MP_ROUGHNESS)
+    connect_sway(material, constant(material, 0.0, -800, 900), -300, 900) # no bark here: all of it shivers
     finish(material)
 
 
@@ -218,17 +299,162 @@ def make_body():
     finish(material)
 
 
+# The surface of Shaders/Water.hlsl as Unreal's ray traced translucency wants it. That pass weighs a
+# surface's reflection by its opacity and what lies behind by the rest, and bends the ray by the index of
+# refraction. So the surface is a white mirror that is only as opaque as Fresnel says it reflects, and
+# the rays find the bed, the sky through the round window from below, and the mirror past its edge by
+# themselves. A normal in world space does not turn round for the back of a surface, so it is done here.
+# Rays have no pixel to work out a mip from, so distance picks it. Beyond the ground there is no bed to
+# see, and the surface turns to plain water.
+WATER_READ = '''
+float2 Flat = float2(World.x, -World.y) * 0.01;
+float Far = distance(World, EyeAt) * 0.01;
+float2 Place = (Flat - LiquidArea.xy) * LiquidArea.z;
+float Foam = 0.0;
+if (all(Place > 0.0) && all(Place < 1.0))
+{
+    Foam = saturate(Texture2DSampleLevel(LiquidMap, LiquidMapSampler, Place, 0.0).g * 1.4);
+}
+float Beyond = smoothstep(BedReach * 0.75, BedReach * 0.95, Far);
+'''
+
+WATER_NORMAL = WATER_READ + '''
+float NearLevel = clamp(log2(Far * 0.085 + 0.001) + 1.0, 0.0, 9.0);
+float FineLevel = clamp(log2(Far * 0.34 + 0.001) + 1.0, 0.0, 9.0);
+float2 RippleA = Texture2DSampleLevel(SnowNormal, SnowNormalSampler, (Flat + Drift.xy * 0.35) / 16.0, NearLevel).xy * 2.0 - 1.0;
+float2 RippleB = Texture2DSampleLevel(SnowNormal, SnowNormalSampler, (Flat.yx - Drift.yx * 0.2) / 4.0, FineLevel).xy * 2.0 - 1.0;
+float2 Slope = (RippleA + RippleB) * lerp(0.05, 0.5, WaveShare);
+if (all(Place > 0.0) && all(Place < 1.0))
+{
+    float Step = LiquidArea.z * 0.75;
+    float Left = Texture2DSampleLevel(LiquidMap, LiquidMapSampler, Place - float2(Step, 0.0), 0.0).r;
+    float Right = Texture2DSampleLevel(LiquidMap, LiquidMapSampler, Place + float2(Step, 0.0), 0.0).r;
+    float Down = Texture2DSampleLevel(LiquidMap, LiquidMapSampler, Place - float2(0.0, Step), 0.0).r;
+    float Up = Texture2DSampleLevel(LiquidMap, LiquidMapSampler, Place + float2(0.0, Step), 0.0).r;
+    Slope -= float2(Right - Left, Up - Down) / 1.5 * 9.0;
+}
+
+float3 Seen = normalize(normalize(Swell) + float3(Slope.x, -Slope.y, 0.0)) * Parameters.TwoSidedSign;
+if (Parameters.TwoSidedSign > 0.0)
+{
+    // Where a wave turns a reflection into the water, it bounces off the next one back up.
+    float3 Bounce = reflect(-Parameters.CameraVector, Seen);
+    if (Bounce.z < 0.01)
+    {
+        Bounce.z = max(abs(Bounce.z), 0.01);
+        Seen = normalize(Parameters.CameraVector + normalize(Bounce));
+    }
+}
+return Seen;
+'''
+
+WATER_OPACITY = WATER_READ + '''
+float Fresnel = 0.02 + 0.98 * pow(1.0 - saturate(dot(Normal, Parameters.CameraVector)), 5.0);
+return saturate(max(lerp(Fresnel, 1.0, Foam * 0.6), Beyond));
+'''
+
+WATER_COLOR = WATER_READ + '''
+float3 Body = lerp(float3(0.025, 0.15, 0.13), float3(0.02, 0.14, 0.2), WaveShare) * 0.5;
+return lerp(lerp(float3(1.0, 1.0, 1.0), Body, Beyond), float3(0.75, 0.8, 0.8), Foam);
+'''
+
+WATER_METAL = WATER_READ + '''
+return (1.0 - Foam) * (1.0 - Beyond);
+'''
+
+WATER_ROUGHNESS = WATER_READ + '''
+return lerp(0.05, 0.6, Foam);
+'''
+
+
 def make_water():
     material = begin('M_Water')
     material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_TRANSLUCENT)
     material.set_editor_property('translucency_lighting_mode', unreal.TranslucencyLightingMode.TLM_SURFACE)
     material.set_editor_property('two_sided', True) # it is seen from under the water as well
+    material.set_editor_property('tangent_space_normal', False)
+    material.set_editor_property('refraction_method', unreal.RefractionMode.RM_INDEX_OF_REFRACTION)
 
-    color = materials.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -400, 0)
-    color.set_editor_property('constant', unreal.LinearColor(0.012, 0.075, 0.11, 1.0))
+    world = materials.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -1400, 0)
+    eye = vector_parameter(material, 'EyeAt', -1400, 100)
+    area = vector_parameter(material, 'LiquidArea', -1400, 200)
+    reach = scalar_parameter(material, 'BedReach', 2000.0, -1400, 300)
+    liquid = texture_parameter(material, 'LiquidMap', -1400, 400)
+    share = scalar_parameter(material, 'WaveShare', 0.0, -1400, 500)
+
+    read = ('World', 'EyeAt', 'LiquidArea', 'BedReach', 'LiquidMap')
+    normal = custom_node(material, WATER_NORMAL, read + ('Swell', 'Drift', 'WaveShare', 'SnowNormal'), -800, 0)
+    opacity = custom_node(material, WATER_OPACITY, read + ('Normal',), -300, 300)
+    color = custom_node(material, WATER_COLOR, read + ('WaveShare',), -300, 0)
+    metal = custom_node(material, WATER_METAL, read, -300, 600)
+    roughness = custom_node(material, WATER_ROUGHNESS, read, -300, 900)
+    for node in (opacity, metal, roughness):
+        node.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+
+    for node in (normal, opacity, color, metal, roughness):
+        link(world, '', node, 'World')
+        link(eye, '', node, 'EyeAt')
+        link(area, '', node, 'LiquidArea')
+        link(reach, '', node, 'BedReach')
+        link(liquid, '', node, 'LiquidMap')
+
+    link(materials.create_material_expression(material, unreal.MaterialExpressionVertexNormalWS, -1400, 600), '', normal, 'Swell')
+    link(vector_parameter(material, 'Drift', -1400, 700), '', normal, 'Drift')
+    link(share, '', normal, 'WaveShare')
+    link(share, '', color, 'WaveShare')
+    link(texture_parameter(material, 'SnowNormal', -1400, 800), '', normal, 'SnowNormal')
+    link(normal, '', opacity, 'Normal')
+
     connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
-    connect(constant(material, 0.08, -400, 150), '', unreal.MaterialProperty.MP_ROUGHNESS)
-    connect(constant(material, 0.82, -400, 300), '', unreal.MaterialProperty.MP_OPACITY)
+    connect(metal, '', unreal.MaterialProperty.MP_METALLIC)
+    connect(roughness, '', unreal.MaterialProperty.MP_ROUGHNESS)
+    connect(opacity, '', unreal.MaterialProperty.MP_OPACITY)
+    connect(normal, '', unreal.MaterialProperty.MP_NORMAL)
+    connect(constant(material, 1.33, -300, 1200), '', unreal.MaterialProperty.MP_REFRACTION)
+    finish(material)
+
+
+# The standalone game's Shaders/Underwater.hlsl: the water between the eye and whatever it looks at. The
+# way up ends at the surface, which is not in the depth buffer, and what lies past it the rays have drawn.
+UNDERWATER_CODE = '''
+float2 ViewUv = GetViewportUV(Parameters);
+float3 Plain = SceneTextureLookup(ViewportUVToSceneTextureUV(ViewUv, 14), 14, false).rgb * View.OneOverPreExposure;
+
+float3 Direction = normalize(ViewForward.xyz + ViewRight.xyz * (ViewUv.x * 2.0 - 1.0) + ViewUp.xyz * (1.0 - ViewUv.y * 2.0));
+float Distance = SceneTextureLookup(ViewportUVToSceneTextureUV(ViewUv, 1), 1, false).r * 0.01 / max(dot(Direction, ViewForward.xyz), 0.05);
+if (Direction.z > 0.001)
+{
+    Distance = min(Distance, WaterAbove / Direction.z);
+}
+
+float3 Passing = exp(-float3(0.32, 0.075, 0.055) * Distance);
+return Plain * Passing + WaterHaze * (1.0 - Passing);
+'''
+
+
+def make_underwater():
+    material = begin('M_Underwater')
+    material.set_editor_property('material_domain', unreal.MaterialDomain.MD_POST_PROCESS)
+    material.set_editor_property('blendable_location', unreal.BlendableLocation.BL_SCENE_COLOR_BEFORE_BLOOM)
+
+    vectors = ('WaterHaze', 'ViewForward', 'ViewRight', 'ViewUp')
+    node = custom_node(material, UNDERWATER_CODE, ('WaterAbove',) + vectors + ('Scene', 'Depth'), -300, 0)
+
+    link(scalar_parameter(material, 'WaterAbove', 1.0, -700, -200), '', node, 'WaterAbove')
+    row = -100
+    for name in vectors:
+        link(vector_parameter(material, name, -700, row), '', node, name)
+        row += 100
+
+    # Only here so the material asks for these textures: the code reads them by itself.
+    scene = materials.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, row)
+    scene.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
+    depth = materials.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, row + 100)
+    depth.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_SCENE_DEPTH)
+    link(scene, 'Color', node, 'Scene')
+    link(depth, 'Color', node, 'Depth')
+
+    connect(node, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     finish(material)
 
 
@@ -615,6 +841,7 @@ make_terrain()
 make_leaf()
 make_body()
 make_water()
+make_underwater()
 make_focus()
 make_sky()
 make_magic()
