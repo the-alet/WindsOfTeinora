@@ -310,8 +310,14 @@ namespace Teinora::Sim
 		double GetVolume() const { return 3.14159265358979 * Radius * Radius * Depth; }
 	};
 
-	/** The campfires and pools of lava within a few kilometres of a point. */
+	/** The campfires and pools of lava within a few kilometres of a point, with the one by the spawn and those placed. */
 	std::vector<HotSpot> FindHotSpots(double X, double Y, std::uint32_t Seed);
+
+	/** Lights a campfire on the ground at a point, for as long as the game runs. */
+	void PlaceCampfire(const Vec3& Position);
+
+	/** Goes up by one each time a campfire is placed, so that what keeps hot spots knows to look again. */
+	std::uint32_t GetPlacedVersion();
 
 	/** How hot the top of the ground gets, in degrees Celsius. SunHeat is 0 at night and about 1 under both suns. */
 	double GetGroundTemperature(double Warmth, ESurface Surface, double SunHeat);
@@ -411,6 +417,7 @@ namespace Teinora::Sim
 		bool bWater = false;  // which of those it is
 		double Land = 0.0;    // how much this counts as land rather than sea, from 0 to 1
 		double Plants = 0.0;  // how much grows here, from 0 to 1
+		double Trees = 0.0;   // how thickly trees stand here, from 0 to 1
 		double Cool = 0.0;    // how warm the ground is with no sun on it, in degrees Celsius
 		double Sunned = 0.0;  // and how many degrees the suns add to that at most
 	};

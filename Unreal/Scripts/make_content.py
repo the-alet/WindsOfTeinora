@@ -1033,7 +1033,13 @@ float Toward = saturate(dot(Way, PlanetWay));
 float3 Glow = NightAir * (0.55 + 0.1 * Mass) * (1.0 + 1.5 * pow(Toward, 6.0));
 
 // The camera is set for the ground, which would leave Unreal's air too dim and too green by day.
-return Air * float3(1.5, 1.7, 2.3) + Glow + Space * Through * Above + (FirstDisc + SecondDisc) * (1.0 - Block);
+float3 Sky = Air * float3(1.5, 1.7, 2.3) + Glow;
+
+// The blue-green sun in its own colour, as in the standalone game's Sky.hlsl: at the engine's brightness for
+// a sun it burns out to white like the first, so it is only a few times the sky around it.
+float InSecond = saturate(dot(SecondDisc, float3(1.0, 1.0, 1.0)) * 1e4);
+float3 SecondShown = InSecond * float3(0.10, 1.0, 0.83) * (dot(Sky, float3(0.3, 0.6, 0.1)) * 4.0);
+return Sky + Space * Through * Above + (FirstDisc + SecondShown) * (1.0 - Block);
 '''
 
 

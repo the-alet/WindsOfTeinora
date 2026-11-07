@@ -355,12 +355,21 @@ namespace Teinora
 
 		const int WellX = FloorToInt(Focus.X / WellSpacing);
 		const int WellY = FloorToInt(Focus.Y / WellSpacing);
+		const std::uint32_t Placed = Sim::GetPlacedVersion();
 		if (!bPlaced || WellX != WellCellX || WellY != WellCellY)
 		{
 			Wells = Sim::FindMagicWells(Focus.X, Focus.Y, Seed);
 			HotSpots = Sim::FindHotSpots(Focus.X, Focus.Y, Seed);
 			WellCellX = WellX;
 			WellCellY = WellY;
+			PlacedSeen = Placed;
+		}
+		else if (Placed != PlacedSeen)
+		{
+			// A campfire lit since: the cells already in the grid learn of it too.
+			HotSpots = Sim::FindHotSpots(Focus.X, Focus.Y, Seed);
+			PlacedSeen = Placed;
+			RefreshHotImprints();
 		}
 
 		if (!bPlaced)
@@ -1056,6 +1065,21 @@ namespace Teinora
 				Contacts.push_back(Contact);
 			}
 		}
+	}
+
+	void MagicField::RefreshHotImprints()
+	{
+		const int Fire = static_cast<int>(Sim::EMagicType::Fire);
+		ParallelFor(GridZ, [this, Fire](int Z)
+		{
+			for (int Y = 0; Y < GridY; ++Y)
+			{
+				for (int X = 0; X < GridX; ++X)
+				{
+					Imprints[Fire][CellIndex(X, Y, Z)] = static_cast<float>(Sim::MagicHotImprint(GetCellCenter(X, Y, Z), CellSize, HotSpots));
+				}
+			}
+		});
 	}
 
 	void MagicField::TakeContacts(std::vector<FireContact>& Out)

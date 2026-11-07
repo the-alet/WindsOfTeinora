@@ -77,6 +77,9 @@ public:
 	void SetTimeRate(double Rate) { TimeRate = Rate; }
 	void SetView(int32 ViewRadius, int32 GeometryDetail, bool bClouds, double CloudCover);
 	void ThrowBall(const Teinora::Vec3& Eye, const Teinora::Vec3& LineOfSight, double Speed);
+
+	/** Sets down a campfire, crate, barrel or ball where the line of sight rests, by the keys 1 to 4. */
+	void PlaceByKey(int32 Key, const Teinora::Vec3& Eye, const Teinora::Vec3& LineOfSight);
 	void ToggleMagicView() { bMagicView = !bMagicView; }
 
 	/** What the terrain calls back into. */
@@ -206,6 +209,7 @@ private:
 	int32 AutoFrames = 0;
 	int32 SettledFrames = 0;
 	int32 ThrowsLeft = 0;
+	FString PlaceLeft;        // keys from 1 to 4 an automated run presses, one a frame
 	double StormCover = 1.0;
 	double StrikeAhead = 0.0; // an automated run ends with a bolt this far ahead
 	int32 StrikeFrame = -1;   // or has it once, at this frame

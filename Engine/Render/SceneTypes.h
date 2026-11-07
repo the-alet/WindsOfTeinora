@@ -206,6 +206,7 @@ namespace Teinora
 	inline constexpr double PlanetTilt = 0.14;
 	inline constexpr double PlanetOffset = 0.19;
 	inline constexpr double PlanetNodeDays = 37.0;
+	inline constexpr double PlanetOrbitDays = 25.0; // to go once round among the stars
 	inline constexpr double PlanetSpinDays = 9.0;
 	inline constexpr double PlanetWobble = 0.7;      // radians from the middle of its way round
 	inline constexpr double PlanetWobbleDays = 29.0;
@@ -262,14 +263,19 @@ namespace Teinora
 	}
 
 	/**
-	 * A ringed planet that shines by the suns' light: up through the afternoon and most of the night, gone
-	 * in the morning. It goes the first sun's way, which brings it past the second sun late in
-	 * the afternoon, sometimes right across it.
+	 * A ringed planet that shines by the suns' light. It has a way of its own: the sky turns it across
+	 * as it turns the stars, while it goes slowly round the other way, once in PlanetOrbitDays. So it
+	 * creeps back among the stars and rises about an hour later each day. On the first day it rises
+	 * at 13:00, which brings it past the second sun late in the afternoon; on later days it is up at
+	 * other hours, and some nights it is not up at all.
 	 */
 	inline Vec3 GetPlanetDirection(double Hour, double Day = 0.0)
 	{
-		const double Node = 2.0 * Pi * (Day + Hour / 24.0) / PlanetNodeDays;
-		return GetOrbitPoint(GetPathAngle(Hour, 13.0, 3.0), PlanetTilt, Node, PlanetOffset);
+		constexpr double FirstRise = 13.0 / 24.0; // of a day
+		const double Days = Day + Hour / 24.0;
+		const double Node = 2.0 * Pi * Days / PlanetNodeDays;
+		const double Turned = 2.0 * Pi * (Days - FirstRise) * (1.0 - 1.0 / PlanetOrbitDays); // the stars turn by 2 pi a day
+		return GetOrbitPoint(Turned, PlanetTilt, Node, PlanetOffset);
 	}
 
 	/** How far round the planet has turned, in radians. It takes many days, so each night shows a new side of it. */

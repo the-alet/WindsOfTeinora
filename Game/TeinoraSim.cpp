@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <random>
 #include <vector>
 
@@ -839,6 +840,72 @@ namespace Teinora::Sim
 		}
 	}
 
+	namespace
+	{
+		std::mutex PlacedGuard;
+		std::vector<HotSpot> PlacedFires;
+		std::atomic<std::uint32_t> PlacedVersion{ 0 };
+
+		HotSpot MakeCampfire(const Vec3& Position)
+		{
+			HotSpot Spot;
+			Spot.Position = Position;
+			Spot.Radius = 0.7;
+			Spot.Depth = 0.8;
+			Spot.Temperature = 900.0;
+			return Spot;
+		}
+
+		/** A campfire a little way off where the camera starts, in the way it looks. False if none fits. */
+		bool FindSpawnCampfire(std::uint32_t Seed, HotSpot& Out)
+		{
+			static std::mutex Guard;
+			static std::uint32_t KnownSeed = 0;
+			static bool bKnown = false;
+			static bool bFound = false;
+			static HotSpot Known;
+
+			std::lock_guard Lock(Guard);
+			if (!bKnown || KnownSeed != Seed)
+			{
+				bKnown = true;
+				KnownSeed = Seed;
+				bFound = false;
+				const Vec3 Spawn = FindLandSpawn(Seed);
+				const double Yaw = FindInlandYaw(Spawn + Vec3{ 0.0, 0.0, 14.0 }, Seed);
+				for (double Away = 30.0; Away < 60.0 && !bFound; Away += 2.0) // far enough below the eye to be in view
+				{
+					for (const double Turn : { 0.0, 0.25, -0.25, 0.5, -0.5 })
+					{
+						const double X = Spawn.X + std::cos(Yaw + Turn) * Away;
+						const double Y = Spawn.Y + std::sin(Yaw + Turn) * Away;
+						const double Ground = TerrainHeight(X, Y, Seed);
+						if (Ground > GetShoreLevel(X, Y, Seed) + 1.0 && TerrainNormal(X, Y, Seed).Z > 0.95)
+						{
+							Known = MakeCampfire({ X, Y, Ground });
+							bFound = true;
+							break;
+						}
+					}
+				}
+			}
+			Out = Known;
+			return bFound;
+		}
+	}
+
+	void PlaceCampfire(const Vec3& Position)
+	{
+		std::lock_guard Lock(PlacedGuard);
+		PlacedFires.push_back(MakeCampfire(Position));
+		++PlacedVersion;
+	}
+
+	std::uint32_t GetPlacedVersion()
+	{
+		return PlacedVersion.load();
+	}
+
 	std::vector<HotSpot> FindHotSpots(double X, double Y, std::uint32_t Seed)
 	{
 		constexpr double Spacing = 700.0;
@@ -878,6 +945,26 @@ namespace Teinora::Sim
 				Spot.Radius = Spot.bLava ? 6.0 + 9.0 * Share(Column, Row, 3u) : 0.7;
 				Spot.Depth = Spot.bLava ? 3.0 : 0.8;
 				Spot.Temperature = Spot.bLava ? 1050.0 + 150.0 * Share(Column, Row, 4u) : 900.0;
+				Spots.push_back(Spot);
+			}
+		}
+
+		// And those not of the world's own making, as far off as the others reach.
+		const double Covered = Spacing * (Reach + 1);
+		const auto IsNear = [X, Y, Covered](const HotSpot& Spot)
+		{
+			return std::fabs(Spot.Position.X - X) < Covered && std::fabs(Spot.Position.Y - Y) < Covered;
+		};
+		HotSpot ByTheSpawn;
+		if (FindSpawnCampfire(Seed, ByTheSpawn) && IsNear(ByTheSpawn))
+		{
+			Spots.push_back(ByTheSpawn);
+		}
+		std::lock_guard Lock(PlacedGuard);
+		for (const HotSpot& Spot : PlacedFires)
+		{
+			if (IsNear(Spot))
+			{
 				Spots.push_back(Spot);
 			}
 		}
@@ -1058,14 +1145,17 @@ namespace Teinora::Sim
 		constexpr double Contact = 0.35;    // per second, inside land or water
 		constexpr double Reach = 4.0;       // metres over them that still counts as touching
 		constexpr double Growing = 0.04;    // per second, among plants
-		constexpr double Canopy = 14.0;     // about the height of the trees
+		constexpr double Canopy = 14.0;     // how high grass and bushes give it
+		constexpr double TreeTops = 28.0;   // and a wood, up through its crowns
+		constexpr double InWoods = 3.0;     // how much more a thick wood gives than grass
 
 		const double Touching = HeightAboveSurface <= 0.0 ? 1.0 : std::max(1.0 - HeightAboveSurface / Reach, 0.0);
 
 		MagicMix Rates;
 		Rates.Amounts[static_cast<int>(EMagicType::Earth)] = Contact * Touching * Ground.Land;
 		Rates.Amounts[static_cast<int>(EMagicType::Water)] = Contact * Touching * (1.0 - Ground.Land);
-		Rates.Amounts[static_cast<int>(EMagicType::Nature)] = HeightAboveSurface < Canopy ? Growing * Ground.Plants : 0.0;
+		Rates.Amounts[static_cast<int>(EMagicType::Nature)] = (HeightAboveSurface < Canopy ? Growing * Ground.Plants : 0.0)
+			+ (HeightAboveSurface < TreeTops ? Growing * InWoods * Ground.Trees : 0.0);
 		Rates.Amounts[static_cast<int>(EMagicType::Air)] = HeightAboveSurface >= 0.0 ? 1.0 / MagicFadeTime(EMagicType::Air) : 0.0;
 		return Rates;
 	}
@@ -1127,7 +1217,7 @@ namespace Teinora::Sim
 
 	double MagicStiffening(double NatureMagic)
 	{
-		constexpr double Doubling = 0.28; // kg/m3 that would double it, which is more than there ever is
+		constexpr double Doubling = 0.6; // kg/m3 that would double it, a little more than the thickest wood holds
 		return 1.0 + NatureMagic / Doubling;
 	}
 
@@ -1189,16 +1279,18 @@ namespace Teinora::Sim
 		Ground.Plants = Surface == ESurface::Grass ? 1.0 : 0.0;
 
 		// Water only gets as warm as the air, and the suns are no source of anything by themselves: only what they heat is.
-		const double Warmth = ReadBiome(X, Y, Height, Seed).Warmth;
-		Ground.Cool = GetGroundTemperature(Warmth, Surface, 0.0);
-		Ground.Sunned = Height > WaterLevel ? GetGroundTemperature(Warmth, Surface, 1.0) - Ground.Cool : 0.0;
+		const Biome Here = ReadBiome(X, Y, Height, Seed);
+		Ground.Cool = GetGroundTemperature(Here.Warmth, Surface, 0.0);
+		Ground.Sunned = Height > WaterLevel ? GetGroundTemperature(Here.Warmth, Surface, 1.0) - Ground.Cool : 0.0;
+		Ground.Trees = Height > WaterLevel ? Here.Forest : 0.0;
 		return Ground;
 	}
 
 	double MagicLimit(EMagicType Type, double HeightAboveSurface, const MagicGround& Ground)
 	{
 		constexpr double Layer = 45.0;      // metres over which earth and water magic thin out
-		constexpr double Canopy = 14.0;     // and natural magic, about the height of the trees
+		constexpr double Canopy = 14.0;     // and natural magic over grass
+		constexpr double TreeTops = 28.0;   // and in a wood
 		constexpr double DenseMagic = 10.0; // the most there is, in the wells
 
 		const double Height = std::max(HeightAboveSurface, 0.0);
@@ -1207,7 +1299,8 @@ namespace Teinora::Sim
 		case EMagicType::Air:
 			return DenseMagic;
 		case EMagicType::Nature:
-			return 0.14 * Ground.Plants * std::exp(-Height / Canopy) + 0.002;
+			// Grass gives a little, and a wood a good deal more, up through its crowns.
+			return 0.14 * Ground.Plants * std::exp(-Height / Canopy) + 0.45 * Ground.Trees * std::exp(-Height / TreeTops) + 0.002;
 		case EMagicType::Earth:
 			return (0.3 + 2.7 * Ground.Land) * std::exp(-Height / Layer) + 0.05;
 		default:

@@ -147,6 +147,7 @@ namespace Teinora
 		void UpdateAspects(float Dt);
 		void ApplyBurning(float Dt);
 		void ActOnMatter(float Dt);
+		void RefreshHotImprints();
 		bool IsInGrid(const Vec3& Position) const;
 		void Transport(int Axis, float Dt);
 		void ParallelFor(int Count, const std::function<void(int)>& Body);
@@ -163,6 +164,7 @@ namespace Teinora
 		bool bPlaced = false;
 		int WellCellX = 0;
 		int WellCellY = 0;
+		std::uint32_t PlacedSeen = 0; // Sim::GetPlacedVersion when the hot spots were last read
 		int StepCount = 0;
 		int MapX[GridX + 4] = {};
 		int MapY[GridY + 4] = {};

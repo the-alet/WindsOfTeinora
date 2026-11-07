@@ -1120,7 +1120,7 @@ namespace Teinora
 
 				const auto Existing = Chunks.find(Key);
 				const int CurrentLod = Existing != Chunks.end() ? Existing->second.Lod : -1;
-				const bool bOutdated = Existing != Chunks.end() && Existing->second.Detail != Detail;
+				const bool bOutdated = Existing != Chunks.end() && (Existing->second.Detail != Detail || Stale.contains(Key));
 				const int Ring = RingOf(X, Y);
 
 				// One extra ring of hysteresis stops rebuilds when moving along a border.
@@ -1145,6 +1145,7 @@ namespace Teinora
 			}
 
 			InFlight[ChunkKey(Item.X, Item.Y)] = Item.Lod;
+			Stale.erase(ChunkKey(Item.X, Item.Y));
 			Workers.Enqueue([Results = Finished, X = Item.X, Y = Item.Y, Lod = Item.Lod, Level = Detail]
 			{
 				std::unique_ptr<ChunkBuild> Build = BuildChunk(X, Y, Lod, Level);
@@ -1418,6 +1419,49 @@ namespace Teinora
 			RemoveProp(Oldest);
 		}
 		SpawnProp(EPropKind::Ball, Start, Velocity);
+	}
+
+	bool GameWorld::PlaceCampfire(const Vec3& Eye, const Vec3& Gaze)
+	{
+		constexpr double Reach = 80.0;
+		constexpr double Footprint = 2.0; // metres around it that its stones and logs cover
+
+		P::RayHit Hit;
+		if (!Physics.Raycast(Eye, Gaze, Reach, Hit) || Hit.Normal.Z < 0.8)
+		{
+			return false;
+		}
+		const double X = Hit.Point.X;
+		const double Y = Hit.Point.Y;
+		const double Ground = Sim::TerrainHeight(X, Y, Sim::WorldSeed);
+		if (Ground < Sim::GetShoreLevel(X, Y, Sim::WorldSeed) + 0.3 || std::fabs(Ground - Hit.Point.Z) > 1.0)
+		{
+			return false; // in water, or on something other than the ground
+		}
+
+		Sim::PlaceCampfire({ X, Y, Ground });
+		HotSpotsCenter = { 1e12, 0.0, 0.0 }; // look again at what burns
+
+		// Its stones and logs are built into the ground's chunks, so those are built again.
+		for (int ChunkY = ToChunk(Y - Footprint); ChunkY <= ToChunk(Y + Footprint); ++ChunkY)
+		{
+			for (int ChunkX = ToChunk(X - Footprint); ChunkX <= ToChunk(X + Footprint); ++ChunkX)
+			{
+				Stale.insert(ChunkKey(ChunkX, ChunkY));
+			}
+		}
+		return true;
+	}
+
+	void GameWorld::PlaceProp(EPropKind Kind, const Vec3& Eye, const Vec3& Gaze)
+	{
+		constexpr double Reach = 80.0;
+		constexpr double Ahead = 6.0; // where it goes when the eye rests on nothing near
+
+		const PropSpec& Spec = GetPropSpec(Kind);
+		P::RayHit Hit;
+		const Vec3 Spot = Physics.Raycast(Eye, Gaze, Reach, Hit) ? Hit.Point + Hit.Normal * (Spec.HalfHeight + 0.3) : Eye + Gaze * Ahead;
+		SpawnProp(Kind, Spot, {});
 	}
 
 	void GameWorld::CullProps(double Time)

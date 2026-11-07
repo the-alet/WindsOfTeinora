@@ -58,7 +58,7 @@ void ATeinoraHud::DrawHUD()
 		const FKey& Key = Controls.GetKey(Action);
 		return Key == EKeys::Slash ? FString(TEXT("/")) : Key.GetDisplayName().ToString();
 	};
-	const FString Hints = FString::Printf(TEXT("%s %s %s %s move   %s / %s up, down   %s fast   Hold LMB throw ball   %s%s world   Esc menu"),
+	const FString Hints = FString::Printf(TEXT("%s %s %s %s move   %s / %s up, down   %s fast   Hold LMB throw ball   1 fire  2 crate  3 barrel  4 ball   %s%s world   Esc menu"),
 		*Name(ETeinoraAction::Forward), *Name(ETeinoraAction::Left), *Name(ETeinoraAction::Back), *Name(ETeinoraAction::Right),
 		*Name(ETeinoraAction::Up), *Name(ETeinoraAction::Down), *Name(ETeinoraAction::Fast), Stats.bMagic ? TEXT("M magic   ") : TEXT(""), *Name(ETeinoraAction::WorldMenu));
 	UFont* Font = GEngine->GetMediumFont();

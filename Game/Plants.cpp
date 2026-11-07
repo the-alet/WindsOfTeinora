@@ -592,12 +592,16 @@ namespace Teinora
 			}
 
 			// Drag from what it brushes past, in a mass thickest at its heart, and a sideways knock from each spray of leaves.
+			// Every leaf and twig met takes some of the way it was going, so a light ball comes out of a thick crown
+			// at about half the speed and off its line, and a crate hardly notices.
+			constexpr double Catching = 5.0; // how much more leaves and twigs hold than their own weight in air would
+			constexpr double Knocking = 0.5;
 			const double Thickness = 1.0 - Distance / static_cast<double>(Leaves.Radius);
 			const double Area = Pi * Radius * Radius;
-			const double Pull = 0.5 * static_cast<double>(Leaves.Density) * Area * Speed * Thickness;
+			const double Pull = 0.5 * Catching * static_cast<double>(Leaves.Density) * Area * Speed * Thickness;
 			Force -= Velocity * Pull;
 			const double Spin = Position.X * 1.7 + Position.Y * 2.3 + Position.Z * 2.9;
-			Force += Vec3{ std::sin(Spin), std::cos(Spin * 1.3), std::sin(Spin * 0.7) } * (Pull * Speed * 0.22);
+			Force += Vec3{ std::sin(Spin), std::cos(Spin * 1.3), std::sin(Spin * 0.7) } * (Pull * Speed * Knocking);
 
 			Motion& Swing = Target.MovingLeaves[Index];
 			Swing.Speed += Velocity * (Pull * Dt * 0.6 / std::max(static_cast<double>(Leaves.Density) * static_cast<double>(Leaves.Radius), 0.5));

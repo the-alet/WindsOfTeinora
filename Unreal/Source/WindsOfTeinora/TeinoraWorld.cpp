@@ -372,6 +372,7 @@ void ATeinoraWorld::BeginPlay()
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraFrames="), AutoFrames);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraShot="), ShotPath);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraThrows="), ThrowsLeft);
+	FParse::Value(FCommandLine::Get(), TEXT("TeinoraPlace="), PlaceLeft);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraHour="), Sim->Hour);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraDay="), Sim->Day);
 	if (FParse::Param(FCommandLine::Get(), TEXT("TeinoraMagic")))
@@ -464,6 +465,18 @@ void ATeinoraWorld::SetView(int32 ViewRadius, int32 GeometryDetail, bool bClouds
 void ATeinoraWorld::ThrowBall(const Vec3& Eye, const Vec3& LineOfSight, double Speed)
 {
 	Sim->World.ThrowBall(Eye, LineOfSight, Speed);
+}
+
+void ATeinoraWorld::PlaceByKey(int32 Key, const Vec3& Eye, const Vec3& LineOfSight)
+{
+	switch (Key)
+	{
+	case 1: Sim->World.PlaceCampfire(Eye, LineOfSight); break;
+	case 2: Sim->World.PlaceProp(Teinora::EPropKind::Crate, Eye, LineOfSight); break;
+	case 3: Sim->World.PlaceProp(Teinora::EPropKind::Barrel, Eye, LineOfSight); break;
+	case 4: Sim->World.PlaceProp(Teinora::EPropKind::Ball, Eye, LineOfSight); break;
+	default: break;
+	}
 }
 
 void ATeinoraWorld::ShowChunk(int32 X, int32 Y, const Teinora::ChunkMesh& Mesh)
@@ -1305,6 +1318,11 @@ void ATeinoraWorld::RunAutomation()
 	{
 		--ThrowsLeft;
 		ThrowBall(Eye->GetEye(), Eye->GetLineOfSight(), Sim::MaxThrowSpeed);
+	}
+	if (!PlaceLeft.IsEmpty() && Eye != nullptr)
+	{
+		PlaceByKey(PlaceLeft[0] - TEXT('0'), Eye->GetEye(), Eye->GetLineOfSight());
+		PlaceLeft.RemoveAt(0);
 	}
 
 	++SettledFrames;

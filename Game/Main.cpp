@@ -68,6 +68,7 @@ namespace
 		double FlyTurn = 0.0;       // and radians of yaw, per frame so the path ignores the frame rate
 		Menu::EPage Page = Menu::EPage::Closed;
 		int Throws = 0;             // balls thrown during an automated run
+		std::string Place;          // and the keys from 1 to 4 pressed in it, one a frame, to set things down
 		double ThrowHold = 2.0;     // and how many seconds of holding each one stands for
 		bool bMagicView = false;    // starts in the magic view
 		double Strike = 0.0;        // an automated run ends with a bolt this far ahead
@@ -127,6 +128,10 @@ namespace
 			else if (StartsWith(Argument, "--throws="))
 			{
 				Result.Throws = std::atoi(Argument + 9);
+			}
+			else if (StartsWith(Argument, "--place="))
+			{
+				Result.Place = Argument + 8;
 			}
 			else if (StartsWith(Argument, "--throw-hold="))
 			{
@@ -316,7 +321,7 @@ namespace
 		const bool bWord = Forward.size() + Left.size() + Back.size() + Right.size() == 4;
 		const std::string Gap = bWord ? "" : " ";
 		const std::string Help = Forward + Gap + Left + Gap + Back + Gap + Right + " move   " + Name(EAction::Up) + " / " + Name(EAction::Down) + " up, down   "
-			+ Name(EAction::Fast) + " fast   Hold LMB throw ball   " + (Extras.bMagic ? "M magic   " : "") + Name(EAction::WorldMenu) + " world   Esc menu";
+			+ Name(EAction::Fast) + " fast   Hold LMB throw ball   1 fire  2 crate  3 barrel  4 ball   " + (Extras.bMagic ? "M magic   " : "") + Name(EAction::WorldMenu) + " world   Esc menu";
 
 		const float HelpY = static_cast<float>(Input.GetHeight()) - Margin - Line - Padding * 2.0f;
 		Output.DrawRect(Margin, HelpY, Output.MeasureText(Size, Help.c_str()) + Padding * 2.0f, Line + Padding * 2.0f, Backdrop);
@@ -480,6 +485,7 @@ int main(int ArgumentCount, char** Arguments)
 	Vec3 WindOffset;
 	int SettledFrames = 0;
 	int ThrowsLeft = Launch.Throws;
+	std::size_t PlacedSoFar = 0;
 	double ThrowHeld = -1.0; // seconds the button has been down for, below zero while it is up
 	std::vector<ObjectDraw> Objects;
 	std::vector<WaterDraw> Waters;
@@ -556,6 +562,25 @@ int main(int ArgumentCount, char** Arguments)
 			if (Magic != nullptr && AppWindow.WasKeyPressed(EKey::M))
 			{
 				bMagicView = !bMagicView;
+			}
+
+			// What can be set down where the eye rests.
+			char Pressed = 0;
+			if (bHandsFree)
+			{
+				Pressed = AppWindow.WasKeyPressed(EKey::One) ? '1' : AppWindow.WasKeyPressed(EKey::Two) ? '2' : AppWindow.WasKeyPressed(EKey::Three) ? '3' : AppWindow.WasKeyPressed(EKey::Four) ? '4' : 0;
+			}
+			else if (!Launch.Place.empty() && World.IsSettled() && PlacedSoFar < Launch.Place.size())
+			{
+				Pressed = Launch.Place[PlacedSoFar++];
+			}
+			switch (Pressed)
+			{
+			case '1': World.PlaceCampfire(Camera.Position, Camera.GetGaze()); break;
+			case '2': World.PlaceProp(EPropKind::Crate, Camera.Position, Camera.GetGaze()); break;
+			case '3': World.PlaceProp(EPropKind::Barrel, Camera.Position, Camera.GetGaze()); break;
+			case '4': World.PlaceProp(EPropKind::Ball, Camera.Position, Camera.GetGaze()); break;
+			default: break;
 			}
 
 			Accumulator = std::min(Accumulator + Dt, PhysicsStep * MaxPhysicsSteps);

@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Teinora
@@ -65,6 +66,12 @@ namespace Teinora
 
 		/** Throws a ball along the line of sight, at the point on it that the eye is resting on, if it can get there. */
 		void ThrowBall(const Vec3& Eye, const Vec3& Gaze, double Speed);
+
+		/** Lights a campfire where the line of sight meets dry, level enough ground. False if it does not. */
+		bool PlaceCampfire(const Vec3& Eye, const Vec3& Gaze);
+
+		/** Sets a crate, barrel or ball down where the line of sight meets something, or a little way ahead. */
+		void PlaceProp(EPropKind Kind, const Vec3& Eye, const Vec3& Gaze);
 
 		void CollectObjects(std::vector<ObjectDraw>& Out) const;
 		std::size_t GetPropCount() const { return Props.size(); }
@@ -220,6 +227,7 @@ namespace Teinora
 
 		std::unordered_map<std::uint64_t, Chunk> Chunks;
 		std::unordered_map<std::uint64_t, int> InFlight;
+		std::unordered_set<std::uint64_t> Stale; // chunks to build again, for what has been placed on them
 		std::vector<Prop> Props;
 		std::vector<int> PropKindByBody;
 		std::vector<AirReading> AirByBody;

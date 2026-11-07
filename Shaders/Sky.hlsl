@@ -20,8 +20,11 @@ float4 PSMain(Varyings Input) : SV_Target
 	const float SunDot = dot(Direction, SunDirection.xyz);
 	Color += SunColor.rgb * smoothstep(0.99985, 0.99995, SunDot) * 12.0;
 
+	// The blue-green sun in its own colour. As bright as the first it would burn out to white, as any sun does
+	// to an eye or a camera, and the two would look alike: a few times the sky around it keeps its hue.
 	const float Sun2Dot = dot(Direction, Sun2Direction.xyz);
-	Color += Sun2Color.rgb * smoothstep(0.99992, 0.99997, Sun2Dot) * 14.0;
+	const float3 Hue2 = pow(Sun2Color.rgb / max(max(Sun2Color.r, Sun2Color.g), max(Sun2Color.b, 1e-4)), 2.5); // deepened, or it reads as white
+	Color += Hue2 * (dot(Color, float3(0.3, 0.6, 0.1)) * 4.0 + 0.4) * smoothstep(0.99992, 0.99997, Sun2Dot);
 
 	if (GetNight() > 0.0)
 	{

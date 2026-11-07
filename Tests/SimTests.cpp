@@ -428,6 +428,22 @@ namespace
 		Expect(Up(GetPlanetDirection(23.5)), "and by night");
 		Expect(!Up(GetPlanetDirection(8.0)), "and at some hours not at all");
 
+		// The sky carries the planet round as it does the stars, while it creeps back among them.
+		const auto Rise = [](double Day)
+		{
+			for (double Hour = 0.0; Hour < 48.0; Hour += 0.01)
+			{
+				if (GetPlanetDirection(Hour, Day).Z <= 0.0 && GetPlanetDirection(Hour + 0.01, Day).Z > 0.0)
+				{
+					return Hour;
+				}
+			}
+			return -1.0;
+		};
+		const double Later = Rise(5.0) - Rise(0.0);
+		std::printf("       the planet rises at %.1f h on the first day and %.1f h later five days on\n", Rise(0.0), Later);
+		Expect(Later > 4.0 && Later < 6.5, "the planet keeps a way of its own, rising about an hour later each day");
+
 		double Biggest = 0.0;
 		for (double Hour = 0.0; Hour < 24.0; Hour += 0.05)
 		{
@@ -518,7 +534,7 @@ namespace
 			}
 			std::printf("       rings at %02.0f:00 stand open from %.2f to %.2f, changing by up to %.2f a day\n", Hour, Narrowest, Widest2, MostInADay);
 			Expect(Widest2 - Narrowest > 0.3, "the rings open and close over the days");
-			Expect(MostInADay < 0.25, "but slowly");
+			Expect(MostInADay < 0.45, "but slowly, though at the same hour the planet stands a fourteenth of the sky further on each day");
 		}
 	}
 
