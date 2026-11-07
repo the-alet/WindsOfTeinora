@@ -27,7 +27,7 @@ namespace
 	constexpr float FocusRadius = 0.23f;
 	constexpr float FocusStrength = 0.75f;
 
-	constexpr float DayExposureBias = -0.7f; // in stops, for the sun's intensity in TeinoraWorld.cpp
+	constexpr float DayExposureBias = -1.52f; // in stops, for the sun's intensity in TeinoraWorld.cpp
 }
 
 ATeinoraCamera::ATeinoraCamera()
@@ -134,9 +134,12 @@ void ATeinoraCamera::SetEyeFocus(bool bEnabled)
 	bEyeFocus = bEnabled;
 }
 
-void ATeinoraCamera::SetExposure(double Multiplier)
+void ATeinoraCamera::SetExposure(double Multiplier, float Saturation)
 {
-	Camera->PostProcessSettings.AutoExposureBias = DayExposureBias + static_cast<float>(FMath::Log2(Multiplier));
+	FPostProcessSettings& Post = Camera->PostProcessSettings;
+	Post.AutoExposureBias = DayExposureBias + static_cast<float>(FMath::Log2(Multiplier));
+	Post.bOverride_ColorSaturation = Saturation < 1.0f;
+	Post.ColorSaturation = FVector4(Saturation, Saturation, Saturation, 1.0f);
 }
 
 void ATeinoraCamera::SetUnderwater(double Depth, const FLinearColor& Light)

@@ -11,9 +11,12 @@ THIRD_PARTY_INCLUDES_END
 
 class ATeinoraCamera;
 class UDirectionalLightComponent;
+class UExponentialHeightFogComponent;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
+class UPointLightComponent;
 class UProceduralMeshComponent;
+class USkyLightComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 class UTexture2D;
@@ -37,6 +40,14 @@ struct FTeinoraWorldStats
 	double MagicWater = 0.0;
 	double MagicAir = 0.0;
 	double MagicNature = 0.0;
+	double MagicFire = 0.0;   // in all its forms
+	double MagicNeutral = 0.0;
+	double CloudDepth = 0.0;  // the cloud over the camera
+	double CloudWater = 0.0;
+	double CloudAir = 0.0;
+	double CloudSpeed = 0.0;
+	double CloudRubbing = 0.0;
+	double CloudLightning = 0.0;
 	bool bMagic = false;      // whether there is magic to report at all
 	bool bMagicView = false;
 };
@@ -77,6 +88,9 @@ private:
 	void SpawnSkyDome();
 	UDirectionalLightComponent* SpawnSkyLight(int32 AtmosphereIndex);
 	void CreateWater();
+	void CreateFires();
+	void UpdateFires(const Teinora::Vec3& Eye);
+	void UpdateStorms(const ATeinoraCamera& Eye);
 	void UpdateSky(ATeinoraCamera* Eye);
 	void UpdateWater(const Teinora::Vec3& Eye);
 	void UpdateLakes(const Teinora::Vec3& Eye);
@@ -109,6 +123,12 @@ private:
 	TObjectPtr<UVolumetricCloudComponent> Clouds;
 
 	UPROPERTY()
+	TObjectPtr<UExponentialHeightFogComponent> Fog;
+
+	UPROPERTY()
+	TObjectPtr<USkyLightComponent> SkyFill;
+
+	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> CloudMaterial;
 
 	UPROPERTY()
@@ -136,6 +156,27 @@ private:
 	TObjectPtr<UMaterialInterface> BodyMaterial;
 
 	UPROPERTY()
+	TArray<TObjectPtr<UProceduralMeshComponent>> Flames;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> FlameMaterials;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UPointLightComponent>> FireLights;
+
+	UPROPERTY()
+	TObjectPtr<UProceduralMeshComponent> PuffMesh;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> PuffMaterial;
+
+	UPROPERTY()
+	TObjectPtr<UProceduralMeshComponent> BoltMesh;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> BoltMaterial;
+
+	UPROPERTY()
 	TObjectPtr<UTexture2D> LiquidMap;
 
 	UPROPERTY()
@@ -158,9 +199,14 @@ private:
 	bool bMagicView = false;
 	double TimeRate = 1.0;
 	float MagicFade = 0.0f;
+	FLinearColor DayHazeColor;
+	bool bPlanetLightsAir = false;
 
 	FString ShotPath;
 	int32 AutoFrames = 0;
 	int32 SettledFrames = 0;
 	int32 ThrowsLeft = 0;
+	double StormCover = 1.0;
+	double StrikeAhead = 0.0; // an automated run ends with a bolt this far ahead
+	int32 StrikeFrame = -1;   // or has it once, at this frame
 };

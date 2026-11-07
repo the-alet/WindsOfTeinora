@@ -4,8 +4,10 @@
 
 #include "Core/Math.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace Teinora
 {
@@ -17,6 +19,7 @@ namespace Teinora
 		TerrainNeedle = 16, // the same with the needle texture
 		TerrainBark = 32,   // the colour over the bark texture
 		TerrainStone = 64,  // the colour over the rock texture
+		TerrainMolten = 88, // black crust with light in its cracks: red says how hot, from set hard to wide open
 		TerrainGround = 127 // textured by height and slope; see EncodeGroundLevel for its colour
 	};
 
@@ -85,6 +88,95 @@ namespace Teinora
 		double Radius = 0.0; // how far around it the move reaches
 		Vec3 Offset;
 	};
+
+	/** One length of a lightning bolt's channel. */
+	struct BoltSegment
+	{
+		Vec3 From;
+		Vec3 To;
+		double Current = 1.0; // 1 on the channel that reaches the ground, less on what branches off it
+		double Reached = 0.0; // when the leader got here, as a share of its way down
+	};
+
+	/** A bolt as it stands at this moment. */
+	struct BoltDraw
+	{
+		const std::vector<BoltSegment>* Segments = nullptr;
+		double Leader = 1.0;   // how far down the leader has got, from 0 to 1
+		double Faint = 0.0;    // how bright that leader is
+		double Stroke = 0.0;   // how bright the channel is that reached the ground
+		double Branches = 0.0; // and what branches off it, which goes out sooner
+	};
+
+	/** Something burning near the camera: it lights what is around it, and may have flames. */
+	struct HotLight
+	{
+		Vec3 Point;               // where the light comes from
+		Vec3 Color;
+		double Reach = 0.0;       // metres to where it has gone
+		double FlameHeight = 0.0; // none on what only glows
+	};
+
+	/** A puff of steam off boiling water, or of smoke over a fire. */
+	struct PuffDraw
+	{
+		Vec3 Point;
+		double Radius = 0.0;    // metres
+		double Thickness = 0.0; // from 0 for what has gone to 1 for what hides all behind it
+		double Seed = 0.0;      // so that no two look alike
+		double Floor = 0.0;     // the water or ground it came off, which hides what is below it
+		double Shade = 1.0;     // how much of the light on it it gives back: all for steam, less for smoke
+		double Firelight = 0.0; // how much a fire's light reaches it, as a share of that light at the flame
+	};
+
+	/** The colour of a flame's light, which HotLight carries for each fire. Also in Shaders/Puffs.hlsl and Unreal/Scripts/make_content.py. */
+	inline constexpr double FlameLightRed = 2.6;
+	inline constexpr double FlameLightGreen = 1.1;
+	inline constexpr double FlameLightBlue = 0.3;
+
+	/** A corner of the sheet that a puff is drawn on. */
+	struct PuffCorner
+	{
+		Vec3 Point;
+		double Across = 0.0; // where it is on the sheet, from -1 to 1
+		double Up = 0.0;
+	};
+
+	/**
+	 * The sheet for a puff: a square turned to face the eye, cut off along the water or ground it
+	 * came off, which would hide that part anyway. Returns how many corners are left, up to 5, in
+	 * order around it.
+	 */
+	inline int CutPuffSheet(const PuffDraw& Puff, const Vec3& Eye, PuffCorner (&Out)[5])
+	{
+		const Vec3 Along = Normalize(Puff.Point - Eye);
+		const Vec3 Side = std::fabs(Along.Z) > 0.999 ? Vec3{ 1.0, 0.0, 0.0 } : Normalize(Cross(Along, Vec3{ 0.0, 0.0, 1.0 }));
+		const Vec3 Up = Cross(Side, Along);
+		const auto MakeCorner = [&](double Across, double Rise)
+		{
+			return PuffCorner{ Puff.Point + (Side * Across + Up * Rise) * Puff.Radius, Across, Rise };
+		};
+		const PuffCorner Square[4] ={ MakeCorner(-1.0, -1.0), MakeCorner(1.0, -1.0), MakeCorner(1.0, 1.0), MakeCorner(-1.0, 1.0) };
+
+		int Count = 0;
+		for (int Index = 0; Index < 4; ++Index)
+		{
+			const PuffCorner& From = Square[Index];
+			const PuffCorner& To = Square[(Index + 1) % 4];
+			const double FromAbove = From.Point.Z - Puff.Floor;
+			const double ToAbove = To.Point.Z - Puff.Floor;
+			if (FromAbove >= 0.0)
+			{
+				Out[Count++] = From;
+			}
+			if ((FromAbove >= 0.0) != (ToAbove >= 0.0))
+			{
+				const double Share = FromAbove / (FromAbove - ToAbove);
+				Out[Count++] = { From.Point + (To.Point - From.Point) * Share, From.Across + (To.Across - From.Across) * Share, From.Up + (To.Up - From.Up) * Share };
+			}
+		}
+		return Count;
+	}
 
 	/** One star of the sky map, as the renderer takes it. */
 	struct SkyStar
@@ -160,6 +252,13 @@ namespace Teinora
 	{
 		const double Node = 2.0 * Pi * (Day + Hour / 24.0) / SecondSunNodeDays;
 		return GetOrbitPoint(Pi - GetPathAngle(Hour, 9.0, 22.0), SecondSunTilt, Node);
+	}
+
+	/** How much the suns are heating the ground: nothing at night, about 1 with both of them high. */
+	inline double GetSunHeat(double Hour, double Day = 0.0)
+	{
+		const auto Height = [](const Vec3& Sun) { return std::max(Sun.Z, 0.0); };
+		return Height(GetSunDirection(Hour, Day)) + Height(GetSecondSunDirection(Hour, Day)) * 0.6;
 	}
 
 	/**

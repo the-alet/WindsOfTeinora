@@ -35,6 +35,25 @@ namespace Teinora
 		constexpr float FocusRadius = 0.23f;
 		constexpr float FocusStrength = 0.75f;
 		constexpr std::size_t MaxPlantMoves = 8; // also in Shaders/Common.hlsli
+		constexpr std::size_t MaxHotLights = 8;  // and this
+
+		struct BoltVertex
+		{
+			Float3 Position;
+			float Across;
+			float Bright;
+		};
+
+		struct PuffVertex
+		{
+			Float3 Position;
+			float PlaceX;
+			float PlaceY;
+			float Thickness;
+			float Seed;
+			float Shade;
+			float Firelight;
+		};
 
 		std::uint16_t ToHalf(float Value)
 		{
@@ -372,6 +391,9 @@ namespace Teinora
 		Float4 LiquidArea;
 		Float4 PlantPoints[MaxPlantMoves];
 		Float4 PlantMoves[MaxPlantMoves];
+		Float4 HotPoints[MaxHotLights];
+		Float4 HotLights[MaxHotLights];
+		Float4 BoltFlash;
 	};
 
 	Renderer::Renderer(Rhi::Device& InDevice, std::uint32_t InWindowWidth, std::uint32_t InWindowHeight, const RenderSettings& InSettings)
@@ -524,6 +546,32 @@ namespace Teinora
 			Water.Pixel = GetShader("WaterRayPS", Backend);
 			WaterRayPipeline = Device.CreatePipeline(Water);
 		}
+
+		PipelineDesc Flames;
+		Flames.Vertex = GetShader("FlameVS", Backend);
+		Flames.Pixel = GetShader("FlamePS", Backend);
+		Flames.ColorFormat = EFormat::RGBA16Float;
+		Flames.DepthFormat = EFormat::D32Float;
+		Flames.Cull = ECull::None;
+		Flames.Blend = EBlend::Additive;
+		Flames.bDepthTest = true;
+		Flames.DepthCompare = ECompare::Greater;
+		FlamePipeline = Device.CreatePipeline(Flames);
+
+		PipelineDesc Bolts = Flames;
+		Bolts.Vertex = GetShader("BoltVS", Backend);
+		Bolts.Pixel = GetShader("BoltPS", Backend);
+		Bolts.Streams = { { sizeof(BoltVertex), false } };
+		Bolts.Attributes = { { EFormat::RGB32Float, 0, 0 }, { EFormat::RG32Float, 12, 0 } };
+		BoltPipeline = Device.CreatePipeline(Bolts);
+
+		PipelineDesc Puffs = Flames;
+		Puffs.Vertex = GetShader("PuffVS", Backend);
+		Puffs.Pixel = GetShader("PuffPS", Backend);
+		Puffs.Streams = { { sizeof(PuffVertex), false } };
+		Puffs.Attributes = { { EFormat::RGB32Float, 0, 0 }, { EFormat::RG32Float, 12, 0 }, { EFormat::RGBA32Float, 20, 0 } };
+		Puffs.Blend = EBlend::Alpha;
+		PuffPipeline = Device.CreatePipeline(Puffs);
 
 		PipelineDesc Underwater = MakeFullscreen("UnderwaterPS", EFormat::RGBA16Float);
 		Underwater.DepthFormat = EFormat::D32Float;
@@ -1097,12 +1145,112 @@ namespace Teinora
 			TriangleCount += WaterIndexCount / 3;
 		}
 
+		// One sheet for each of them, read from the frame's data, which also skips those with no flames.
+		if (View.HotLights != nullptr && !View.HotLights->empty())
+		{
+			Device.SetPipeline(FlamePipeline);
+			Device.Draw(6, static_cast<std::uint32_t>(std::min(View.HotLights->size(), MaxHotLights)));
+		}
+		DrawPuffs(View);
+		DrawBolts(View);
+
 		if (View.CameraDepth > 0.0)
 		{
 			Device.SetPipeline(UnderwaterPipeline);
 			Device.Draw(3);
 		}
 		Device.EndPass();
+	}
+
+	void Renderer::DrawPuffs(const SceneView& View)
+	{
+		if (View.Puffs == nullptr || View.Puffs->empty())
+		{
+			return;
+		}
+
+		// Sheets turned to face the eye, farthest first, so that the nearer ones cover them.
+		std::vector<PuffVertex> Vertices;
+		for (auto Puff = View.Puffs->rbegin(); Puff != View.Puffs->rend(); ++Puff)
+		{
+			PuffCorner Corners[5];
+			const int Count = CutPuffSheet(*Puff, View.CameraPosition, Corners);
+			const auto Add = [&](const PuffCorner& Corner)
+			{
+				Vertices.push_back({ ToFloat(Corner.Point - View.CameraPosition), static_cast<float>(Corner.Across), static_cast<float>(Corner.Up),
+					static_cast<float>(Puff->Thickness), static_cast<float>(Puff->Seed), static_cast<float>(Puff->Shade), static_cast<float>(Puff->Firelight) });
+			};
+			for (int Index = 2; Index < Count; ++Index)
+			{
+				Add(Corners[0]);
+				Add(Corners[Index - 1]);
+				Add(Corners[Index]);
+			}
+		}
+		if (Vertices.empty())
+		{
+			return;
+		}
+
+		Device.SetPipeline(PuffPipeline);
+		const std::size_t Bytes = Vertices.size() * sizeof(PuffVertex);
+		std::memcpy(Device.SetTransientVertexBuffer(0, Bytes), Vertices.data(), Bytes);
+		Device.Draw(static_cast<std::uint32_t>(Vertices.size()));
+	}
+
+	void Renderer::DrawBolts(const SceneView& View)
+	{
+		if (View.Bolts == nullptr || View.Bolts->empty())
+		{
+			return;
+		}
+
+		// A channel is thinner than a pixel from any way off, but too bright to look it.
+		const double PixelSize = 2.0 * std::tan(View.VerticalFov * 0.5) / static_cast<double>(TargetHeight);
+		std::vector<BoltVertex> Vertices;
+		for (const BoltDraw& Bolt : *View.Bolts)
+		{
+			for (const BoltSegment& Segment : *Bolt.Segments)
+			{
+				if (Segment.Reached > Bolt.Leader)
+				{
+					continue;
+				}
+
+				const double Lit = (Segment.Current >= 1.0 ? std::max(Bolt.Stroke, Bolt.Faint) : std::max(Bolt.Branches, Bolt.Faint) * Segment.Current);
+				if (Lit < 0.002)
+				{
+					continue;
+				}
+
+				const Vec3 Middle = (Segment.From + Segment.To) * 0.5 - View.CameraPosition;
+				const Vec3 Side = Normalize(Cross(Segment.To - Segment.From, Middle));
+				const double Width = std::max(0.5 * Segment.Current, Length(Middle) * PixelSize * 1.8);
+				const float Bright = static_cast<float>(Lit);
+				const Vec3 Overlap = Normalize(Segment.To - Segment.From) * Width; // so that bends leave no gaps
+				const Vec3 From = Segment.From - Overlap - View.CameraPosition;
+				const Vec3 To = Segment.To + Overlap - View.CameraPosition;
+
+				const auto Corner = [&](const Vec3& End, double Across)
+				{
+					Vertices.push_back({ ToFloat(End + Side * (Across * Width)), static_cast<float>(Across), Bright });
+				};
+				Corner(From, -1.0);
+				Corner(From, 1.0);
+				Corner(To, 1.0);
+				Corner(From, -1.0);
+				Corner(To, 1.0);
+				Corner(To, -1.0);
+			}
+		}
+
+		if (!Vertices.empty())
+		{
+			Device.SetPipeline(BoltPipeline);
+			const std::size_t Bytes = Vertices.size() * sizeof(BoltVertex);
+			std::memcpy(Device.SetTransientVertexBuffer(0, Bytes), Vertices.data(), Bytes);
+			Device.Draw(static_cast<std::uint32_t>(Vertices.size()));
+		}
 	}
 
 	void Renderer::RenderUpscale(const FrameData& Frame, const Float4x4& Steady, const Float4x4& SteadyProjection, const SceneView& View, const float* Jitter, const Vec3* Axes, double Aspect)
@@ -1418,6 +1566,17 @@ namespace Teinora
 			}
 		}
 		Frame.Conditions = { static_cast<float>(View.CameraDepth), static_cast<float>(View.WaveHeight), static_cast<float>(View.CloudCover), static_cast<float>(PlantMoves) };
+
+		if (View.HotLights != nullptr)
+		{
+			for (std::size_t Index = 0; Index < std::min(View.HotLights->size(), MaxHotLights); ++Index)
+			{
+				const HotLight& Hot = (*View.HotLights)[Index];
+				Frame.HotPoints[Index] = ToFloat4(ToFloat(Hot.Point - View.CameraPosition), static_cast<float>(Hot.FlameHeight));
+				Frame.HotLights[Index] = ToFloat4(ToFloat(Hot.Color), static_cast<float>(Hot.Reach));
+			}
+		}
+		Frame.BoltFlash = ToFloat4(ToFloat(View.FlashPoint - View.CameraPosition), static_cast<float>(View.FlashStrength));
 
 		const bool bLiquid = View.LiquidSpan > 0.0 && LiquidTexture;
 		Frame.LiquidArea = {

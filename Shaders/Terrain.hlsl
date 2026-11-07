@@ -96,7 +96,7 @@ float4 PSMain(Varyings Input) : SV_Target
 
 	const Shaded Surface = ShadeMaterial(Input.Material, Input.Albedo, World, Normal, Pixel);
 	Normal = normalize(Normal + Surface.Bend);
-	float3 Color = ShadeSurface(Surface.Color, Normal, Input.Relative, Input.ViewDepth, Surface.Gloss, Input.Lift);
+	float3 Color = ShadeSurface(Surface.Color, Normal, Input.Relative, Input.ViewDepth, Surface.Gloss, Input.Lift, Surface.Glow);
 
 #ifdef FOLIAGE
 	// Light comes through leaves when the eye looks towards a sun past them.

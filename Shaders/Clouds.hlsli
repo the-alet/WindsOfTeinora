@@ -162,6 +162,10 @@ float3 AddClouds(float3 Color, float3 Direction, int Steps, float Dither)
 			{
 				Lit += Shine2 * Edge * exp(-MeasureCloudToSun(Point, Sun2Direction.xyz) * CloudExtinction * 1.1);
 			}
+			if (BoltFlash.w > 0.0)
+			{
+				Lit += float3(0.8, 0.82, 1.0) * BoltFlash.w * exp(-length(Point - BoltFlash.xyz) * 0.0009);
+			}
 
 			const float Taken = 1.0 - exp(-Density * CloudExtinction * Stride);
 			Light += Lit * Clear * Taken;

@@ -69,8 +69,8 @@ namespace Teinora
 		void AddChunk(std::uint64_t Key, std::vector<PlantLimb>&& Limbs, std::vector<PlantFoliage>&& Foliage, const Vec3& Origin, double Size);
 		void RemoveChunk(std::uint64_t Key);
 
-		/** The force on a body moving among the plants, which they feel in turn. Call once for each body at each step. */
-		Vec3 Touch(const Vec3& Position, double Radius, const Vec3& Velocity, double Mass, double Dt);
+		/** The force on a body moving among the plants, which they feel in turn. Call once for each body at each step. Stiffening scales how hard limbs push back. */
+		Vec3 Touch(const Vec3& Position, double Radius, const Vec3& Velocity, double Mass, double Dt, double Stiffening = 1.0);
 
 		/** Lets what has been pushed swing back. */
 		void Advance(double Dt);
@@ -103,7 +103,7 @@ namespace Teinora
 			std::unordered_map<std::uint32_t, Motion> MovingLeaves;  // masses of leaves
 		};
 
-		void TouchChunk(Chunk& Target, const Vec3& Position, double Radius, const Vec3& Velocity, double Mass, double Dt, Vec3& Force);
+		void TouchChunk(Chunk& Target, const Vec3& Position, double Radius, const Vec3& Velocity, double Mass, double Dt, double Stiffening, Vec3& Force);
 
 		std::unordered_map<std::uint64_t, Chunk> Chunks;
 		std::uint32_t Stamp = 0;

@@ -11,6 +11,12 @@
 #include "TeinoraController.h"
 #include "TeinoraWorld.h"
 
+THIRD_PARTY_INCLUDES_START
+#include "TeinoraSim.h"
+THIRD_PARTY_INCLUDES_END
+
+namespace Sim = Teinora::Sim;
+
 void ATeinoraHud::DrawHUD()
 {
 	Super::DrawHUD();
@@ -39,8 +45,9 @@ void ATeinoraHud::DrawHUD()
 	};
 	if (Stats.bMagic)
 	{
-		Lines.Add(FString::Printf(TEXT("Magic density %.3f kg/m3: earth %.3f, water %.3f, air %.3f, nature %.3f%s"), Stats.MagicEarth + Stats.MagicWater + Stats.MagicAir + Stats.MagicNature,
-			Stats.MagicEarth, Stats.MagicWater, Stats.MagicAir, Stats.MagicNature, Stats.bMagicView ? TEXT("   Magic view") : TEXT("")));
+		Lines.Add(FString::Printf(TEXT("Magic density %.3f kg/m3: earth %.3f, water %.3f, air %.3f, nature %.3f, fire %.3f, neutral %.3f%s"), Stats.MagicEarth + Stats.MagicWater + Stats.MagicAir + Stats.MagicNature + Stats.MagicFire + Stats.MagicNeutral,
+			Stats.MagicEarth, Stats.MagicWater, Stats.MagicAir, Stats.MagicNature, Stats.MagicFire, Stats.MagicNeutral, Stats.bMagicView ? TEXT("   Magic view") : TEXT("")));
+		Lines.Add(FString::Printf(TEXT("Cloud above %.0f m deep: water %.3f, air %.3f, passing at %.0f m/s, rubbing %.0f Pa, lightning %.3f of %.2f"), Stats.CloudDepth, Stats.CloudWater, Stats.CloudAir, Stats.CloudSpeed, Stats.CloudRubbing, Stats.CloudLightning, Sim::MagicBreakdown));
 	}
 
 	const FLinearColor Backdrop(0.0f, 0.02f, 0.05f, 0.5f);
@@ -68,7 +75,7 @@ void ATeinoraHud::DrawHUD()
 	DrawRect(Backdrop, 10.0f, 10.0f, Widest + 16.0f, LineHeight * Lines.Num() + 16.0f);
 	for (int32 Index = 0; Index < Lines.Num(); ++Index)
 	{
-		DrawText(Lines[Index], Index == 3 ? MagicText : FLinearColor::White, 18.0f, 18.0f + LineHeight * Index, Font);
+		DrawText(Lines[Index], Index >= 3 ? MagicText : FLinearColor::White, 18.0f, 18.0f + LineHeight * Index, Font);
 	}
 
 	const double Charge = Player->GetThrowCharge();

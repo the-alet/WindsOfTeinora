@@ -24,6 +24,12 @@ static const float FirstStep = 1.5;
 static const float Reach = 3500.0;
 static const float Growth = 1.1771; // (Reach / FirstStep)^(1 / Steps)
 
+// The magic view sees only so far around the eye, though magic goes on beyond it.
+static const float SightRadius = 100.0; // Sim::MagicSightRadius
+static const float SightFade = 70.0;    // where it starts to give out
+static const int SightSteps = 32;
+static const float SightGrowth = 1.1402; // (SightRadius / FirstStep)^(1 / SightSteps)
+
 static const float DensityScale = 24.0;   // MagicVolume::DensityScale
 static const float VisibleDensity = 5.5;  // Sim::MagicVisibleDensity
 static const float ThickDensity = 0.8;    // thinner than this, the haze has no structure worth drawing
@@ -100,13 +106,14 @@ float4 PSMain(Varyings Input) : SV_Target
 {
 	float Distance;
 	const float3 Direction = GetRay(Input, Distance);
+	Distance = min(Distance, SightRadius);
 
 	float Near = FirstStep;
 	float Clear = 1.0;           // how much of what lies behind still gets through
 	float3 Glow = float3(0.0, 0.0, 0.0); // the light of the haze, nearest first
-	for (int Step = 0; Step < Steps && Near < Distance; ++Step)
+	for (int Step = 0; Step < SightSteps && Near < Distance; ++Step)
 	{
-		const float Far = min(Near * Growth, Distance);
+		const float Far = min(Near * SightGrowth, Distance);
 		const float Span = Far - Near;
 		const float3 Relative = Direction * (0.5 * (Near + Far));
 		const float4 Sampled = SampleMagic(Relative);
@@ -127,7 +134,8 @@ float4 PSMain(Varyings Input) : SV_Target
 
 		if (Density > 1e-4)
 		{
-			const float Taken = 1.0 - exp(-Density * Extinction * Span);
+			const float Seen = 1.0 - smoothstep(SightFade, SightRadius, Near);
+			const float Taken = (1.0 - exp(-Density * Extinction * Span)) * Seen;
 			Glow += Sampled.yzw / Density * Clear * Taken * (0.35 + 0.65 * Swirl);
 			Clear *= 1.0 - Taken;
 		}

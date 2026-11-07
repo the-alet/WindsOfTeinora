@@ -3,11 +3,14 @@
 // Each cell holds a density in kg/m3 for each kind of magic and one velocity they share. The
 // equations are those of a compressible gas with the amount of magic as its mass: its pressure
 // is the density times the square of a sound speed, a cell accelerates by force over the amount
-// in it, and transport conserves each kind exactly, with some diffusion between neighbours.
-// There is no gravity term. Moving air and magic's own weak currents drag it along, and
-// vorticity confinement keeps the swirls the grid would blur away. The world's wells and thin
-// places restore a baseline over several seconds, and whatever is carried past the limit of its
-// kind, such as water magic pushed inland, drains away soon after.
+// in it, and transport moves each kind exactly, with some diffusion between neighbours. There is
+// no gravity term. Moving air and magic's own weak currents drag it along, and vorticity
+// confinement keeps the swirls the grid would blur away.
+//
+// Magic passes through land and water like anything else, slowed by them. What it passes through
+// gives neutral magic an aspect, and away from there the aspect fades, by the rules in TeinoraSim.h,
+// so nothing here says where any aspect should be. The world only keeps up the total density: matter
+// holds magic to itself just hard enough to balance the pressure of that, and the wells feed it.
 #pragma once
 
 #include "Core/Math.h"
@@ -39,12 +42,42 @@ namespace Teinora
 		Vec3 Corner;                      // the box's low corner in the world
 		double PeakDensity = 0.0;         // the densest cell
 		std::vector<float> Amounts[Sim::MagicTypeCount]; // kg/m3, X fastest; empty when only drawn
+		std::vector<float> Flow[3];       // m/s along each axis, likewise
 		std::vector<std::uint8_t> Pixels; // RGBA8, in the same order
 
 		bool Contains(const Vec3& Position) const;
 
 		/** Blended from the eight nearest cells. */
 		Sim::MagicMix GetMix(const Vec3& Position) const;
+		Vec3 GetFlow(const Vec3& Position) const;
+
+		/** How one kind rises per metre around a point. */
+		Vec3 GetSlope(Sim::EMagicType Type, const Vec3& Position) const;
+
+	private:
+		double Sample(const std::vector<float>& Field, const Vec3& Position) const;
+	};
+
+	/** A push on the magic around a point, in N s: what matter does back to it. */
+	struct MagicPush
+	{
+		Vec3 Position;
+		Vec3 Impulse;
+	};
+
+	/** Magic let into the gas at a point, in kg/m3 of the cell around it. */
+	struct MagicDeposit
+	{
+		Vec3 Position;
+		Sim::EMagicType Type = Sim::EMagicType::Lightning;
+		double Density = 0.0;
+	};
+
+	/** Where fire magic has reached Sim::MagicFierceFire on what it can change. */
+	struct FireContact
+	{
+		Vec3 Position;       // on top of the land or the water
+		double Boiled = 0.0; // kg of it spent on boiling water, none where something grows
 	};
 
 	class MagicField
@@ -66,6 +99,9 @@ namespace Teinora
 		/** Moves the grid to stay around Focus and advances the gas. Open grids want the same Dt each time. */
 		void Step(const Vec3& Focus, const Vec3& AirDrift, double Time, double Dt);
 
+		/** How much the suns are heating the ground, from 0 at night. */
+		void SetSunHeat(double Heat) { SunHeat = Heat; }
+
 		void SetDensity(Sim::EMagicType Type, const std::function<double(const Vec3&)>& Density);
 		void SetVelocity(const std::function<Vec3(const Vec3&)>& Velocity);
 
@@ -74,8 +110,21 @@ namespace Teinora
 		double GetDensity(const Vec3& Position, Sim::EMagicType Type) const;
 		Vec3 GetVelocity(const Vec3& Position) const;
 
-		/** The kilograms of magic of one kind in the grid. */
+		/** The kilograms of magic of one kind in the grid, or of all of it. */
 		double GetTotalAmount(Sim::EMagicType Type) const;
+		double GetTotalAmount() const;
+
+		/** Changes how the magic in the cell around a point is moving: the impulse over the amount of it. */
+		void Push(const MagicPush& Push);
+
+		/** Adds magic from elsewhere to the cell around a point, if it is in the grid. */
+		void Deposit(const MagicDeposit& Deposit);
+
+		/** What is burning that was not always there, which gives the magic around it the aspect of fire. */
+		void SetBurning(const std::vector<Sim::HotSpot>& Spots) { Burning = Spots; }
+
+		/** Adds on where dense fire has met plants or water since the last call. */
+		void TakeContacts(std::vector<FireContact>& Out);
 
 		/** The strongest spin in the grid, in radians per second. */
 		double GetPeakSpin() const;
@@ -94,7 +143,11 @@ namespace Teinora
 		void ComputeSpin();
 		void AddUpDensity();
 		void UpdateVelocity(float Dt);
-		void RestoreBaseline(float Dt);
+		void RestoreAmount(float Dt);
+		void UpdateAspects(float Dt);
+		void ApplyBurning(float Dt);
+		void ActOnMatter(float Dt);
+		bool IsInGrid(const Vec3& Position) const;
 		void Transport(int Axis, float Dt);
 		void ParallelFor(int Count, const std::function<void(int)>& Body);
 
@@ -116,9 +169,17 @@ namespace Teinora
 		int MapZ[GridZ + 4] = {};
 
 		std::vector<Sim::MagicWell> Wells;
+		std::vector<Sim::HotSpot> HotSpots;
+		std::vector<Sim::HotSpot> Burning;
+		std::vector<FireContact> Contacts;
+		double SunHeat = 0.0;
+		double WindSpeed = 0.0;
 		std::vector<float> Amounts[Sim::MagicTypeCount];
-		std::vector<float> Baselines[Sim::MagicTypeCount];
-		std::vector<float> Limits[Sim::MagicTypeCount];
+		std::vector<float> Imprints[Sim::MagicTypeCount]; // per second, by what is in each cell
+		std::vector<float> Wanted;  // the density the world keeps up, which matter holds in place
+		std::vector<float> Slowing; // the share of the stream's speed left in each cell
+		std::vector<float> GroundCool;   // how warm the ground is in each cell, in degrees
+		std::vector<float> GroundSunned; // and what the suns add to that, where there is ground to heat
 		std::vector<float> Density; // all the kinds together, which is what pressure comes from
 		std::vector<float> VelocityX;
 		std::vector<float> VelocityY;
@@ -130,7 +191,6 @@ namespace Teinora
 		std::vector<float> CurlY;
 		std::vector<float> CurlZ;
 		std::vector<float> Spin;
-		std::vector<std::uint8_t> Solid;
 		std::vector<Sim::MagicGround> Columns;
 		std::vector<float> AirX;       // how the magic is being driven, on a coarser grid relative to the window
 		std::vector<float> AirY;
@@ -151,8 +211,20 @@ namespace Teinora
 		MagicSimulation(const MagicSimulation&) = delete;
 		MagicSimulation& operator=(const MagicSimulation&) = delete;
 
-		/** Lets the gas run up to Time, around Focus. */
-		void Advance(const Vec3& Focus, const Vec3& AirDrift, double Time);
+		/** Lets the gas run up to Time, around Focus. SunHeat says how much the suns are heating the ground. */
+		void Advance(const Vec3& Focus, const Vec3& AirDrift, double Time, double SunHeat);
+
+		/** What matter has done back to the magic since the last call, for the next step of the gas. */
+		void AddPushes(const std::vector<MagicPush>& Pushes);
+
+		/** Magic to let in at the next step of the gas. */
+		void AddDeposit(const MagicDeposit& Deposit);
+
+		/** What is burning that was not always there. */
+		void SetBurning(const std::vector<Sim::HotSpot>& Spots);
+
+		/** Hands over where dense fire has met plants or water since the last call. */
+		void TakeContacts(std::vector<FireContact>& Out);
 
 		/** True once the gas has had time to get moving. */
 		bool IsReady() const;
@@ -173,6 +245,11 @@ namespace Teinora
 		Vec3 Focus;
 		Vec3 AirDrift;
 		double TargetTime = 0.0;
+		double SunHeat = 0.0;
+		std::vector<MagicPush> Pending;
+		std::vector<MagicDeposit> PendingDeposits;
+		std::vector<Sim::HotSpot> PendingBurning;
+		std::vector<FireContact> FinishedContacts;
 		bool bStarted = false;
 		bool bReady = false;
 		bool bStopping = false;

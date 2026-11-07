@@ -1,5 +1,6 @@
 #include "Lighting.hlsli"
 #include "Surfaces.hlsli"
+#include "Flame.hlsli"
 
 #ifdef RAY_TRACED
 #include "Clouds.hlsli"
@@ -10,8 +11,9 @@ static const uint BodyInstance = 1u << 23;
 static const uint BodyStride = 16;  // sizeof(MeshVertex)
 static const float ReflectedDepth = 1000.0; // far enough that a reflection is spared the fine shading
 
-float3 TraceReflection(float3 Origin, float3 Direction)
+float3 TraceReflection(float3 Origin, float3 Direction, out float Reach)
 {
+	Reach = 1e9;
 	RayDesc Ray;
 	Ray.Origin = Origin;
 	Ray.Direction = Direction;
@@ -34,6 +36,7 @@ float3 TraceReflection(float3 Origin, float3 Direction)
 	}
 
 	const float Distance = Query.CommittedRayT();
+	Reach = Distance;
 	const float3 Hit = Origin + Direction * Distance;
 	const float2 Barycentrics = Query.CommittedTriangleBarycentrics();
 	const float3 Weights = float3(1.0 - Barycentrics.x - Barycentrics.y, Barycentrics.x, Barycentrics.y);
@@ -74,7 +77,7 @@ float3 TraceReflection(float3 Origin, float3 Direction)
 	const float3 World = float3(Hit.xy + CameraPosition.xy, Hit.z + CameraPosition.z);
 	const float3 Smooth = normalize(Vertex.xyz);
 	const Shaded Surface = ShadeMaterial(Vertex.w, Tint, World, Smooth, Pixel);
-	return ShadeSurface(Surface.Color, normalize(Smooth + Surface.Bend), Hit, ReflectedDepth, 0.0, 0.0);
+	return ShadeSurface(Surface.Color, normalize(Smooth + Surface.Bend), Hit, ReflectedDepth, 0.0, 0.0, Surface.Glow);
 }
 #endif
 
@@ -102,6 +105,44 @@ struct Varyings
 	float ViewDepth : TEXCOORD1;
 	float Edge : TEXCOORD2;      // how far inside the shape that holds the water
 };
+
+/**
+ * The flames that a ray off the water meets before Reach. Each stands on a sheet turned across the ray,
+ * as on screen it stands turned to the eye, and shows the same flame from the same place on it.
+ */
+float3 ReflectFlames(float3 Origin, float3 Direction, float Reach)
+{
+	float3 Light = float3(0.0, 0.0, 0.0);
+	const float2 Level = Direction.xy;
+	const float LevelSquare = dot(Level, Level);
+	if (LevelSquare < 1e-6)
+	{
+		return Light;
+	}
+	const float2 Side = float2(-Level.y, Level.x) * rsqrt(LevelSquare);
+
+	for (int Index = 0; Index < 8 && HotLights[Index].w > 0.0; ++Index)
+	{
+		const float Height = HotPoints[Index].w;
+		if (Height <= 0.0)
+		{
+			continue;
+		}
+		const float3 Foot = HotPoints[Index].xyz - float3(0.0, 0.0, Height * 0.33);
+		const float Along = dot(Foot.xy - Origin.xy, Level) / LevelSquare;
+		if (Along <= 0.0 || Along > Reach)
+		{
+			continue;
+		}
+		const float3 Hit = Origin + Direction * Along;
+		const float2 Place = float2(dot(Hit.xy - Foot.xy, Side) / (Height * 0.6), (Hit.z - Foot.z) / Height);
+		if (abs(Place.x) < 1.0 && Place.y > 0.0 && Place.y < 1.0)
+		{
+			Light += GetFlameColor(GetFlameHeat(Place, Index * 37.0, CameraPosition.w));
+		}
+	}
+	return Light;
+}
 
 /** How much of the patch of moving water a point has, which fades out towards the patch's edge. */
 float2 GetLiquidPlace(float2 Relative)
@@ -212,19 +253,23 @@ float4 PSMain(Varyings Input) : SV_Target
 
 	const float Facing = saturate(dot(Normal, View));
 	const float Fresnel = 0.03 + 0.97 * pow(1.0 - Facing, 5.0);
-#ifdef RAY_TRACED
 	// Where a wave turns a reflection into the water, it bounces off the next one back up.
 	float3 Bounce = reflect(-View, Normal);
 	Bounce.z = max(abs(Bounce.z), 0.001);
-	const float3 Reflected = TraceReflection(Input.Relative + float3(0.0, 0.0, 0.05), normalize(Bounce));
+	Bounce = normalize(Bounce);
+	const float3 Origin = Input.Relative + float3(0.0, 0.0, 0.05);
+#ifdef RAY_TRACED
+	float Reach;
+	const float3 Reflected = TraceReflection(Origin, Bounce, Reach) + ReflectFlames(Origin, Bounce, Reach);
 #else
-	const float3 Reflected = SkyColor(reflect(-View, Normal));
+	const float3 Reflected = SkyColor(Bounce) + ReflectFlames(Origin, Bounce, 1e9);
 #endif
 
 	const float Sparkle = pow(saturate(dot(Normal, normalize(View + SunDirection.xyz))), 420.0) * 1.4;
 	const float Sparkle2 = pow(saturate(dot(Normal, normalize(View + Sun2Direction.xyz))), 420.0) * 1.4;
 
-	float3 Color = lerp(Through, Reflected, Fresnel) + SunColor.rgb * Sparkle + Sun2Color.rgb * Sparkle2;
+	// Firelight on the water itself is faint: it shows mostly as the flames' own reflection.
+	float3 Color = lerp(Through, Reflected, Fresnel) + SunColor.rgb * Sparkle + Sun2Color.rgb * Sparkle2 + GetFirelight(Normal, Input.Relative) * 0.03;
 
 	// Foam where waves run up the shore and where the water has been thrown about.
 	const float Lapping = smoothstep(0.7, 0.0, Thickness) * (0.55 + 0.45 * sin(Thickness * 9.0 - CameraPosition.w * 1.3)) * WaveShare;

@@ -70,6 +70,11 @@ namespace Teinora
 		const std::vector<ObjectDraw>* Objects = nullptr;
 		const std::vector<WaterDraw>* Waters = nullptr;
 		const std::vector<PlantMove>* PlantMoves = nullptr;
+		const std::vector<HotLight>* HotLights = nullptr;
+		const std::vector<PuffDraw>* Puffs = nullptr;
+		const std::vector<BoltDraw>* Bolts = nullptr;
+		Vec3 FlashPoint;           // where lightning is lighting up the clouds
+		double FlashStrength = 0.0;
 		double CameraDepth = 0.0;  // how far under water the camera is
 		double WaveHeight = 1.0;   // share of the usual height of the waves
 		double CloudCover = 1.0;   // share of the usual amount of cloud
@@ -150,6 +155,8 @@ namespace Teinora
 		void RenderStars(bool bDark);
 		void RenderScene(const SceneView& View, const Float4x4& ViewProjection);
 		void RenderTransparent(const SceneView& View);
+		void DrawPuffs(const SceneView& View);
+		void DrawBolts(const SceneView& View);
 		void RenderUpscale(const FrameData& Frame, const Float4x4& Steady, const Float4x4& SteadyProjection, const SceneView& View, const float* Jitter, const Vec3* Axes, double Aspect);
 		void RenderMagicPass(const SceneView& View, Rhi::TextureHandle Target, Rhi::PipelineHandle Pipeline);
 		void RenderBlur();
@@ -175,6 +182,9 @@ namespace Teinora
 		Rhi::PipelineHandle StarPipeline;
 		Rhi::PipelineHandle WaterPipeline;
 		Rhi::PipelineHandle WaterRayPipeline;
+		Rhi::PipelineHandle FlamePipeline;
+		Rhi::PipelineHandle PuffPipeline;
+		Rhi::PipelineHandle BoltPipeline;
 		Rhi::PipelineHandle FoliagePipeline;
 		Rhi::PipelineHandle FoliageRayPipeline;
 		Rhi::PipelineHandle FoliageShadowPipeline;

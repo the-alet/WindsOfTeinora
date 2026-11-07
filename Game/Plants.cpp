@@ -527,7 +527,7 @@ namespace Teinora
 		}
 	}
 
-	void PlantField::TouchChunk(Chunk& Target, const Vec3& Position, double Radius, const Vec3& Velocity, double Mass, double Dt, Vec3& Force)
+	void PlantField::TouchChunk(Chunk& Target, const Vec3& Position, double Radius, const Vec3& Velocity, double Mass, double Dt, double Stiffening, Vec3& Force)
 	{
 		const double Cell = Target.Size / Cells;
 		const int X = std::clamp(static_cast<int>((Position.X - Target.Origin.X) / Cell), 0, Cells - 1);
@@ -561,7 +561,7 @@ namespace Teinora
 
 			// Nearer the tip a limb has more length to bend with, and so gives more easily.
 			const double Lever = std::max(Along, 0.12);
-			const double Springiness = std::min(static_cast<double>(Limb.Stiffness) / (Lever * Lever), FirmestContact);
+			const double Springiness = std::min(static_cast<double>(Limb.Stiffness) * Stiffening / (Lever * Lever), FirmestContact);
 			const Vec3 Normal = Apart * (1.0 / Distance);
 			const Vec3 LimbSpeed = Moved != Target.Moving.end() ? Moved->second.Speed * Along : Vec3{};
 			const double Closing = Dot(Velocity - LimbSpeed, Normal);
@@ -604,7 +604,7 @@ namespace Teinora
 		}
 	}
 
-	Vec3 PlantField::Touch(const Vec3& Position, double Radius, const Vec3& Velocity, double Mass, double Dt)
+	Vec3 PlantField::Touch(const Vec3& Position, double Radius, const Vec3& Velocity, double Mass, double Dt, double Stiffening)
 	{
 		Vec3 Force;
 		++Stamp;
@@ -616,7 +616,7 @@ namespace Teinora
 			if (Position.X >= Target.Origin.X - Overhang && Position.X < Target.Origin.X + Target.Size + Overhang
 				&& Position.Y >= Target.Origin.Y - Overhang && Position.Y < Target.Origin.Y + Target.Size + Overhang)
 			{
-				TouchChunk(Target, Position, Radius, Velocity, Mass, Dt, Force);
+				TouchChunk(Target, Position, Radius, Velocity, Mass, Dt, Stiffening, Force);
 			}
 		}
 		return Force;

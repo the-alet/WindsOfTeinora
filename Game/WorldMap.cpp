@@ -74,7 +74,7 @@ namespace Teinora
 						// Light from the north-west, as maps have it.
 						const Vec3 Normal = Sim::TerrainNormal(X, Y, Seed);
 						const double Shade = 0.62 + 0.75 * std::max(Dot(Normal, Normalize(Vec3{ -0.5, 0.5, 0.7 })), 0.0);
-						const Rgb Land = ColorLand(Height, Normal.Z, Water.Level, Sim::ReadBiome(X, Y, Height, Seed));
+						const Rgb Land = ColorLand(Height, Normal.Z, Sim::GetShoreLevel(X, Y, Seed), Sim::ReadBiome(X, Y, Height, Seed));
 						Color = { Land.R * Shade, Land.G * Shade, Land.B * Shade };
 					}
 

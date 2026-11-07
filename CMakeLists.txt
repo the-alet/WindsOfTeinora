@@ -34,7 +34,7 @@ foreach(WOT_LIB PhysX PhysXCommon PhysXFoundation PhysXExtensions PhysXCooking P
     target_link_libraries(TeinoraPhysics PUBLIC "${WOT_PHYSX_DIR}/lib/${WOT_LIB}_static_64.lib")
 endforeach()
 
-add_library(TeinoraSim STATIC Game/Liquid.cpp Game/MagicField.cpp Game/Plants.cpp Game/StarMap.cpp Game/SurfaceTextures.cpp Game/TeinoraSim.cpp Game/WorldMap.cpp)
+add_library(TeinoraSim STATIC Game/Liquid.cpp Game/MagicField.cpp Game/Plants.cpp Game/StarMap.cpp Game/Storms.cpp Game/SurfaceTextures.cpp Game/TeinoraSim.cpp Game/WorldMap.cpp)
 target_include_directories(TeinoraSim PUBLIC Engine Game)
 target_link_libraries(TeinoraSim PRIVATE TeinoraWarnings)
 
@@ -62,6 +62,12 @@ set(WOT_SHADERS
     "WaterVS Water.hlsl VSMain vs_6_0"
     "WaterPS Water.hlsl PSMain ps_6_0"
     "WaterRayPS Water.hlsl PSMain ps_6_5 RAY_TRACED"
+    "BoltVS Bolts.hlsl VSMain vs_6_0"
+    "BoltPS Bolts.hlsl PSMain ps_6_0"
+    "FlameVS Flames.hlsl VSMain vs_6_0"
+    "FlamePS Flames.hlsl PSMain ps_6_0"
+    "PuffVS Puffs.hlsl VSMain vs_6_0"
+    "PuffPS Puffs.hlsl PSMain ps_6_0"
     "UnderwaterPS Underwater.hlsl PSMain ps_6_0"
     "CopyPS Underwater.hlsl CopyMain ps_6_0"
     "MagicPS Magic.hlsl PSMain ps_6_0"

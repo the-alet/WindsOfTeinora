@@ -101,7 +101,13 @@ if (Kind >= 0.375)
     float3 Stone = lerp(Texture2DSample(RockColor, RockColorSampler, Close).rgb, Texture2DSampleLevel(RockColor, RockColorSampler, Large, 5.0).rgb, 0.3);
     if (Kind < 0.75)
     {
-        Result = Stone * Tint * 4.5;
+        // Steep faces would smear a texture laid on from above, so it is projected along each axis.
+        float3 Facing = pow(abs(Up), 4.0);
+        Facing /= Facing.x + Facing.y + Facing.z;
+        Stone = Stone * Facing.z
+            + Texture2DSample(RockColor, RockColorSampler, float2(Flat.y, Height) / 8.0).rgb * Facing.x
+            + Texture2DSample(RockColor, RockColorSampler, float2(Flat.x, Height) / 8.0).rgb * Facing.y;
+        Result = Kind > 0.62 ? Stone * 0.12 : Stone * Tint * 4.5; // lava's crust is nearly black
     }
     else
     {
@@ -128,6 +134,10 @@ if (Under > 0.0)
     float Net = saturate(1.0 - abs(A - B) * 7.0);
     Result *= 1.0 + Net * Net * Net * Net * 2.2 * exp(-Under * 0.32) * saturate(Under * 3.0);
 
+    // Foam where the sea runs up the shore. The surface has no idea how shallow it is, but the bed does.
+    float Lapping = (1.0 - smoothstep(0.0, 0.14, Under)) * (0.6 + 0.4 * sin(Under * 40.0 - WorldTime * 1.3)) * (0.3 + Net * 1.2) * Water.y;
+    Result = lerp(Result, float3(0.8, 0.83, 0.83), saturate(Lapping) * 0.75);
+
     if (EyeUnder < 0.5)
     {
         float Path = Under / max(abs(normalize(Ray).z), 0.6);
@@ -145,6 +155,15 @@ if (Kind < 0.375)
     return Up;
 }
 float2 Bend = Texture2DSample(RockNormal, RockNormalSampler, Close).xy * 2.0 - 1.0;
+if (Kind <= 0.75)
+{
+    float3 Facing = pow(abs(Up), 4.0);
+    Facing /= Facing.x + Facing.y + Facing.z;
+    float2 Side = Texture2DSample(RockNormal, RockNormalSampler, float2(Flat.y, Height) / 8.0).xy * 2.0 - 1.0;
+    float2 Front = Texture2DSample(RockNormal, RockNormalSampler, float2(Flat.x, Height) / 8.0).xy * 2.0 - 1.0;
+    float3 Slope = float3(Bend, 0.0) * Facing.z + float3(0.0, Side) * Facing.x + float3(Front.x, 0.0, Front.y) * Facing.y;
+    return normalize(Up + float3(Slope.x, -Slope.y, Slope.z));
+}
 if (Kind > 0.75)
 {
     Bend *= Rock;
@@ -157,12 +176,108 @@ return normalize(Up + float3(Bend.x, -Bend.y, 0.0));
 
 SURFACE_TEXTURES = ('SandColor', 'SandNormal', 'GrassColor', 'GrassNormal', 'RockColor', 'RockNormal', 'SnowColor', 'SnowNormal', 'BarkColor')
 
+# The standalone game's GetMoltenGlow in Shaders/Surfaces.hlsli, for what is made of TerrainMolten.
+MOLTEN_GLOW = '''
+if (Kind < 0.62 || Kind > 0.75)
+{
+    return float3(0.0, 0.0, 0.0);
+}
+
+float2 Flat = float2(World.x, -World.y) * 0.01;
+float2 Drift = float2(sin(WorldTime * 0.043), cos(WorldTime * 0.031)) * 0.3;
+float Heat = Tint.r;
+float2 Places[2] = { Flat * 0.5 + Drift, Flat * 2.0 - Drift * 2.0 };
+float Gaps[2];
+for (int Which = 0; Which < 2; ++Which)
+{
+    float2 Cell = floor(Places[Which]);
+    float Nearest = 8.0;
+    float Second = 8.0;
+    for (int Y = -1; Y <= 1; ++Y)
+    {
+        for (int X = -1; X <= 1; ++X)
+        {
+            float2 Home = Cell + float2(X, Y);
+            float2 Shift = frac(sin(float2(dot(Home, float2(127.1, 311.7)), dot(Home, float2(269.5, 183.3)))) * 43758.5453);
+            float Reach = length(Home + Shift - Places[Which]);
+            Second = min(Second, max(Reach, Nearest));
+            Nearest = min(Nearest, Reach);
+        }
+    }
+    Gaps[Which] = Second - Nearest;
+}
+
+float Open = exp(-Gaps[0] * lerp(40.0, 7.0, Heat)) + 0.45 * exp(-Gaps[1] * lerp(40.0, 11.0, Heat));
+float Pulse = 0.86 + 0.14 * sin(WorldTime * 0.6 + dot(Flat, float2(0.31, 0.23)));
+float Lit = saturate(Open * Pulse * smoothstep(0.0, 0.3, Heat));
+
+float3 Color = lerp(float3(0.9, 0.09, 0.01), float3(1.0, 0.36, 0.03), smoothstep(0.15, 0.6, Lit));
+Color = lerp(Color, float3(1.0, 0.72, 0.28), smoothstep(0.65, 1.0, Lit));
+return Color * Lit * Lit * 3.0;
+'''
+
+# The standalone game's Shaders/Flame.hlsli. A sheet comes with its across in U and its height in V.
+FLAME_BODY = '''
+float Rise = frac(WorldTime * 0.004) * 400.0;
+float2 Climbing = float2(Place.x * 1.5 + Seed, Place.y * 1.9 - Rise);
+float2 Spots[3] = { Climbing, Climbing * 2.7 + 11.0, Climbing * 5.3 + 5.0 };
+float Noise[3];
+for (int Index = 0; Index < 3; ++Index)
+{
+    float2 Cell = floor(Spots[Index]);
+    float2 Part = Spots[Index] - Cell;
+    float2 Blend = Part * Part * (3.0 - 2.0 * Part);
+    int2 Whole = int2(Cell);
+    uint4 Keys = uint4(Whole.x, Whole.x + 1, Whole.x, Whole.x + 1) * 1597334677u + uint4(Whole.y, Whole.y, Whole.y + 1, Whole.y + 1) * 3812015801u;
+    Keys = (Keys ^ (Keys >> 16)) * 2654435769u;
+    float4 Corners = float4(Keys >> 8) / 16777216.0;
+    Noise[Index] = lerp(lerp(Corners.x, Corners.y, Blend.x), lerp(Corners.z, Corners.w, Blend.x), Blend.y);
+}
+
+float Lean = Noise[0] - 0.5;
+float Tongues = Noise[1] * 0.6 + Noise[2] * 0.4;
+float Width = 0.8 * sqrt(max(1.0 - Place.y, 0.0)) * smoothstep(-0.05, 0.1, Place.y);
+float Inside = saturate(1.0 - abs(Place.x + Lean * Place.y * 1.3) / max(Width, 0.001));
+float Heat = saturate((Inside * (1.3 - Place.y * 0.7) - (1.0 - Tongues) * (0.25 + 0.8 * Place.y)) * 1.5);
+
+float3 Color = lerp(float3(1.0, 0.13, 0.015), float3(1.0, 0.46, 0.07), smoothstep(0.08, 0.45, Heat));
+Color = lerp(Color, float3(1.0, 0.84, 0.45), smoothstep(0.5, 0.95, Heat));
+float Cover = saturate(Heat * 1.6);
+'''
+
+# The standalone game's Shaders/Puffs.hlsl. A sheet comes with its place in UV0, from -1 to 1, in UV1
+# how thick the puff is and a number of its own, and in UV2 how much of the light on it it gives back.
+PUFF_BODY = '''
+float Rise = frac(WorldTime * 0.004) * 60.0;
+float2 Moving = Place + Look.y - float2(0.0, Rise);
+float2 Spots[6] = { Moving * 1.6, Moving * 3.4 + 7.0, Moving * 7.1 + 3.0, Moving * 1.1 + 13.0, Moving * 1.1 + 29.0, Moving * 14.3 + 1.0 };
+float Noise[6];
+for (int Index = 0; Index < 6; ++Index)
+{
+    float2 Cell = floor(Spots[Index]);
+    float2 Part = Spots[Index] - Cell;
+    float2 Blend = Part * Part * (3.0 - 2.0 * Part);
+    int2 Whole = int2(Cell);
+    uint4 Keys = uint4(Whole.x, Whole.x + 1, Whole.x, Whole.x + 1) * 1597334677u + uint4(Whole.y, Whole.y, Whole.y + 1, Whole.y + 1) * 3812015801u;
+    Keys = (Keys ^ (Keys >> 16)) * 2654435769u;
+    float4 Corners = float4(Keys >> 8) / 16777216.0;
+    Noise[Index] = lerp(lerp(Corners.x, Corners.y, Blend.x), lerp(Corners.z, Corners.w, Blend.x), Blend.y);
+}
+
+float Billows = Noise[0] * 0.5 + Noise[1] * 0.27 + Noise[2] * 0.15 + Noise[5] * 0.08;
+float2 Torn = float2(Noise[3], Noise[4]) - 0.5;
+float Thin = 1.0 - saturate(Look.x);
+float Round = 1.0 - length(Place + Torn * (0.9 + 0.5 * Thin));
+float Sheet = saturate((1.0 - length(Place)) * 4.0);
+float Body = smoothstep(0.0, 0.3, Round * 1.4 - (1.0 - Billows) * (0.75 + 0.45 * Thin)) * Sheet * (0.6 + 0.4 * Billows);
+'''
+
 # The standalone game's ShadeCard in Shaders/Surfaces.hlsli. The cards' own coordinates come in UV0,
 # and UV1 says whether a card is needles rather than leaves and how light it is.
 LEAF_COLOR = '''
 float4 Texel = Which.x > 0.5 ? Texture2DSample(NeedleColor, NeedleColorSampler, Place) : Texture2DSample(LeafColor, LeafColorSampler, Place);
 float3 Tone = lerp(float3(0.72, 0.72, 0.74), float3(1.3, 1.12, 0.74), Which.y);
-return lerp(Texel.rgb, dot(Texel.rgb, float3(0.3, 0.6, 0.1)).xxx, 0.22) * Tone * 2.2;
+return lerp(Texel.rgb, dot(Texel.rgb, float3(0.3, 0.6, 0.1)).xxx, 0.22) * Tone * 1.5;
 '''
 
 # Sampled finer than the pixel asks for, or at a distance a card's holes average away and it turns solid.
@@ -252,10 +367,116 @@ def make_terrain():
     link(scalar_parameter(material, 'EyeUnder', 0.0, -800, -100), '', color, 'EyeUnder')
     link(scalar_parameter(material, 'WorldTime', 0.0, -1000, -100), '', color, 'WorldTime')
 
+    glow = custom_node(material, MOLTEN_GLOW, ('World', 'Tint', 'Kind', 'WorldTime'), -300, 1400)
+    link(world, '', glow, 'World')
+    link(tint, '', glow, 'Tint')
+    link(kind, '', glow, 'Kind')
+    link(scalar_parameter(material, 'WorldTime', 0.0, -1000, -100), '', glow, 'WorldTime')
+    connect(glow, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+
     connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
     connect(normal, '', unreal.MaterialProperty.MP_NORMAL)
     connect(constant(material, 0.9, -300, 600), '', unreal.MaterialProperty.MP_ROUGHNESS)
     connect_sway(material, kind, -300, 900)
+    finish(material)
+
+
+def make_bolt():
+    # A dithered mask rather than additive, as M_Puff: a ray reflected off the water would stop at the ribbon
+    # and show it black wherever it is dim. The mask lets rays through around the glowing middle.
+    material = begin('M_Bolt')
+    material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_MASKED)
+    material.set_editor_property('opacity_mask_clip_value', 0.5)
+    material.set_editor_property('dither_opacity_mask', True)
+    material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property('two_sided', True)
+    material.set_editor_property('cast_ray_traced_shadows', False)
+
+    # Shaders/Bolts.hlsl. U runs across a ribbon and V says how bright it is.
+    code = '''
+    float Square = Look.x * Look.x;
+    float3 Color = float3(1.0, 0.97, 1.0) * exp(-Square * 14.0) + float3(0.42, 0.34, 1.0) * exp(-Square * 3.0) * 0.16;
+    return Color * Look.y * 70.0;
+    '''
+    node = custom_node(material, code, ('Look',), -300, 0)
+    mask = custom_node(material, 'return exp(-Look.x * Look.x * 3.0) * saturate(Look.y * 20.0);', ('Look',), -300, 300)
+    mask.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+    look = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 0)
+    link(look, '', node, 'Look')
+    link(look, '', mask, 'Look')
+    connect(node, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    connect(mask, '', unreal.MaterialProperty.MP_OPACITY_MASK)
+    finish(material)
+
+
+def make_flame():
+    # A dithered mask, as M_Bolt and M_Puff, so that the water's reflections show the flame and not a
+    # black sheet. Where only some of it covers what is behind, what does cover is the brighter, so that
+    # it adds up to the light the standalone game's flame adds.
+    material = begin('M_Flame')
+    material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_MASKED)
+    material.set_editor_property('opacity_mask_clip_value', 0.5)
+    material.set_editor_property('dither_opacity_mask', True)
+    material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property('two_sided', True)
+    material.set_editor_property('cast_ray_traced_shadows', False)
+
+    names = ('Place', 'Seed', 'WorldTime')
+    color = custom_node(material, FLAME_BODY + 'return Color * Heat * Heat * 2.6 / max(Cover, 0.05);', names, -300, 0)
+    cover = custom_node(material, FLAME_BODY + 'return Cover;', names, -300, 300)
+    cover.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+    place = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 0)
+    seed = scalar_parameter(material, 'Seed', 0.0, -800, 100)
+    time = scalar_parameter(material, 'WorldTime', 0.0, -800, 200)
+    for node in (color, cover):
+        link(place, '', node, 'Place')
+        link(seed, '', node, 'Seed')
+        link(time, '', node, 'WorldTime')
+    connect(color, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    connect(cover, '', unreal.MaterialProperty.MP_OPACITY_MASK)
+    finish(material)
+
+
+def make_puff():
+    # Not translucent: translucency is ray traced here, and a ray reflected off the water stops at the first
+    # thing it meets, so the clear part of the sheet would show black in the water. A dithered mask lets
+    # rays through where the puff is thin, and the upscaler blends the dither into a see-through cloud.
+    material = begin('M_Puff')
+    material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_MASKED)
+    material.set_editor_property('opacity_mask_clip_value', 0.5)
+    material.set_editor_property('dither_opacity_mask', True)
+    material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property('two_sided', True)
+    material.set_editor_property('cast_ray_traced_shadows', False)
+
+    shared = ('Place', 'Look', 'WorldTime')
+    # Lit from above by the sky and the suns, and from below by the fire under it: FlameLight is the standalone
+    # game's flame colour, by the same 0.43 that M_Flame is dimmer by here.
+    lit = '''
+float Top = Place.y * 0.5 + 0.5;
+float3 Above = Light.rgb * (0.55 + 0.3 * Top + 0.5 * Billows);
+float3 Below = float3(2.6, 1.1, 0.3) * 0.43 * Shade.y * (0.5 - 0.25 * Top);
+return (Above + Below) * Shade.x;
+'''
+    color = custom_node(material, PUFF_BODY + lit, shared + ('Light', 'Shade'), -300, 0)
+    thickness = custom_node(material, PUFF_BODY + 'return Body * Look.x;', shared, -300, 300)
+    thickness.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+
+    place = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 0)
+    look = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 100)
+    look.set_editor_property('coordinate_index', 1)
+    time = scalar_parameter(material, 'WorldTime', 0.0, -800, 200)
+    for node in (color, thickness):
+        link(place, '', node, 'Place')
+        link(look, '', node, 'Look')
+        link(time, '', node, 'WorldTime')
+    link(vector_parameter(material, 'Light', -800, 300), '', color, 'Light')
+    shade = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 400)
+    shade.set_editor_property('coordinate_index', 2)
+    link(shade, '', color, 'Shade')
+
+    connect(color, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    connect(thickness, '', unreal.MaterialProperty.MP_OPACITY_MASK)
     finish(material)
 
 
@@ -264,6 +485,7 @@ def make_leaf():
     material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_MASKED)
     material.set_editor_property('two_sided', True)
     material.set_editor_property('opacity_mask_clip_value', 0.42)
+    material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_TWO_SIDED_FOLIAGE) # sunlight comes through them
 
     names = ('Place', 'Which', 'LeafColor', 'NeedleColor')
     color = custom_node(material, LEAF_COLOR, names, -300, 0)
@@ -281,21 +503,51 @@ def make_leaf():
         link(leaf, '', node, 'LeafColor')
         link(needle, '', node, 'NeedleColor')
 
+    # A leaf lets through part of what it reflects. It shows against a sun, but not against the planet's faint light.
+    through = custom_node(material, 'return Leaf * LeafThrough;', ('Leaf', 'LeafThrough'), -300, 150)
+    link(color, '', through, 'Leaf')
+    link(scalar_parameter(material, 'LeafThrough', 1.0, -800, 450), '', through, 'LeafThrough')
+
     connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
+    connect(through, '', unreal.MaterialProperty.MP_SUBSURFACE_COLOR)
     connect(mask, '', unreal.MaterialProperty.MP_OPACITY_MASK)
     connect(constant(material, 0.75, -300, 500), '', unreal.MaterialProperty.MP_ROUGHNESS)
     connect_sway(material, constant(material, 0.0, -800, 900), -300, 900) # no bark here: all of it shivers
     finish(material)
 
 
+# A body fades in water as the bed does, see SURFACE_COLOR. Each instance is told the level of its water.
+BODY_COLOR = '''
+float Under = WaterLevel - World.z * 0.01;
+if (Under <= 0.0 || EyeUnder > 0.5)
+{
+    return Tint;
+}
+float Path = Under / max(abs(normalize(Ray).z), 0.6);
+float3 Passing = exp(-float3(0.36, 0.085, 0.06) * Path);
+return Tint * Passing + float3(0.02, 0.14, 0.16) * (1.0 - Passing);
+'''
+
+
 def make_body():
     material = begin('M_Body')
     material.set_editor_property('used_with_instanced_static_meshes', True)
-    tint = materials.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -400, 0)
+
+    color = custom_node(material, BODY_COLOR, ('Tint', 'World', 'Ray', 'WaterLevel', 'EyeUnder'), -300, 0)
+    tint = materials.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -800, 0)
     tint.set_editor_property('parameter_name', 'Tint')
     tint.set_editor_property('default_value', unreal.LinearColor(1.0, 1.0, 1.0, 1.0))
-    connect(tint, '', unreal.MaterialProperty.MP_BASE_COLOR)
-    connect(constant(material, 0.7, -400, 200), '', unreal.MaterialProperty.MP_ROUGHNESS)
+    link(tint, '', color, 'Tint')
+    link(materials.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -800, 150), '', color, 'World')
+    link(materials.create_material_expression(material, unreal.MaterialExpressionCameraVectorWS, -800, 250), '', color, 'Ray')
+
+    level = materials.create_material_expression(material, unreal.MaterialExpressionPerInstanceCustomData, -800, 350)
+    level.set_editor_property('data_index', 0)
+    link(level, '', color, 'WaterLevel')
+    link(scalar_parameter(material, 'EyeUnder', 0.0, -800, 450), '', color, 'EyeUnder')
+
+    connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
+    connect(constant(material, 0.7, -300, 300), '', unreal.MaterialProperty.MP_ROUGHNESS)
     finish(material)
 
 
@@ -564,7 +816,7 @@ if (MagicView <= 0.001 && MagicBends <= 0.0)
 
 float3 Direction = normalize(ViewForward.xyz + ViewRight.xyz * (ViewUv.x * 2.0 - 1.0) + ViewUp.xyz * (1.0 - ViewUv.y * 2.0));
 float SceneDistance = SceneTextureLookup(ViewportUVToSceneTextureUV(ViewUv, 1), 1, false).r * 0.01 / max(dot(Direction, ViewForward.xyz), 0.01);
-float Limit = min(SceneDistance, 3500.0);
+float Limit = min(SceneDistance, MagicBends > 0.0 ? 3500.0 : 100.0); // the magic view sees 100 m, Sim::MagicSightRadius
 
 float Near = 1.5;
 float Clear = 1.0;
@@ -597,7 +849,7 @@ for (int Index = 0; Index < 44 && Near < Limit; ++Index)
     float Density = Sampled.x;
     if (Density > 0.0001)
     {
-        float Taken = 1.0 - exp(-Density * 0.0035 * Span);
+        float Taken = (1.0 - exp(-Density * 0.0035 * Span)) * (1.0 - smoothstep(70.0, 100.0, Near));
         Glow += Sampled.yzw / Density * Clear * Taken;
         Clear *= 1.0 - Taken;
         Dense += saturate((Density - 5.5) / 2.5) * Span;
@@ -776,7 +1028,12 @@ if (dot(Way, PlanetWay) > 0.85 && PlanetWay.z > -0.25)
     }
 }
 
-return Air + Space * Through * Above + (FirstDisc + SecondDisc) * (1.0 - Block);
+// The air holds on to a little of the planet's light at night, more along the horizon and around the planet.
+float Toward = saturate(dot(Way, PlanetWay));
+float3 Glow = NightAir * (0.55 + 0.1 * Mass) * (1.0 + 1.5 * pow(Toward, 6.0));
+
+// The camera is set for the ground, which would leave Unreal's air too dim and too green by day.
+return Air * float3(1.5, 1.7, 2.3) + Glow + Space * Through * Above + (FirstDisc + SecondDisc) * (1.0 - Block);
 '''
 
 
@@ -787,7 +1044,7 @@ def make_sky():
     material.set_editor_property('two_sided', True)
 
     scalars = ('Night', 'SkyTime', 'StarTurn', 'PlanetSpin')
-    vectors = ('SunWay', 'SecondWay', 'PlanetWay', 'PlanetAxis', 'StarPole', 'SunLight', 'SecondLight')
+    vectors = ('SunWay', 'SecondWay', 'PlanetWay', 'PlanetAxis', 'StarPole', 'SunLight', 'SecondLight', 'NightAir')
     node = custom_node(material, SKY_CODE, ('Ray', 'Air', 'FirstDisc', 'SecondDisc') + scalars + vectors + ('StarCells',), -300, 0)
 
     ray = materials.create_material_expression(material, unreal.MaterialExpressionCameraVectorWS, -700, -500)
@@ -849,6 +1106,9 @@ def make_magic():
 
 
 make_terrain()
+make_flame()
+make_puff()
+make_bolt()
 make_leaf()
 make_body()
 make_water()

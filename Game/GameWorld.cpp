@@ -37,16 +37,20 @@ namespace Teinora
 
 		// Far plants keep their outline with a few big cards, so that a wood does not change shape as it comes nearer.
 		const DetailLevel DetailLevels[] = {
-			{ { 32, 8 },   2, 70,  10, { { 5, 1, 0, 8, 1.7, 1.45 },   { 3, 1, 0, 4, 1.0, 1.7 } },  { 5, 4 },  2, 0 },
-			{ { 64, 16 },  2, 100, 16, { { 6, 2, 3, 12, 1.7, 1.05 },  { 3, 1, 0, 5, 1.3, 1.6 } },  { 6, 5 },  2, 0 },
-			{ { 128, 32 }, 3, 150, 24, { { 8, 2, 4, 17, 2.4, 0.85 },  { 4, 1, 0, 6, 1.7, 1.5 } },  { 10, 7 }, 3, 12000 },
-			{ { 256, 64 }, 4, 220, 36, { { 10, 3, 4, 24, 1.7, 0.8 },  { 4, 1, 0, 7, 2.0, 1.45 } }, { 14, 9 }, 5, 48000 } };
+			{ { 32, 8 },   2, 70,  10, { { 5, 1, 0, 8, 1.7, 1.45 },   { 3, 1, 0, 4, 1.0, 1.7 } },  { 8, 5 },   3, 0 },
+			{ { 64, 16 },  2, 100, 16, { { 6, 2, 3, 12, 1.7, 1.05 },  { 3, 1, 0, 5, 1.3, 1.6 } },  { 10, 6 },  4, 0 },
+			{ { 128, 32 }, 3, 150, 24, { { 8, 2, 4, 17, 2.4, 0.85 },  { 4, 1, 0, 6, 1.7, 1.5 } },  { 16, 8 },  6, 12000 },
+			{ { 256, 64 }, 4, 220, 36, { { 10, 3, 4, 24, 1.7, 0.8 },  { 4, 1, 0, 7, 2.0, 1.45 } }, { 24, 10 }, 9, 48000 } };
 		constexpr int MaxBuildsInFlight = 8;
 		constexpr int MaxAppliesPerFrame = 4;
 		constexpr std::size_t MaxBalls = 48;
 		constexpr double ThrowStart = 2.0; // how far ahead of the eye a ball appears
 		constexpr double ThrowReach = 300.0;
 		constexpr double AirReadingAge = 1.0 / 30.0;
+		constexpr double BurnTime = 60.0;       // seconds, as long as the fuel lasts
+		constexpr double SteamLife = 12.0;      // seconds
+		constexpr double SmokeLife = 12.0;
+		constexpr double FlameReach = 26.0;     // metres that a flame's light goes
 
 		/** Mass follows from what a thing is made of and how big it is, inertia from mass and shape. */
 		struct PropSpec
@@ -72,8 +76,6 @@ namespace Teinora
 			static const std::array<PropSpec, static_cast<std::size_t>(EPropKind::Count)> Specs = { {
 				{ P::Shape::MakeBox({ 0.5, 0.5, 0.5 }), 120.0, 0.6, 0.15, 1.05, 1.0, 0.5, false, EPrimitive::Cube, { 1.0f, 1.0f, 1.0f }, { 0.45f, 0.28f, 0.12f } },
 				{ P::Shape::MakeCapsule(0.3, 0.3), 100.0, 0.5, 0.2, 0.9, 0.5, 0.45, true, EPrimitive::Cylinder, { 0.6f, 0.6f, 1.2f }, { 0.30f, 0.14f, 0.06f } },
-				{ P::Shape::MakeSphere(0.6), 2700.0, 0.9, 0.05, 0.47, 1.1, 0.6, true, EPrimitive::Sphere, { 1.2f, 1.2f, 1.2f }, { 0.40f, 0.40f, 0.42f } },
-				{ P::Shape::MakeSphere(0.7), 2.1, 0.4, 0.8, 0.47, 1.5, 0.7, true, EPrimitive::Sphere, { 1.4f, 1.4f, 1.4f }, { 0.85f, 0.12f, 0.10f } },
 				{ P::Shape::MakeSphere(0.35), 45.0, 0.5, 0.5, 0.47, 0.38, 0.35, true, EPrimitive::Sphere, { 0.7f, 0.7f, 0.7f }, { 0.95f, 0.75f, 0.15f } },
 			} };
 			return Specs[static_cast<std::size_t>(Kind)];
@@ -165,25 +167,207 @@ namespace Teinora
 			Out.push_back(MakeVertex(Tip, Normal, End, 0.35));
 		}
 
-		/** An open cone, or a frustum when TopRadius is positive. Sway is the weight at the top. */
-		void AddFrustum(std::vector<TerrainVertex>& Out, const Vec3& Base, double BaseRadius, double TopRadius, double Height, int Sides, const Color& Tint, double BaseSway, double TopSway, ETerrainMaterial Material = TerrainPlain)
+		/**
+		 * A boulder: a sphere with slices taken off it, as stone breaks along its planes, and roughened.
+		 * It goes well below its middle so as to sit in a slope, and its normals are shared between
+		 * triangles, so that only the edges of the cuts show and not those of the mesh.
+		 */
+		void AddRock(std::vector<TerrainVertex>& Out, const Vec3& Center, double Radius, int Sides, int Rings, std::uint32_t Stone, const Color& Tint)
 		{
-			const Vec3 Top = Base + Vec3{ 0.0, 0.0, Height };
-			for (int Side = 0; Side < Sides; ++Side)
-			{
-				const double Angle0 = 2.0 * Pi * Side / Sides;
-				const double Angle1 = 2.0 * Pi * (Side + 1) / Sides;
-				const Vec3 Ray0{ std::cos(Angle0), std::sin(Angle0), 0.0 };
-				const Vec3 Ray1{ std::cos(Angle1), std::sin(Angle1), 0.0 };
+			constexpr int Cuts = 9;
+			constexpr double Lowest = -0.85; // radians below the middle
 
-				const Vec3 Bottom0 = Base + Ray0 * BaseRadius;
-				const Vec3 Bottom1 = Base + Ray1 * BaseRadius;
-				const Vec3 Top0 = Top + Ray0 * TopRadius;
-				AddFacet(Out, Bottom0, Bottom1, Top0, Tint, BaseSway, BaseSway, TopSway, Material);
-				if (TopRadius > 0.0)
+			Random Cutter(Stone);
+			Vec3 Planes[Cuts];
+			double Depths[Cuts];
+			for (int Cut = 0; Cut < Cuts; ++Cut)
+			{
+				const double Rise = Cutter.Range(-0.35, 1.0); // cracks open from above and the sides
+				const double Angle = Cutter.Range(0.0, 2.0 * Pi);
+				const double Across = std::sqrt(1.0 - Rise * Rise);
+				Planes[Cut] = { Across * std::cos(Angle), Across * std::sin(Angle), Rise };
+				Depths[Cut] = Cutter.Range(0.78, 1.0);
+			}
+
+			const auto Rough = [Stone](const Vec3& Way, double Size, std::uint32_t Salt)
+			{
+				return (Sim::GradientNoise(Way.X * Size, Way.Y * Size, Stone + Salt)
+					+ Sim::GradientNoise(Way.Y * Size, Way.Z * Size, Stone + Salt + 1u)
+					+ Sim::GradientNoise(Way.Z * Size, Way.X * Size, Stone + Salt + 2u)) / 3.0;
+			};
+
+			std::vector<Vec3> Points(static_cast<std::size_t>(Sides) * (Rings + 1));
+			const auto PointAt = [&Points, Sides](int Ring, int Step) -> Vec3&
+			{
+				return Points[static_cast<std::size_t>(Ring) * Sides + (Step + Sides) % Sides];
+			};
+
+			for (int Ring = 0; Ring <= Rings; ++Ring)
+			{
+				const double Elevation = Lowest + (Pi * 0.5 - Lowest) * Ring / Rings;
+				for (int Step = 0; Step < Sides; ++Step)
 				{
-					AddFacet(Out, Bottom1, Top + Ray1 * TopRadius, Top0, Tint, BaseSway, TopSway, TopSway, Material);
+					const double Angle = 2.0 * Pi * Step / Sides;
+					const Vec3 Way{ std::cos(Elevation) * std::cos(Angle), std::cos(Elevation) * std::sin(Angle), std::sin(Elevation) };
+
+					double Reach = 1.0;
+					for (int Cut = 0; Cut < Cuts; ++Cut)
+					{
+						const double Along = Dot(Way, Planes[Cut]);
+						if (Along > Depths[Cut])
+						{
+							Reach = std::min(Reach, Depths[Cut] / Along);
+						}
+					}
+					PointAt(Ring, Step) = Center + Way * (Radius * Reach * (1.0 + 0.2 * Rough(Way, 2.3, 0u) + 0.08 * Rough(Way, 6.1, 5u)));
 				}
+			}
+
+			const auto AddCorner = [&](int Ring, int Step)
+			{
+				const Vec3& Point = PointAt(Ring, Step);
+				const Vec3 Round = PointAt(Ring, Step + 1) - PointAt(Ring, Step - 1);
+				const Vec3 Upward = PointAt(std::min(Ring + 1, Rings), Step) - PointAt(std::max(Ring - 1, 0), Step);
+				const Vec3 Facing = Cross(Round, Upward);
+				const double Size = Length(Facing);
+				Out.push_back(MakeVertex(Point, Size > 1e-9 ? Facing * (1.0 / Size) : Normalize(Point - Center), Tint, 0.0, TerrainStone));
+			};
+
+			for (int Ring = 0; Ring < Rings; ++Ring)
+			{
+				for (int Step = 0; Step < Sides; ++Step)
+				{
+					AddCorner(Ring, Step);
+					AddCorner(Ring, Step + 1);
+					AddCorner(Ring + 1, Step);
+					if (Ring + 1 < Rings) // the last ring closes on a point
+					{
+						AddCorner(Ring, Step + 1);
+						AddCorner(Ring + 1, Step + 1);
+						AddCorner(Ring + 1, Step);
+					}
+				}
+			}
+		}
+
+		/** Whether something hot lies over a point, which nothing grows on or lies in. */
+		bool IsBurning(const std::vector<Sim::HotSpot>& Spots, double X, double Y)
+		{
+			for (const Sim::HotSpot& Spot : Spots)
+			{
+				const double AcrossX = X - Spot.Position.X;
+				const double AcrossY = Y - Spot.Position.Y;
+				const double Clear = Spot.Radius * (Spot.bLava ? 1.35 : 1.9); // the widest a pool's edge gets
+				if (AcrossX * AcrossX + AcrossY * AcrossY < Clear * Clear)
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/** A pool of lava lying on the ground as it finds it: open in the middle, set black along its uneven edge. */
+		void AddLava(std::vector<TerrainVertex>& Out, const Vec3& Origin, const Sim::HotSpot& Spot, int Rings, int Sides, double Lift)
+		{
+			const auto Stone = static_cast<std::uint32_t>(std::fabs(Spot.Position.X) * 7.0 + std::fabs(Spot.Position.Y) * 13.0);
+			const auto AddCorner = [&](int Ring, int Step)
+			{
+				const double Share = static_cast<double>(Ring) / Rings;
+				const double Angle = 2.0 * Pi * Step / Sides;
+				const double Round = 0.8 + 0.34 * Sim::GradientNoise(std::cos(Angle) * 1.7, std::sin(Angle) * 1.7, Stone) + 0.13 * Sim::GradientNoise(std::cos(Angle) * 5.0, std::sin(Angle) * 5.0, Stone + 1u);
+				const double Reach = Spot.Radius * Share * Round;
+				const double WorldX = Spot.Position.X + std::cos(Angle) * Reach;
+				const double WorldY = Spot.Position.Y + std::sin(Angle) * Reach;
+				const double Height = Sim::TerrainHeight(WorldX, WorldY, Sim::WorldSeed) + Lift * (1.0 - Share * Share * Share);
+				const double Setting = std::clamp((Share - 0.5) / 0.47, 0.0, 1.0);
+				const double Heat = 1.0 - Setting * Setting * (3.0 - 2.0 * Setting);
+				Out.push_back(MakeVertex(Vec3{ WorldX - Origin.X, WorldY - Origin.Y, Height }, Sim::TerrainNormal(WorldX, WorldY, Sim::WorldSeed), Color{ Heat, 0.0, 0.0 }, 0.0, TerrainMolten));
+			};
+
+			for (int Ring = 0; Ring < Rings; ++Ring)
+			{
+				for (int Step = 0; Step < Sides; ++Step)
+				{
+					AddCorner(Ring, Step);
+					AddCorner(Ring + 1, Step);
+					AddCorner(Ring + 1, Step + 1);
+					if (Ring > 0) // the first ring starts from a point
+					{
+						AddCorner(Ring, Step);
+						AddCorner(Ring + 1, Step + 1);
+						AddCorner(Ring, Step + 1);
+					}
+				}
+			}
+		}
+
+		/** A burnt length of wood, from one end to the other. */
+		void AddLog(std::vector<TerrainVertex>& Out, const Vec3& From, const Vec3& To, double Radius, int Sides, const Color& Tint)
+		{
+			const Vec3 Along = Normalize(To - From);
+			const Vec3 Side = Normalize(Cross(Along, Vec3{ 0.0, 0.0, 1.0 }));
+			const Vec3 Other = Cross(Side, Along);
+			for (int Step = 0; Step < Sides; ++Step)
+			{
+				const auto Facing = [&](int At)
+				{
+					const double Angle = 2.0 * Pi * At / Sides;
+					return Side * std::cos(Angle) + Other * std::sin(Angle);
+				};
+				const Vec3 Left = Facing(Step);
+				const Vec3 Right = Facing(Step + 1);
+				const auto AddCorner = [&](const Vec3& End, const Vec3& Way)
+				{
+					Out.push_back(MakeVertex(End + Way * Radius, Way, Tint, 0.0, TerrainBark));
+				};
+				AddCorner(From, Left);
+				AddCorner(To, Left);
+				AddCorner(To, Right);
+				AddCorner(From, Left);
+				AddCorner(To, Right);
+				AddCorner(From, Right);
+			}
+		}
+
+		/** Stones in a ring, logs leaning together, and a bed of embers. The flames are drawn apart. */
+		void AddCampfire(std::vector<TerrainVertex>& Out, const Vec3& Origin, const Sim::HotSpot& Spot)
+		{
+			Random Rng(static_cast<std::uint64_t>(std::fabs(Spot.Position.X) * 7.0 + std::fabs(Spot.Position.Y) * 13.0) + 1u);
+			const auto GroundAt = [&](double Angle, double Reach)
+			{
+				const double WorldX = Spot.Position.X + std::cos(Angle) * Reach;
+				const double WorldY = Spot.Position.Y + std::sin(Angle) * Reach;
+				return Vec3{ WorldX - Origin.X, WorldY - Origin.Y, Sim::TerrainHeight(WorldX, WorldY, Sim::WorldSeed) };
+			};
+
+			constexpr int Stones = 9;
+			for (int Index = 0; Index < Stones; ++Index)
+			{
+				const double Shade = Rng.Range(0.8, 1.1);
+				const Vec3 Place = GroundAt(2.0 * Pi * Index / Stones + Rng.Range(-0.1, 0.1), Spot.Radius * Rng.Range(0.92, 1.05));
+				AddRock(Out, Place, Rng.Range(0.14, 0.22), 7, 3, static_cast<std::uint32_t>(Rng.Next() * 4294967295.0), Color{ 0.2 * Shade, 0.19 * Shade, 0.18 * Shade });
+			}
+
+			const Vec3 Middle = GroundAt(0.0, 0.0);
+			constexpr int Logs = 6;
+			for (int Index = 0; Index < Logs; ++Index)
+			{
+				const double Angle = 2.0 * Pi * Index / Logs + Rng.Range(-0.2, 0.2);
+				const Vec3 Foot = GroundAt(Angle, Spot.Radius * Rng.Range(0.6, 0.72)) + Vec3{ 0.0, 0.0, 0.03 };
+				const Vec3 Tip = Middle + Vec3{ std::cos(Angle + 0.5) * 0.05, std::sin(Angle + 0.5) * 0.05, Rng.Range(0.42, 0.6) };
+				const double Shade = Rng.Range(0.7, 1.2);
+				AddLog(Out, Foot, Tip, Rng.Range(0.04, 0.065), 6, Color{ 0.05 * Shade, 0.04 * Shade, 0.035 * Shade });
+			}
+
+			constexpr int Sides = 14;
+			const Vec3 Up{ 0.0, 0.0, 1.0 };
+			for (int Step = 0; Step < Sides; ++Step)
+			{
+				const Vec3 Left = GroundAt(2.0 * Pi * Step / Sides, Spot.Radius * 0.72) + Vec3{ 0.0, 0.0, 0.03 };
+				const Vec3 Right = GroundAt(2.0 * Pi * (Step + 1) / Sides, Spot.Radius * 0.72) + Vec3{ 0.0, 0.0, 0.03 };
+				Out.push_back(MakeVertex(Middle + Vec3{ 0.0, 0.0, 0.05 }, Up, Color{ 1.0, 0.0, 0.0 }, 0.0, TerrainMolten));
+				Out.push_back(MakeVertex(Left, Up, Color{ 0.45, 0.0, 0.0 }, 0.0, TerrainMolten));
+				Out.push_back(MakeVertex(Right, Up, Color{ 0.45, 0.0, 0.0 }, 0.0, TerrainMolten));
 			}
 		}
 
@@ -193,12 +377,12 @@ namespace Teinora
 			const double Shade = 1.0 + 0.16 * Sim::GradientNoise(WorldX / 37.0, WorldY / 37.0, Sim::WorldSeed + 22u);
 			const double Patch = 0.5 + 0.5 * Sim::GradientNoise(WorldX / 90.0, WorldY / 90.0, Sim::WorldSeed + 21u);
 			const double Lush = std::clamp(Moisture * 1.15 - 0.1 + (Patch - 0.5) * 0.45, 0.0, 1.0);
-			return { Shade * 0.5, Lush, EncodeGroundLevel(Height - Sim::FindWater(WorldX, WorldY, Sim::WorldSeed).Level) };
+			return { Shade * 0.5, Lush, EncodeGroundLevel(Height - Sim::GetShoreLevel(WorldX, WorldY, Sim::WorldSeed)) };
 		}
 
 		Sim::ESurface ClassifyFacet(const Vec3& A, const Vec3& B, const Vec3& C, double OriginX, double OriginY)
 		{
-			const double Level = Sim::FindWater(OriginX + (A.X + B.X + C.X) / 3.0, OriginY + (A.Y + B.Y + C.Y) / 3.0, Sim::WorldSeed).Level;
+			const double Level = Sim::GetShoreLevel(OriginX + (A.X + B.X + C.X) / 3.0, OriginY + (A.Y + B.Y + C.Y) / 3.0, Sim::WorldSeed);
 			return Sim::ClassifySurface((A.Z + B.Z + C.Z) / 3.0, Normalize(Cross(B - A, C - A)).Z, Level);
 		}
 
@@ -397,6 +581,259 @@ namespace Teinora
 		Build.MaxZ = static_cast<float>(Highest + 34.0); // room for the tallest tree
 	}
 
+	void GameWorld::ReceiveStrike(const Vec3& Point, double Time)
+	{
+		constexpr double Reach = 30.0; // metres: bodies asleep feel nothing, and fire magic would not wake them
+
+		for (const Prop& Item : Props)
+		{
+			if (Length(Physics.GetBody(Item.Body).Position - Point) < Reach)
+			{
+				Physics.WakeBody(Item.Body);
+			}
+		}
+
+		// Beyond the gas nobody works it out, but a bolt always brings far more fire than it takes.
+		if (Magic == nullptr || !Magic->Contains(Point))
+		{
+			const bool bWater = Sim::TerrainHeight(Point.X, Point.Y, Sim::WorldSeed) < Sim::GetShoreLevel(Point.X, Point.Y, Sim::WorldSeed);
+			ReceiveFire({ { Point, bWater ? Sim::MagicChannelAmount : 0.0 } }, Time);
+		}
+	}
+
+	void GameWorld::ReceiveFire(const std::vector<FireContact>& Contacts, double Time)
+	{
+		constexpr double BurnRadius = 2.5;
+		constexpr double FiresApart = 6.0;  // metres, or one patch of grass would light many times over
+		constexpr double SteamApart = 12.0;
+		constexpr double SteamJoins = 2.0;  // seconds in which more boiling adds to a cloud rather than starting another
+		constexpr std::size_t MostSteam = 32;
+
+		for (const FireContact& Contact : Contacts)
+		{
+			if (Contact.Boiled > 0.0)
+			{
+				const auto Joined = std::find_if(Steam.begin(), Steam.end(), [&Contact, Time](const SteamPuff& Item)
+				{
+					return Time < Item.Born + SteamJoins && Length(Item.Point - Contact.Position) < SteamApart;
+				});
+				if (Joined != Steam.end())
+				{
+					Joined->Amount += Contact.Boiled;
+				}
+				else if (Steam.size() < MostSteam)
+				{
+					Steam.push_back({ Contact.Position, AirDrift, Contact.Boiled, Time });
+				}
+				continue;
+			}
+
+			const bool bAlight = std::any_of(Burning.begin(), Burning.end(), [&Contact](const Sim::HotSpot& Fire)
+			{
+				return Length(Fire.Position - Contact.Position) < FiresApart;
+			});
+			if (!bAlight && Sim::CanBurn(Contact.Position.X, Contact.Position.Y, Sim::WorldSeed))
+			{
+				Sim::HotSpot Fire;
+				Fire.Position = Contact.Position;
+				Fire.Radius = BurnRadius;
+				Fire.Depth = 1.0;
+				Fire.Temperature = 850.0;
+				Burning.push_back(Fire);
+				BurningUntil.push_back(Time + BurnTime);
+			}
+		}
+	}
+
+	void GameWorld::UpdateBurning(double Time)
+	{
+		constexpr double Settling = 8.0;  // seconds for a new fire to settle before the wind can put it out
+		constexpr double GoneOut = 0.008; // kg/m3 of fire magic that a fire needs around it to stay alight
+
+		std::erase_if(Steam, [Time](const SteamPuff& Item) { return Time > Item.Born + SteamLife; });
+		std::erase_if(BurntOut, [Time](const Smouldering& Item) { return Time > Item.Out + SmokeLife; });
+
+		for (std::size_t Index = Burning.size(); Index-- > 0;)
+		{
+			const Vec3 Air = Burning[Index].Position + Vec3{ 0.0, 0.0, 2.0 };
+			const bool bBlownOut = Time > BurningUntil[Index] - BurnTime + Settling && Magic != nullptr && Magic->Contains(Air) && Magic->GetMix(Air).GetAllFire() < GoneOut;
+			if (Time > BurningUntil[Index] || bBlownOut)
+			{
+				BurntOut.push_back({ Burning[Index], BurningUntil[Index] - BurnTime, Time });
+				Burning.erase(Burning.begin() + static_cast<std::ptrdiff_t>(Index));
+				BurningUntil.erase(BurningUntil.begin() + static_cast<std::ptrdiff_t>(Index));
+			}
+		}
+	}
+
+	void GameWorld::CollectPuffs(const Vec3& Eye, std::vector<PuffDraw>& Out, std::size_t Most)
+	{
+		Out.clear();
+
+		// Steam goes up fast at first, and swells.
+		constexpr double SteamClimb = 6.0;     // m/s as it leaves the water
+		constexpr double SteamSlowing = 4.0;   // seconds for that to die away
+		constexpr double SteamSwelling = 3.0;  // seconds to double in size
+		constexpr double SizePerRoot = 0.9;    // metres for the cube root of each kg boiled
+		for (const SteamPuff& Item : Steam)
+		{
+			const double Age = std::max(LastUpdateTime - Item.Born, 0.0);
+			const double Left = std::max(1.0 - Age / SteamLife, 0.0);
+
+			PuffDraw Draw;
+			Draw.Radius = SizePerRoot * std::cbrt(Item.Amount) * (1.0 + Age / SteamSwelling);
+			Draw.Point = Item.Point + (AirDrift - Item.Drift) + Vec3{ 0.0, 0.0, SteamClimb * SteamSlowing * (1.0 - std::exp(-Age / SteamSlowing)) + Draw.Radius * 0.5 };
+			Draw.Thickness = Left * Left;
+			Draw.Seed = std::fmod(Item.Born, 97.0);
+			Draw.Floor = Item.Point.Z;
+			Out.push_back(Draw);
+		}
+
+		// Smoke over each fire near enough: a few puffs that rise, swell and go with the wind, over and over.
+		constexpr double SmokeSeen = 600.0;
+		constexpr std::size_t SmokingFires = 8;
+		constexpr int PuffsEach = 16;           // close enough together to make one column
+		constexpr double SmokeSwelling = 1.6;   // seconds to double in size
+		struct Smoking
+		{
+			const Sim::HotSpot* Spot;
+			double Lit; // when it caught, before which it made no smoke
+			double Out; // and when it went out, after which it made no more
+		};
+		RefreshHotSpots(Eye);
+		std::vector<Smoking> Fires;
+		for (const Sim::HotSpot& Spot : HotSpotsAround)
+		{
+			if (!Spot.bLava && Length(Spot.Position - Eye) < SmokeSeen)
+			{
+				Fires.push_back({ &Spot, -1e30, 1e30 }); // campfires have always burned, and always will
+			}
+		}
+		for (std::size_t Index = 0; Index < Burning.size(); ++Index)
+		{
+			if (Length(Burning[Index].Position - Eye) < SmokeSeen)
+			{
+				Fires.push_back({ &Burning[Index], BurningUntil[Index] - BurnTime, 1e30 });
+			}
+		}
+		for (const Smouldering& Item : BurntOut)
+		{
+			if (Length(Item.Spot.Position - Eye) < SmokeSeen)
+			{
+				Fires.push_back({ &Item.Spot, Item.Lit, Item.Out });
+			}
+		}
+		std::sort(Fires.begin(), Fires.end(), [&Eye](const Smoking& A, const Smoking& B)
+		{
+			return Length(A.Spot->Position - Eye) < Length(B.Spot->Position - Eye);
+		});
+		if (Fires.size() > SmokingFires)
+		{
+			Fires.resize(SmokingFires);
+		}
+
+		const Vec3 Wind = Sim::PrevailingWind(LastUpdateTime, Sim::WorldSeed) * 0.7; // it is slower near the ground
+		for (const Smoking& Each : Fires)
+		{
+			const Sim::HotSpot* Fire = Each.Spot;
+			const bool bLarge = Fire->Radius >= 1.0;
+			const double Climb = bLarge ? 1.8 : 1.2;   // m/s once it has cooled, twice that over the fire
+			const double Peak = 0.7;                   // how thick it is at its thickest
+			const double Size = bLarge ? 1.6 : 1.0;    // metres across at the start
+			const double Shade = bLarge ? 0.3 : 0.6;   // wood smoke is a light grey, burning grass darker
+			const double Strength = GetFlameStrength(*Fire, Fire->Position + Vec3{ 0.0, 0.0, 0.5 });
+			const double Own = std::fmod(std::fabs(Fire->Position.X * 0.37 + Fire->Position.Y * 0.61), 1.0); // so that no two fires puff alike
+
+			for (int Index = 0; Index < PuffsEach; ++Index)
+			{
+				const double Cycle = LastUpdateTime / SmokeLife + (Index + Own) / PuffsEach;
+				const double Age = (Cycle - std::floor(Cycle)) * SmokeLife;
+				const double Left = 1.0 - Age / SmokeLife;
+				const double Born = LastUpdateTime - Age;
+				if (Born < Each.Lit || Born > Each.Out)
+				{
+					continue;
+				}
+
+				PuffDraw Draw;
+				Draw.Radius = Size * (1.0 + Age / SmokeSwelling);
+				Draw.Point = Fire->Position + Wind * Age + Vec3{ 0.0, 0.0, Climb * (Age + 3.0 * (1.0 - std::exp(-Age / 3.0))) + Draw.Radius * 0.5 };
+				Draw.Thickness = std::min(Peak * Strength, 1.0) * std::min(Age / 0.4, 1.0) * Left;
+				Draw.Seed = std::fmod(std::floor(Cycle) * 7.31 + Index * 3.7 + Own * 97.0, 97.0);
+				Draw.Floor = Fire->Position.Z;
+				Draw.Shade = Shade;
+
+				// Lit from below by its own fire, falling off as the surfaces' firelight does in Shaders/Lighting.hlsli.
+				const double Square = LengthSquared(Draw.Point - Fire->Position);
+				const double Fade = std::max(1.0 - Square / (FlameReach * FlameReach), 0.0);
+				Draw.Firelight = LastUpdateTime > Each.Out ? 0.0 : Strength * Fade * Fade / (1.0 + Square / (FlameReach * FlameReach * 0.015));
+				Out.push_back(Draw);
+			}
+		}
+
+		std::sort(Out.begin(), Out.end(), [&Eye](const PuffDraw& A, const PuffDraw& B)
+		{
+			return Length(A.Point - Eye) < Length(B.Point - Eye);
+		});
+		if (Out.size() > Most)
+		{
+			Out.resize(Most);
+		}
+	}
+
+	void GameWorld::RefreshHotSpots(const Vec3& Eye)
+	{
+		if (Length(Eye - HotSpotsCenter) > 100.0)
+		{
+			HotSpotsCenter = Eye;
+			HotSpotsAround = Sim::FindHotSpots(Eye.X, Eye.Y, Sim::WorldSeed);
+		}
+	}
+
+	double GameWorld::GetFlameStrength(const Sim::HotSpot& Spot, const Vec3& Point) const
+	{
+		// A flame is as strong as the fire magic around it says: the wind feeds it or wears it down.
+		if (Spot.bLava || Magic == nullptr || !Magic->Contains(Point))
+		{
+			return 1.0;
+		}
+		const double Usual = Spot.Radius < 1.0 ? 0.002 : 0.05;
+		return std::clamp(std::sqrt(Magic->GetMix(Point).GetAllFire() / Usual), 0.5, 1.7);
+	}
+
+	void GameWorld::CollectHotLights(const Vec3& Eye, std::vector<HotLight>& Out, std::size_t Most)
+	{
+		constexpr double Seen = 900.0;
+
+		RefreshHotSpots(Eye);
+		std::vector<Sim::HotSpot> Nearby = HotSpotsAround;
+		Nearby.insert(Nearby.end(), Burning.begin(), Burning.end());
+		std::sort(Nearby.begin(), Nearby.end(), [&Eye](const Sim::HotSpot& A, const Sim::HotSpot& B)
+		{
+			return Length(A.Position - Eye) < Length(B.Position - Eye);
+		});
+
+		Out.clear();
+		for (const Sim::HotSpot& Spot : Nearby)
+		{
+			if (Out.size() == Most || Length(Spot.Position - Eye) > Seen)
+			{
+				break;
+			}
+
+			HotLight Light;
+			Light.Point = Spot.Position + Vec3{ 0.0, 0.0, Spot.bLava ? 1.0 + Spot.Radius * 0.3 : 0.5 };
+			Light.Color = Spot.bLava ? Vec3{ 3.0, 0.9, 0.16 } : Vec3{ FlameLightRed, FlameLightGreen, FlameLightBlue };
+			Light.Reach = Spot.bLava ? 24.0 + Spot.Radius * 4.0 : FlameReach;
+			Light.FlameHeight = Spot.bLava ? 0.0 : 2.3 * Spot.Radius; // what has caught fire stands taller than a campfire
+
+			const double Strength = GetFlameStrength(Spot, Light.Point);
+			Light.FlameHeight *= Strength;
+			Light.Color = Light.Color * Strength;
+			Out.push_back(Light);
+		}
+	}
+
 	void GameWorld::ScatterObjects(ChunkBuild& Build)
 	{
 		Random Rng(ChunkKey(Build.X, Build.Y));
@@ -430,8 +867,8 @@ namespace Teinora
 			const auto PlantSeed = static_cast<std::uint64_t>(Rng.Next() * 9007199254740992.0);
 
 			const double Height = Sim::TerrainHeight(WorldX, WorldY, Sim::WorldSeed);
-			const double WaterLevel = Sim::FindWater(WorldX, WorldY, Sim::WorldSeed).Level;
-			if (Height < WaterLevel + 1.4 || Sim::ClassifySurface(Height, Sim::TerrainNormal(WorldX, WorldY, Sim::WorldSeed).Z, WaterLevel) != Sim::ESurface::Grass)
+			const double WaterLevel = Sim::GetShoreLevel(WorldX, WorldY, Sim::WorldSeed);
+			if (Height < WaterLevel + 1.4 || Sim::ClassifySurface(Height, Sim::TerrainNormal(WorldX, WorldY, Sim::WorldSeed).Z, WaterLevel) != Sim::ESurface::Grass || IsBurning(Build.HotSpots, WorldX, WorldY))
 			{
 				continue;
 			}
@@ -461,8 +898,8 @@ namespace Teinora
 			const auto PlantSeed = static_cast<std::uint64_t>(Rng.Next() * 9007199254740992.0);
 
 			const double Height = Sim::TerrainHeight(WorldX, WorldY, Sim::WorldSeed);
-			const double WaterLevel = Sim::FindWater(WorldX, WorldY, Sim::WorldSeed).Level;
-			if (Height < WaterLevel + 0.9 || Sim::ClassifySurface(Height, Sim::TerrainNormal(WorldX, WorldY, Sim::WorldSeed).Z, WaterLevel) != Sim::ESurface::Grass)
+			const double WaterLevel = Sim::GetShoreLevel(WorldX, WorldY, Sim::WorldSeed);
+			if (Height < WaterLevel + 0.9 || Sim::ClassifySurface(Height, Sim::TerrainNormal(WorldX, WorldY, Sim::WorldSeed).Z, WaterLevel) != Sim::ESurface::Grass || IsBurning(Build.HotSpots, WorldX, WorldY))
 			{
 				continue;
 			}
@@ -483,25 +920,43 @@ namespace Teinora
 			const double WorldY = Origin.Y + Local.Y;
 			const double Radius = Rng.Range(0.8, 3.0);
 			const double Shade = Rng.Range(0.85, 1.1);
+			const auto Stone = static_cast<std::uint32_t>(Rng.Next() * 4294967295.0); // the same stone at every level of detail
+			if (IsBurning(Build.HotSpots, WorldX, WorldY))
+			{
+				continue;
+			}
 
 			const double Height = Sim::TerrainHeight(WorldX, WorldY, Sim::WorldSeed);
 			const Vec3 Center{ Local.X, Local.Y, Height - Radius * 0.2 };
 			const Color Tint{ 0.30 * Shade, 0.29 * Shade, 0.28 * Shade };
 
-			// Stacked rings approximating the sphere that collides, with a skirt below for slopes.
-			AddFrustum(Build.Vertices, Center - Vec3{ 0.0, 0.0, Radius * 0.5 }, Radius * 0.87, Radius, Radius * 0.5, RockSides, Tint, 0.0, 0.0, TerrainStone);
-			for (int Ring = 0; Ring < Level.RockRings; ++Ring)
-			{
-				const double Lower = Pi * 0.5 * Ring / Level.RockRings;
-				const double Upper = Pi * 0.5 * (Ring + 1) / Level.RockRings;
-				const double TopRadius = Ring + 1 == Level.RockRings ? 0.0 : Radius * std::cos(Upper);
-				AddFrustum(Build.Vertices, Center + Vec3{ 0.0, 0.0, Radius * std::sin(Lower) }, Radius * std::cos(Lower), TopRadius,
-					Radius * (std::sin(Upper) - std::sin(Lower)), RockSides, Tint, 0.0, 0.0, TerrainStone);
-			}
+			AddRock(Build.Vertices, Center, Radius, RockSides, Build.Lod == 0 ? Level.RockRings : std::max(Level.RockRings / 2, 2), Stone, Tint);
 
 			if (Build.Lod == 0)
 			{
-				Build.Statics.push_back({ P::Shape::MakeSphere(Radius), Vec3{ WorldX, WorldY, Center.Z } });
+				// What is left of the sphere after the cuts in AddRock is about this big.
+				Build.Statics.push_back({ P::Shape::MakeSphere(Radius * 0.92), Vec3{ WorldX, WorldY, Center.Z } });
+			}
+		}
+
+		for (const Sim::HotSpot& Spot : Build.HotSpots)
+		{
+			// Each belongs to the chunk it stands in, which draws all of it.
+			if (ToChunk(Spot.Position.X) != Build.X || ToChunk(Spot.Position.Y) != Build.Y)
+			{
+				continue;
+			}
+
+			if (Spot.bLava)
+			{
+				// A coarse mesh of the ground wanders further from the true height that this is laid on.
+				const double Cell = ChunkSize / Level.Cells[Build.Lod];
+				AddLava(Build.Vertices, Origin, Spot, Build.Lod == 0 ? 8 : 4, Build.Lod == 0 ? 40 : 20, 0.1 + 0.04 * Cell);
+			}
+			else if (Build.Lod == 0)
+			{
+				AddCampfire(Build.Vertices, Origin, Spot);
+				Build.Statics.push_back({ P::Shape::MakeSphere(Spot.Radius), Spot.Position - Vec3{ 0.0, 0.0, Spot.Radius * 0.75 } });
 			}
 		}
 
@@ -515,7 +970,7 @@ namespace Teinora
 				const double Height = std::max(Sim::TerrainHeight(WorldX, WorldY, Sim::WorldSeed), Sim::FindWater(WorldX, WorldY, Sim::WorldSeed).Level);
 
 				PropSpawn Spawn;
-				Spawn.Kind = static_cast<EPropKind>(static_cast<int>(Rng.Next() * 4.0));
+				Spawn.Kind = Rng.Next() < 0.5 ? EPropKind::Crate : EPropKind::Barrel;
 				Spawn.Position = { WorldX, WorldY, Height + 2.0 };
 				Build.Props.push_back(Spawn);
 			}
@@ -564,7 +1019,8 @@ namespace Teinora
 			const double WaterLevel = Water.Level;
 			const double Above = Height - WaterLevel;
 			const bool bReeds = Water.bLake && WaterLevel < 140.0 && Above > -0.8 && Above < 0.7 && Normal.Z > 0.9 && Shade < 1.0;
-			if (!bReeds && Sim::ClassifySurface(Height, Normal.Z, WaterLevel) != Sim::ESurface::Grass)
+			if ((!bReeds && Sim::ClassifySurface(Height, Normal.Z, Sim::GetShoreLevel(X + Build.X * ChunkSize, Y + Build.Y * ChunkSize, Sim::WorldSeed)) != Sim::ESurface::Grass)
+				|| IsBurning(Build.HotSpots, X + Build.X * ChunkSize, Y + Build.Y * ChunkSize))
 			{
 				continue;
 			}
@@ -591,6 +1047,13 @@ namespace Teinora
 		Build->Y = Y;
 		Build->Lod = Lod;
 		Build->Detail = Detail;
+		for (const Sim::HotSpot& Spot : Sim::FindHotSpots((X + 0.5) * ChunkSize, (Y + 0.5) * ChunkSize, Sim::WorldSeed))
+		{
+			if (std::fabs(Spot.Position.X - (X + 0.5) * ChunkSize) < ChunkSize * 0.5 + 25.0 && std::fabs(Spot.Position.Y - (Y + 0.5) * ChunkSize) < ChunkSize * 0.5 + 25.0)
+			{
+				Build->HotSpots.push_back(Spot);
+			}
+		}
 		BuildTerrain(*Build);
 		ScatterObjects(*Build);
 		Build->SolidVertexCount = static_cast<std::uint32_t>(Build->Vertices.size());
@@ -620,6 +1083,13 @@ namespace Teinora
 		RequestChunks(CenterX, CenterY);
 		ApplyFinishedChunks();
 		CullProps(Time);
+		UpdateBurning(Time);
+
+		if (Length(Focus - WellsCenter) > 200.0)
+		{
+			WellsCenter = Focus;
+			WellsAround = Sim::FindMagicWells(Focus.X, Focus.Y, Sim::WorldSeed);
+		}
 	}
 
 	void GameWorld::RequestChunks(int CenterX, int CenterY)
@@ -841,6 +1311,12 @@ namespace Teinora
 		return true;
 	}
 
+	void GameWorld::TakeMagicPushes(std::vector<MagicPush>& Out)
+	{
+		Out.swap(MagicPushes);
+		MagicPushes.clear();
+	}
+
 	void GameWorld::DisplaceWater(std::size_t Index, const Vec3& Position, double Volume, double Radius)
 	{
 		if (Index >= WaterByBody.size())
@@ -915,7 +1391,9 @@ namespace Teinora
 			const Vec3 Target = Hit.Point + Hit.Normal * Spec.Collider.Radius;
 			const Vec3 Flat{ Target.X - Start.X, Target.Y - Start.Y, 0.0 };
 			const double Distance = Length(Flat);
-			const double DragPerMass = 0.5 * Sim::AirDensity * Spec.DragCoefficient * Spec.FrontalArea / Spec.GetMass();
+			// The aim allows for the magic around the thrower as well as the air, as a thrower would by feel.
+			const double Thick = Magic != nullptr && Magic->Contains(Start) ? Magic->GetMix(Start).GetAspected() * Sim::MagicDragShare : 0.0;
+			const double DragPerMass = 0.5 * (Sim::AirDensity + Thick) * Spec.DragCoefficient * Spec.FrontalArea / Spec.GetMass();
 			const double NetGravity = Sim::Gravity * (1.0 - Sim::AirDensity / Spec.Density);
 
 			double Angle = 0.0;
@@ -994,10 +1472,57 @@ namespace Teinora
 		const double Submerged = Sim::SubmergedFraction(Item.Position.Z, Spec.HalfHeight, WaterZ);
 		const double Exposed = 1.0 - Submerged;
 
-		Item.Force += (Sim::AeroForce(Air.Flow.Velocity - Item.Velocity, Spec.DragCoefficient, Spec.FrontalArea) + Sim::AirLift(Spec.GetVolume())) * Exposed;
+		// Magic with an aspect acts on what is in it, and is acted on as hard in return.
+		const double Radius = std::cbrt(Spec.GetVolume() * 3.0 / (4.0 * Pi));
+		MagicReading* Felt = nullptr;
+		if (Magic != nullptr)
+		{
+			if (Index >= MagicByBody.size())
+			{
+				MagicByBody.resize(Index + 1);
+			}
+			Felt = &MagicByBody[Index];
+			if (Time < Felt->Time || Time - Felt->Time >= AirReadingAge)
+			{
+				if (Magic->Contains(Item.Position))
+				{
+					if (LengthSquared(Felt->Impulse) > 0.0)
+					{
+						MagicPushes.push_back({ Item.Position, Felt->Impulse });
+					}
+					Felt->Mix = Magic->GetMix(Item.Position);
+					Felt->Flow = Magic->GetFlow(Item.Position);
+					Felt->AirSlope = Magic->GetSlope(Sim::EMagicType::Air, Item.Position);
+					Felt->Rising = Sim::FireUpdraft(Felt->Mix.GetAllFire());
+					Felt->FireSlope = Magic->GetSlope(Sim::EMagicType::Fire, Item.Position) + Magic->GetSlope(Sim::EMagicType::Lightning, Item.Position) + Magic->GetSlope(Sim::EMagicType::Light, Item.Position);
+				}
+				else
+				{
+					// Magic is everywhere, but only around the camera is it worked out as a gas. Elsewhere it lies at rest.
+					Felt->Mix = Sim::MagicBaseline(Item.Position, WellsAround, Sim::ReadMagicGround(Item.Position.X, Item.Position.Y, Sim::WorldSeed), Sim::WorldSeed);
+					Felt->Flow = {};
+					Felt->AirSlope = {};
+					Felt->Rising = 0.0;
+					Felt->FireSlope = {};
+				}
+				Felt->Impulse = {};
+				Felt->Time = Time;
+			}
+
+			const Vec3 Past = Felt->Flow - Item.Velocity;
+			const Vec3 Pushed = Sim::MagicDrag(Felt->Mix, Past, Spec.DragCoefficient, Spec.FrontalArea)
+				+ Sim::MagicViscosity(Felt->Mix.Get(Sim::EMagicType::Water), Past, Radius)
+				+ Sim::MagicPressure(Felt->AirSlope, Spec.GetVolume())
+				+ Sim::FireBlast(Felt->FireSlope, Spec.GetVolume());
+			Item.Force += Pushed;
+			Felt->Impulse -= Pushed * Dt;
+		}
+
+		// Fire magic warms the air, and warm air rises and takes things with it.
+		const Vec3 Moving = Air.Flow.Velocity + Vec3{ 0.0, 0.0, Felt != nullptr ? Felt->Rising : 0.0 };
+		Item.Force += (Sim::AeroForce(Moving - Item.Velocity, Spec.DragCoefficient, Spec.FrontalArea) + Sim::AirLift(Spec.GetVolume())) * Exposed;
 
 		// Spinning air turns what is in it, until the body keeps pace at half the vorticity.
-		const double Radius = std::cbrt(Spec.GetVolume() * 3.0 / (4.0 * Pi));
 		const Vec3 Torque = Sim::AeroTorque(Air.Flow.Vorticity * 0.5 - Item.AngularVelocity, Radius);
 		Item.AngularAcceleration += Torque * (Exposed / (0.4 * Item.GetMass() * Radius * Radius));
 
@@ -1012,7 +1537,8 @@ namespace Teinora
 		const double Speed = Length(Item.Velocity);
 		if (Speed > 0.05)
 		{
-			Item.Force += Plants.Touch(Item.Position, Spec.HalfHeight, Item.Velocity, Item.GetMass(), Dt);
+			const double Stiffening = Felt != nullptr ? Sim::MagicStiffening(Felt->Mix.Get(Sim::EMagicType::Nature)) : 1.0;
+			Item.Force += Plants.Touch(Item.Position, Spec.HalfHeight, Item.Velocity, Item.GetMass(), Dt, Stiffening);
 		}
 
 		GroundPoint Ground;
@@ -1022,10 +1548,18 @@ namespace Teinora
 		}
 
 		const double Clearance = Item.Position.Z - Spec.HalfHeight - Ground.Height;
+		const double EarthMagic = Felt != nullptr ? Felt->Mix.Get(Sim::EMagicType::Earth) : 0.0;
+		if (Felt != nullptr)
+		{
+			const Vec3 Clung = Sim::MagicCling(EarthMagic, Clearance, Ground.Normal, Item.GetMass());
+			Item.Force += Clung;
+			Felt->Impulse -= Clung * Dt;
+		}
+
 		if (Clearance < GroundContact && Spec.bRolls)
 		{
 			// A round thing rolling on soft ground pushes a small bow wave of it along, which coulomb friction knows nothing of.
-			const double Rolling = Sim::GetSurfaceGive(Ground.Surface).Rolling * Sim::Gravity * Ground.Normal.Z;
+			const double Rolling = Sim::GetSurfaceGive(Ground.Surface).Rolling * Sim::Gravity * Ground.Normal.Z * Sim::MagicGrip(EarthMagic);
 			const Vec3 Along = Item.Velocity - Ground.Normal * Dot(Item.Velocity, Ground.Normal);
 			const double Pace = Length(Along);
 			if (Pace > 1e-3)

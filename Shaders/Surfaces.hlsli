@@ -40,6 +40,7 @@ struct Shaded
 	float3 Color;
 	float3 Bend; // what the normal map adds to the world-space normal
 	float Gloss;
+	float3 Glow; // the light it gives off by itself
 };
 
 // Two sizes of one texture: the small tile gives close detail, the large one hides the repeat.
@@ -159,6 +160,43 @@ Shaded ShadeCard(float Layer, float3 Tint, Footprint Pixel)
 	return Result;
 }
 
+/** How near a place is to the edge of the plate of crust it lies on: the second nearest point of a scatter less the nearest. */
+float GetCrustGap(float2 Place)
+{
+	const float2 Cell = floor(Place);
+	float Nearest = 8.0;
+	float Second = 8.0;
+	for (int Y = -1; Y <= 1; ++Y)
+	{
+		for (int X = -1; X <= 1; ++X)
+		{
+			const float2 Home = Cell + float2(X, Y);
+			const float2 Shift = frac(sin(float2(dot(Home, float2(127.1, 311.7)), dot(Home, float2(269.5, 183.3)))) * 43758.5453);
+			const float Reach = length(Home + Shift - Place);
+			Second = min(Second, max(Reach, Nearest));
+			Nearest = min(Nearest, Reach);
+		}
+	}
+	return Second - Nearest;
+}
+
+/** Molten rock under a crust: plates slowly drifting, light in the cracks between them, and more of it the hotter. */
+float3 GetMoltenGlow(float2 Flat, float Heat)
+{
+	const float Time = CameraPosition.w;
+	const float2 Drift = float2(sin(Time * 0.043), cos(Time * 0.031)) * 0.3;
+	const float Plates = GetCrustGap(Flat * 0.5 + Drift);
+	const float Splits = GetCrustGap(Flat * 2.0 - Drift * 2.0);
+
+	const float Open = exp(-Plates * lerp(40.0, 7.0, Heat)) + 0.45 * exp(-Splits * lerp(40.0, 11.0, Heat));
+	const float Pulse = 0.86 + 0.14 * sin(Time * 0.6 + dot(Flat, float2(0.31, 0.23)));
+	const float Lit = saturate(Open * Pulse * smoothstep(0.0, 0.3, Heat));
+
+	float3 Color = lerp(float3(0.9, 0.09, 0.01), float3(1.0, 0.36, 0.03), smoothstep(0.15, 0.6, Lit));
+	Color = lerp(Color, float3(1.0, 0.72, 0.28), smoothstep(0.65, 1.0, Lit));
+	return Color * Lit * Lit * 7.0;
+}
+
 // What a vertex's fourth normal component says it is made of, see ETerrainMaterial.
 Shaded ShadeMaterial(float Material, float3 Tint, float3 World, float3 Normal, Footprint Pixel)
 {
@@ -166,6 +204,12 @@ Shaded ShadeMaterial(float Material, float3 Tint, float3 World, float3 Normal, F
 	if (Material > 0.75)
 	{
 		Result = ShadeGround(World, Normal, Pixel, Tint.r * 2.0, Tint.g, Tint.b * 24.0 - 8.0); // EncodeGroundLevel, undone
+	}
+	else if (Material > 0.62)
+	{
+		AddProjected(Result, RockLayer, World, Normal, Pixel, 1.0, 0.2);
+		Result.Color *= 0.12; // nearly black
+		Result.Glow = GetMoltenGlow(World.xy, Tint.r);
 	}
 	else if (Material > 0.38)
 	{

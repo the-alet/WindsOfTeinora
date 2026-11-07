@@ -4,6 +4,7 @@
 
 #include "Core/ThreadPool.h"
 #include "Liquid.h"
+#include "MagicField.h"
 #include "Physics/Physics.h"
 #include "Plants.h"
 #include "Render/SceneTypes.h"
@@ -22,8 +23,6 @@ namespace Teinora
 	{
 		Crate,
 		Barrel,
-		Boulder,
-		Balloon,
 		Ball,
 		Count
 	};
@@ -55,6 +54,12 @@ namespace Teinora
 		const LiquidField& GetLiquid() const { return Liquid; }
 		const PlantField& GetPlants() const { return Plants; }
 
+		/** Lets the magic around the camera act on what is in it. The volume stays the caller's. */
+		void SetMagic(const MagicVolume* Near) { Magic = Near; }
+
+		/** Hands over what bodies have done back to the magic since the last call. */
+		void TakeMagicPushes(std::vector<MagicPush>& Out);
+
 		/** How far the wind has carried the air so far, which moves its eddies with it. */
 		const Vec3& GetAirDrift() const { return AirDrift; }
 
@@ -63,6 +68,21 @@ namespace Teinora
 
 		void CollectObjects(std::vector<ObjectDraw>& Out) const;
 		std::size_t GetPropCount() const { return Props.size(); }
+
+		/** A bolt of lightning landing. All it does comes of the magic it brings: this wakes what is near, and stands in for the gas beyond the gas. */
+		void ReceiveStrike(const Vec3& Point, double Time);
+
+		/** Where dense fire has met plants or water: the one catches, and the other boils. */
+		void ReceiveFire(const std::vector<FireContact>& Contacts, double Time);
+
+		/** What has caught fire and is still burning. */
+		const std::vector<Sim::HotSpot>& GetBurning() const { return Burning; }
+
+		/** What is burning nearest to Eye, nearest first. */
+		void CollectHotLights(const Vec3& Eye, std::vector<HotLight>& Out, std::size_t Most);
+
+		/** The puffs of steam and smoke nearest to Eye, nearest first. */
+		void CollectPuffs(const Vec3& Eye, std::vector<PuffDraw>& Out, std::size_t Most);
 
 	private:
 		struct StaticSpawn
@@ -94,6 +114,7 @@ namespace Teinora
 			std::vector<PropSpawn> Props;
 			std::vector<PlantLimb> Limbs;
 			std::vector<PlantFoliage> Foliage;
+			std::vector<Sim::HotSpot> HotSpots; // near enough to reach this chunk
 			float MinZ = 0.0f;
 			float MaxZ = 0.0f;
 		};
@@ -137,6 +158,35 @@ namespace Teinora
 			double Time = -1.0;
 		};
 
+		/** The same for magic, along with what the body has pushed back on it since. */
+		struct MagicReading
+		{
+			Sim::MagicMix Mix;
+			Vec3 Flow;
+			Vec3 AirSlope;
+			Vec3 Impulse;
+			double Rising = 0.0; // how fast the air here rises, warmed by fire magic
+			Vec3 FireSlope;      // how fire magic rises per metre around here
+			double Time = -1.0;
+		};
+
+		/** A fire that has gone out, whose last smoke is still rising. */
+		struct Smouldering
+		{
+			Sim::HotSpot Spot;
+			double Lit = 0.0;
+			double Out = 0.0;
+		};
+
+		/** Steam off boiling water, which the wind takes as it rises. */
+		struct SteamPuff
+		{
+			Vec3 Point;
+			Vec3 Drift;         // how far the air had gone by then
+			double Amount = 0.0; // kg of fire magic that boiled it
+			double Born = 0.0;
+		};
+
 		struct ResultQueue
 		{
 			std::mutex Mutex;
@@ -155,6 +205,9 @@ namespace Teinora
 		void SpawnProp(EPropKind Kind, const Vec3& Position, const Vec3& Velocity);
 		void RemoveProp(std::size_t Index);
 		void CullProps(double Time);
+		void UpdateBurning(double Time);
+		void RefreshHotSpots(const Vec3& Eye);
+		double GetFlameStrength(const Sim::HotSpot& Spot, const Vec3& Point) const;
 		bool HasGroundAt(double X, double Y) const;
 		bool ReadGround(double X, double Y, GroundPoint& Out) const;
 		void DisplaceWater(std::size_t Index, const Vec3& Position, double Volume, double Radius);
@@ -171,6 +224,17 @@ namespace Teinora
 		std::vector<int> PropKindByBody;
 		std::vector<AirReading> AirByBody;
 		std::vector<WaterReading> WaterByBody;
+		std::vector<MagicReading> MagicByBody;
+		std::vector<MagicPush> MagicPushes;
+		const MagicVolume* Magic = nullptr;
+		std::vector<Sim::HotSpot> HotSpotsAround;
+		Vec3 HotSpotsCenter{ 1e12, 0.0, 0.0 };
+		std::vector<Sim::MagicWell> WellsAround;
+		Vec3 WellsCenter{ 1e12, 0.0, 0.0 };
+		std::vector<Sim::HotSpot> Burning;
+		std::vector<double> BurningUntil;
+		std::vector<Smouldering> BurntOut;
+		std::vector<SteamPuff> Steam;
 		Vec3 AirDrift;
 		double LastUpdateTime = 0.0;
 		PlantField Plants;

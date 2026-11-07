@@ -82,11 +82,34 @@ float GetOpenness(float3 Relative, float3 Normal, float ViewDepth, float Lift)
 #endif
 }
 
-float3 ShadeSurface(float3 Albedo, float3 Normal, float3 Relative, float ViewDepth, float Gloss, float Lift)
+/** What fires and lava near the camera throw on a point. Too few and too low to be worth shadows. */
+float3 GetFirelight(float3 Normal, float3 Relative)
+{
+	float3 Light = float3(0.0, 0.0, 0.0);
+	for (int Index = 0; Index < 8 && HotLights[Index].w > 0.0; ++Index)
+	{
+		const float Reach = HotLights[Index].w;
+		const float3 Towards = HotPoints[Index].xyz - Relative;
+		const float Square = dot(Towards, Towards);
+		if (Square < Reach * Reach)
+		{
+			const float Fade = 1.0 - Square / (Reach * Reach);
+			const float Facing = saturate(dot(Normal, Towards) / sqrt(max(Square, 1e-4)) * 0.75 + 0.25);
+			const float Time = CameraPosition.w;
+			const float Flicker = HotPoints[Index].w > 0.0 ? 0.86 + 0.14 * sin(Time * (9.0 + Index)) * sin(Time * (5.3 + Index * 1.7) + 1.0) : 1.0;
+			const float Near = Reach * Reach * 0.015; // what keeps the light from blowing up right beside it
+			Light += HotLights[Index].rgb * (Fade * Fade * Facing * Flicker / (1.0 + Square / Near));
+		}
+	}
+	return Light;
+}
+
+float3 ShadeSurface(float3 Albedo, float3 Normal, float3 Relative, float ViewDepth, float Gloss, float Lift, float3 Glow = float3(0.0, 0.0, 0.0))
 {
 	const float3 View = -normalize(Relative);
 
-	float3 Light = PlanetColor.rgb * saturate(dot(Normal, PlanetDirection.xyz));
+	// The planet's light arrives scattered by the air: a little of it straight from there, most from the whole sky.
+	float3 Light = PlanetColor.rgb * (saturate(dot(Normal, PlanetDirection.xyz)) * 0.25 + (Normal.z * 0.5 + 0.5) * 0.35);
 	float3 Highlight = float3(0.0, 0.0, 0.0);
 
 	// A soft highlight is what makes surface detail catch the light.
@@ -109,8 +132,9 @@ float3 ShadeSurface(float3 Albedo, float3 Normal, float3 Relative, float ViewDep
 	// Sky from above, warm bounce from the lit ground below.
 	const float3 Bounce = SkyHorizon.rgb * 0.12 + (SunColor.rgb + Sun2Color.rgb) * 0.05;
 	Light += lerp(Bounce, SkyZenith.rgb * 0.6 + SkyHorizon.rgb * 0.22, Normal.z * 0.5 + 0.5) * GetOpenness(Relative, Normal, ViewDepth, Lift);
+	Light += GetFirelight(Normal, Relative);
 
-	return ApplyFog(Albedo * Light + Highlight, Relative);
+	return ApplyFog(Albedo * Light + Highlight + Glow, Relative);
 }
 
 #endif

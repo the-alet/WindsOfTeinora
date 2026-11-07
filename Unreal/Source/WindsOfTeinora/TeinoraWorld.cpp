@@ -3,6 +3,7 @@
 #include "Components/DirectionalLightComponent.h"
 #include "Components/ExponentialHeightFogComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/SkyAtmosphereComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -30,6 +31,7 @@ THIRD_PARTY_INCLUDES_START
 #include "MagicField.h"
 #include "Physics/Physics.h"
 #include "StarMap.h"
+#include "Storms.h"
 #include "SurfaceTextures.h"
 #include "TeinoraSim.h"
 #include <vector>
@@ -47,6 +49,8 @@ namespace
 	constexpr int32 WaterCells = 128;
 	constexpr double WaterReach = 4000.0; // metres from the camera to the edge of the sea
 	constexpr double WaterSnap = 8.0;
+	constexpr double ShoalDepth = 1.2;  // metres of water under which waves begin to die away
+	constexpr double ShoreWatched = 320.0; // how far from the camera a shore is worth looking for
 
 	constexpr float SunIntensity = 8.0f;
 	constexpr float SecondSunIntensity = 8.8f; // a little the brighter, as in the standalone renderer
@@ -55,14 +59,33 @@ namespace
 
 	constexpr float PlanetAlbedo = 0.125f; // it gives back 10 to 15% of what the suns send it
 	constexpr float PlanetShine = 0.55f;
+	constexpr float ExposureKey = 9.0f;     // what the camera takes for a bright day, in the green of the suns' light
+	constexpr float DarkAdaptation = 1.96f; // and how far it opens up in the dark: the key over this, 4.6 times
+	constexpr float NightColor = 0.7f;      // how much colour the eye still sees in the dark
+	constexpr float PlanetDirect = 0.3f;    // the share of the planet's light that still comes straight from it
+	constexpr float PlanetInAir = 0.02f;    // how much of it the air shows at night
+	const FLinearColor Starlight(0.36f, 0.5f, 0.9f);     // on the scale of the planet's light at its fullest
+	constexpr float DayHaze = 0.003f;
+	constexpr float NightHaze = 0.02f;
+	constexpr float NightHazeGlow = 1.0f;   // how bright the night haze is, against the air
+	constexpr float NightSkyFill = 1.8f;    // how much the dark sky lights the ground, against the bright one
+	const FLinearColor PlanetCloudGlow(1.2f, 1.2f, 1.5f); // what the planet does to clouds, against what it does to the ground
+	const FLinearColor CloudGlow(1.9f, 1.55f, 1.9f); // the two suns on clouds: brighter than on the ground, and with their green taken out
 	constexpr double SkyDomeRadius = 2.0e7; // 200 km, past all the ground there is to see
 	constexpr double CloudCoverReach = 0.5; // what the most and the least of the setting do to the cloud material's coverage
 
 	constexpr int32 MaxPlantMoves = 8;      // as in the standalone renderer
+	constexpr int32 MaxHotLights = 8;       // and this
+	constexpr int32 MaxPuffs = 160;         // the same as the standalone game
+	constexpr double UnrealCloudBase = 5000.0; // metres, where the engine's cloud layer starts
+	constexpr double BoltPixel = 0.0024;    // how wide a bolt is at least, as a share of how far off it is
+	constexpr double FireLightPower = 1.6;  // how much brighter a unit of light is here
+	constexpr float PuffLight = 0.45f;    // the share of the light falling on steam that it gives back
+	constexpr float PuffNightShare = 0.25f; // the night's light is one directional light here, which a puff only half faces
 	constexpr double RippleWrap = 3200.0;   // metres of drift that the ripples' two tiles both repeat over
 	constexpr double ChunkWaterSearch = 512.0; // far enough from a chunk's corner to take in any lake that touches it
 	constexpr double DeepestShown = 64.0;   // and what lies deeper than this looks the same
-	const FLinearColor LowSky(0.3f, 0.37f, 0.44f); // the sky just over the water, against the light on it
+	const FLinearColor LowSky(0.45f, 0.63f, 1.0f); // the sky just over the water, against the light on it
 
 	constexpr int32 SurfaceTextureSize = 1024;
 
@@ -203,7 +226,10 @@ namespace
 		Teinora::EPrimitive Primitive = Teinora::EPrimitive::Cube;
 		FLinearColor Color;
 		UInstancedStaticMeshComponent* Mesh = nullptr; // the actor owns it
+		UMaterialInstanceDynamic* Surface = nullptr;   // and it owns this
 		TArray<FTransform> Transforms;
+		TArray<float> WaterLevels;      // of the water at each instance
+		TArray<float> ShownWaterLevels; // and what the mesh has been told, since it is rarely different
 	};
 }
 
@@ -216,6 +242,7 @@ struct FTeinoraSimulation
 		if constexpr (Sim::bMagicEnabled)
 		{
 			Magic = std::make_unique<Teinora::MagicSimulation>(Sim::WorldSeed);
+			World.SetMagic(&NearMagic);
 		}
 
 		Physics.SetForceCallback([this](Teinora::Physics::BodyId Id, Teinora::Physics::Body& Item, double Dt)
@@ -230,6 +257,7 @@ struct FTeinoraSimulation
 	std::unique_ptr<Teinora::MagicSimulation> Magic;
 	Teinora::MagicVolume NearMagic;
 	Teinora::MagicVolume FarMagic;
+	std::vector<Teinora::MagicPush> MagicPushes;
 	double Time = 0.0;
 	double Accumulator = 0.0;
 	double Hour = 10.0;
@@ -237,12 +265,27 @@ struct FTeinoraSimulation
 	std::vector<Teinora::ObjectDraw> Objects;
 	std::vector<Teinora::PlantMove> PlantMoves;
 	int32 PlantMovesShown = 0;
+	std::vector<Teinora::HotLight> HotLights;
+	std::vector<Teinora::PuffDraw> Puffs;
+	std::vector<Teinora::FireContact> FireContacts;
+	std::unique_ptr<Teinora::StormField> Storms;
+	std::vector<Teinora::BoltDraw> Bolts;
+	std::vector<Teinora::BoltStrike> Strikes;
+	bool bBoltShown = false;
+	bool bPuffsShown = false;
+	bool bFlashing = false;
 	bool bLiquidShown = false;
 	Vec3 WindDrift;              // how far the wind has carried the ripples
 	FLinearColor WaterLight;     // what lights the water from within
+	FLinearColor PuffLight;      // and steam and smoke
+	float HazeShown = -1.0f;     // what the height fog was last told, since telling it rebuilds its state
+	FLinearColor HazeColorShown;
 	TArray<FBodyGroup> Groups;
 	TArray<FVector> WaterVertices;
 	TArray<FVector> WaterNormals;
+	TArray<float> WaveShares;    // how much of the waves each vertex of the sea has left
+	double WaterCenterX = 1e30;  // where the sea's grid was when those were worked out
+	double WaterCenterY = 1e30;
 };
 
 ATeinoraWorld::ATeinoraWorld()
@@ -315,7 +358,17 @@ void ATeinoraWorld::BeginPlay()
 
 	SpawnSky();
 	CreateWater();
+	CreateFires();
 
+	Sim->Storms = std::make_unique<Teinora::StormField>(Sim::WorldSeed, Teinora::MakeCloudNoise(64), 64, UnrealCloudBase, 0.0);
+	BoltMesh = NewObject<UProceduralMeshComponent>(this);
+	BoltMesh->SetupAttachment(RootComponent);
+	BoltMesh->SetCastShadow(false);
+	BoltMesh->RegisterComponent();
+	BoltMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Bolt.M_Bolt"));
+
+	FParse::Value(FCommandLine::Get(), TEXT("TeinoraStrike="), StrikeAhead);
+	FParse::Value(FCommandLine::Get(), TEXT("TeinoraStrikeFrame="), StrikeFrame);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraFrames="), AutoFrames);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraShot="), ShotPath);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraThrows="), ThrowsLeft);
@@ -361,6 +414,16 @@ FTeinoraWorldStats ATeinoraWorld::GetStats() const
 			Stats.MagicWater = Mix.Get(Sim::EMagicType::Water);
 			Stats.MagicAir = Mix.Get(Sim::EMagicType::Air);
 			Stats.MagicNature = Mix.Get(Sim::EMagicType::Nature);
+			Stats.MagicFire = Mix.GetAllFire();
+			Stats.MagicNeutral = Mix.Get(Sim::EMagicType::Neutral);
+
+			const Teinora::StormField::Reading Cloud = Sim->Storms->Read(Eye->GetEye());
+			Stats.CloudDepth = Cloud.CloudDepth;
+			Stats.CloudWater = Cloud.Mix.Get(Sim::EMagicType::Water);
+			Stats.CloudAir = Cloud.Mix.Get(Sim::EMagicType::Air);
+			Stats.CloudSpeed = Cloud.Speed;
+			Stats.CloudRubbing = Cloud.Rubbing;
+			Stats.CloudLightning = Cloud.Mix.Get(Sim::EMagicType::Lightning);
 		}
 		Stats.bMagic = Sim->Magic != nullptr;
 		Stats.bMagicView = bMagicView;
@@ -387,6 +450,7 @@ void ATeinoraWorld::SetView(int32 ViewRadius, int32 GeometryDetail, bool bClouds
 
 	// A run can ask for a cover of its own, to see what the setting does.
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraCover="), CloudCover);
+	StormCover = bClouds ? CloudCover : 0.0;
 	if (Clouds != nullptr)
 	{
 		Clouds->SetVisibility(bClouds && CloudCover > 0.0);
@@ -490,9 +554,11 @@ UDirectionalLightComponent* ATeinoraWorld::SpawnSkyLight(int32 AtmosphereIndex)
 	UDirectionalLightComponent* Light = Cast<UDirectionalLightComponent>(Actor->GetLightComponent());
 	Light->SetAtmosphereSunLight(true);
 	Light->SetAtmosphereSunLightIndex(AtmosphereIndex);
-	Light->SetForwardShadingPriority(1 - AtmosphereIndex); // translucency and fog can only follow one light
+	Light->SetForwardShadingPriority(2 - AtmosphereIndex); // translucency and fog can only follow one light, and no two may tie
 	Light->SetDynamicShadowDistanceMovableLight(60000.0f);
 	Light->SetDynamicShadowCascades(4);
+	Light->CloudScatteredLuminanceScale = CloudGlow;
+	Light->MarkRenderStateDirty();
 	return Light;
 }
 
@@ -509,23 +575,25 @@ void ATeinoraWorld::SpawnSky()
 	ADirectionalLight* PlanetActor = Level->SpawnActor<ADirectionalLight>();
 	PlanetActor->GetRootComponent()->SetMobility(EComponentMobility::Movable);
 	PlanetLight = Cast<UDirectionalLightComponent>(PlanetActor->GetLightComponent());
-	PlanetLight->SetAtmosphereSunLight(false); // or it would turn the night sky blue
+	PlanetLight->SetAtmosphereSunLight(false); // until the first sun has set, see UpdateSky
+	PlanetLight->SetAtmosphereSunLightIndex(0);
+	PlanetLight->SetAtmosphereSunDiskColorScale(FLinearColor::Black); // the sky draws the planet itself
 	PlanetLight->SetCastShadows(false);
-	PlanetLight->SetForwardShadingPriority(-1);
+	PlanetLight->SetForwardShadingPriority(0);
+	PlanetLight->CloudScatteredLuminanceScale = PlanetCloudGlow;
+	PlanetLight->MarkRenderStateDirty();
 
 	Level->SpawnActor<ASkyAtmosphere>();
 	SpawnSkyDome();
 
 	ASkyLight* SkyActor = Level->SpawnActor<ASkyLight>();
-	USkyLightComponent* Sky = SkyActor->GetLightComponent();
-	Sky->SetMobility(EComponentMobility::Movable);
-	Sky->SetRealTimeCapture(true);
+	SkyFill = SkyActor->GetLightComponent();
+	SkyFill->SetMobility(EComponentMobility::Movable);
+	SkyFill->SetRealTimeCapture(true);
 
-	AExponentialHeightFog* Fog = Level->SpawnActor<AExponentialHeightFog>();
-	if (UExponentialHeightFogComponent* FogComponent = Fog->FindComponentByClass<UExponentialHeightFogComponent>())
-	{
-		FogComponent->SetFogDensity(0.003f);
-	}
+	Fog = Level->SpawnActor<AExponentialHeightFog>()->FindComponentByClass<UExponentialHeightFogComponent>();
+	Fog->SetFogDensity(DayHaze);
+	DayHazeColor = Fog->FogInscatteringLuminance;
 
 	AVolumetricCloud* CloudActor = Level->SpawnActor<AVolumetricCloud>();
 	Clouds = CloudActor->FindComponentByClass<UVolumetricCloudComponent>();
@@ -570,6 +638,7 @@ void ATeinoraWorld::CreateWater()
 	const int32 Side = WaterCells + 1;
 	Sim->WaterVertices.SetNumZeroed(Side * Side);
 	Sim->WaterNormals.Init(FVector::UpVector, Side * Side);
+	Sim->WaveShares.Init(1.0f, Side * Side);
 
 	TArray<int32> Triangles;
 	Triangles.Reserve(WaterCells * WaterCells * 6);
@@ -597,6 +666,25 @@ void ATeinoraWorld::UpdateWater(const Vec3& Eye)
 	const double CenterX = FMath::RoundToDouble(Eye.X / WaterSnap) * WaterSnap;
 	const double CenterY = FMath::RoundToDouble(Eye.Y / WaterSnap) * WaterSnap;
 
+	// Waves die away over a shoal. Left alone they would cut across a flat shore in the straight
+	// lines of this grid, which is coarse there; without them the water follows the shape of the ground.
+	if (CenterX != Sim->WaterCenterX || CenterY != Sim->WaterCenterY)
+	{
+		Sim->WaterCenterX = CenterX;
+		Sim->WaterCenterY = CenterY;
+		for (int32 Y = 0; Y < Side; ++Y)
+		{
+			const double OffY = SpreadWater(Y);
+			for (int32 X = 0; X < Side; ++X)
+			{
+				const double OffX = SpreadWater(X);
+				const bool bWatched = OffX * OffX + OffY * OffY < ShoreWatched * ShoreWatched;
+				const double Depth = bWatched ? Sim::SeaLevel - Sim::TerrainHeight(CenterX + OffX, CenterY + OffY, Sim::WorldSeed) : ShoalDepth;
+				Sim->WaveShares[X + Y * Side] = static_cast<float>(FMath::Clamp(Depth / ShoalDepth, 0.0, 1.0));
+			}
+		}
+	}
+
 	TArray<FVector>& Vertices = Sim->WaterVertices;
 	for (int32 Y = 0; Y < Side; ++Y)
 	{
@@ -605,7 +693,8 @@ void ATeinoraWorld::UpdateWater(const Vec3& Eye)
 		{
 			const double WorldX = CenterX + SpreadWater(X);
 			const double Moved = Sim->World.GetLiquid().GetHeight(WorldX, WorldY);
-			Vertices[X + Y * Side] = TeinoraConvert::ToUnreal(Vec3{ WorldX, WorldY, Sim::WaterHeight(WorldX, WorldY, Sim->Time) + Moved });
+			const double Wave = Sim::WaterHeight(WorldX, WorldY, Sim->Time) * Sim->WaveShares[X + Y * Side];
+			Vertices[X + Y * Side] = TeinoraConvert::ToUnreal(Vec3{ WorldX, WorldY, Wave + Moved });
 		}
 	}
 
@@ -731,6 +820,218 @@ void ATeinoraWorld::UpdateLiquid(const Vec3& Eye)
 	}
 }
 
+void ATeinoraWorld::CreateFires()
+{
+	UMaterialInterface* FlameBase = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Flame.M_Flame"));
+
+	// A sheet a metre high and scaled to each flame, standing on its foot and facing along X.
+	const TArray<FVector> Corners = { FVector(0.0, -60.0, 0.0), FVector(0.0, 60.0, 0.0), FVector(0.0, 60.0, 100.0), FVector(0.0, -60.0, 100.0) };
+	const TArray<FVector> Facing = { FVector::ForwardVector, FVector::ForwardVector, FVector::ForwardVector, FVector::ForwardVector };
+	const TArray<FVector2D> Places = { FVector2D(-1.0, 0.0), FVector2D(1.0, 0.0), FVector2D(1.0, 1.0), FVector2D(-1.0, 1.0) };
+	const TArray<int32> Triangles = { 0, 2, 1, 0, 3, 2 };
+
+	for (int32 Index = 0; Index < MaxHotLights; ++Index)
+	{
+		UMaterialInstanceDynamic* Look = UMaterialInstanceDynamic::Create(FlameBase, this);
+		Look->SetScalarParameterValue(TEXT("Seed"), Index * 37.0f); // so that no two fires move alike
+		FlameMaterials.Add(Look);
+
+		UProceduralMeshComponent* Sheet = NewObject<UProceduralMeshComponent>(this);
+		Sheet->SetupAttachment(RootComponent);
+		Sheet->SetCastShadow(false);
+		Sheet->SetVisibility(false);
+		Sheet->RegisterComponent();
+		Sheet->CreateMeshSection(0, Corners, Triangles, Facing, Places, TArray<FColor>(), TArray<FProcMeshTangent>(), false);
+		Sheet->SetMaterial(0, Look);
+		Flames.Add(Sheet);
+
+		UPointLightComponent* Light = NewObject<UPointLightComponent>(this);
+		Light->SetMobility(EComponentMobility::Movable);
+		Light->SetupAttachment(RootComponent);
+		Light->SetCastShadows(false); // as in the standalone game: too few and too low to be worth it
+		Light->SetVisibility(false);
+		Light->RegisterComponent();
+		Light->SetIntensityUnits(ELightUnits::Candelas);
+		FireLights.Add(Light);
+	}
+
+	// All the puffs of steam and smoke in one mesh, remade each frame as the bolts are.
+	PuffMaterial = UMaterialInstanceDynamic::Create(LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Puff.M_Puff")), this);
+	PuffMesh = NewObject<UProceduralMeshComponent>(this);
+	PuffMesh->SetupAttachment(RootComponent);
+	PuffMesh->SetCastShadow(false);
+	PuffMesh->RegisterComponent();
+}
+
+void ATeinoraWorld::UpdateStorms(const ATeinoraCamera& Eye)
+{
+	const Vec3 Here = Eye.GetEye();
+	Sim->Storms->Update(Here, Sim->WindDrift, Sim::WindAt(Here, Sim->Time, Sim::WorldSeed), StormCover, Sim->Time);
+	const bool bAtFrame = StrikeFrame >= 0 && SettledFrames == StrikeFrame;
+	const bool bAtShot = StrikeFrame < 0 && SettledFrames >= AutoFrames - 3 && (Sim->Bolts.empty() || Sim->Bolts.back().Stroke < 0.5); // the shot takes a while to happen
+	if (StrikeAhead > 0.0 && (bAtFrame || bAtShot))
+	{
+		Sim->Storms->ForceStrike(Here + Eye.GetLineOfSight() * StrikeAhead);
+	}
+
+	Sim->Storms->TakeStrikes(Sim->Strikes);
+	for (const Teinora::BoltStrike& Strike : Sim->Strikes)
+	{
+		Sim->World.ReceiveStrike(Strike.Point, Sim->Time);
+		if (Sim->Magic != nullptr)
+		{
+			for (const Vec3& Along : Strike.Channel)
+			{
+				Sim->Magic->AddDeposit({ Along, Sim::EMagicType::Lightning, Sim::MagicChannelDensity });
+			}
+		}
+	}
+	Sim->Storms->CollectBolts(Sim->Bolts);
+	if (Sim->Magic != nullptr)
+	{
+		Sim->Magic->SetBurning(Sim->World.GetBurning());
+		Sim->Magic->TakeContacts(Sim->FireContacts);
+		Sim->World.ReceiveFire(Sim->FireContacts, Sim->Time);
+	}
+
+	// Ribbons along the channels, turned to face the eye, in the world's own axes and metres until the last moment.
+	TArray<FVector> Corners;
+	TArray<FVector2D> Looks;
+	TArray<int32> Triangles;
+	for (const Teinora::BoltDraw& Bolt : Sim->Bolts)
+	{
+		for (const Teinora::BoltSegment& Segment : *Bolt.Segments)
+		{
+			const double Lit = Segment.Current >= 1.0 ? FMath::Max(Bolt.Stroke, Bolt.Faint) : FMath::Max(Bolt.Branches, Bolt.Faint) * Segment.Current;
+			if (Segment.Reached > Bolt.Leader || Lit < 0.002)
+			{
+				continue;
+			}
+
+			const Vec3 Middle = (Segment.From + Segment.To) * 0.5 - Here;
+			const Vec3 Side = Teinora::Normalize(Teinora::Cross(Segment.To - Segment.From, Middle));
+			const double Width = FMath::Max(0.5 * Segment.Current, Teinora::Length(Middle) * BoltPixel);
+			const Vec3 Overlap = Teinora::Normalize(Segment.To - Segment.From) * Width; // so that bends leave no gaps
+			const Vec3 From = Segment.From - Overlap;
+			const Vec3 To = Segment.To + Overlap;
+			const int32 First = Corners.Num();
+			Corners.Add(TeinoraConvert::ToUnreal(From - Side * Width));
+			Corners.Add(TeinoraConvert::ToUnreal(From + Side * Width));
+			Corners.Add(TeinoraConvert::ToUnreal(To + Side * Width));
+			Corners.Add(TeinoraConvert::ToUnreal(To - Side * Width));
+			Looks.Add(FVector2D(-1.0, Lit));
+			Looks.Add(FVector2D(1.0, Lit));
+			Looks.Add(FVector2D(1.0, Lit));
+			Looks.Add(FVector2D(-1.0, Lit));
+			Triangles.Append({ First, First + 1, First + 2, First, First + 2, First + 3 });
+		}
+	}
+
+	if (!Corners.IsEmpty())
+	{
+		BoltMesh->CreateMeshSection(0, Corners, Triangles, TArray<FVector>(), Looks, TArray<FColor>(), TArray<FProcMeshTangent>(), false);
+		BoltMesh->SetMaterial(0, BoltMaterial);
+		Sim->bBoltShown = true;
+	}
+	else if (Sim->bBoltShown)
+	{
+		BoltMesh->ClearMeshSection(0);
+		Sim->bBoltShown = false;
+	}
+
+	// The clouds only see the sky's light, so a flash reaches them through that.
+	Vec3 FlashPoint;
+	const double Flash = Sim->Storms->GetCloudFlash(FlashPoint);
+	if (Flash > 0.0 || Sim->bFlashing)
+	{
+		SkyFill->SetIntensity(FMath::Lerp(1.0f, NightSkyFill, Sim->HazeShown) * (1.0f + static_cast<float>(Flash) * 6.0f));
+		Sim->bFlashing = Flash > 0.0;
+	}
+}
+
+void ATeinoraWorld::UpdateFires(const Vec3& Eye)
+{
+	Sim->World.CollectHotLights(Eye, Sim->HotLights, MaxHotLights);
+	Sim->Storms->AddFlashes(Sim->HotLights, MaxHotLights);
+
+	const FVector EyeAt = TeinoraConvert::ToUnreal(Eye);
+	const float Time = static_cast<float>(Sim->Time);
+	for (int32 Index = 0; Index < MaxHotLights; ++Index)
+	{
+		const bool bBurning = Index < static_cast<int32>(Sim->HotLights.size());
+		FireLights[Index]->SetVisibility(bBurning);
+		if (!bBurning)
+		{
+			Flames[Index]->SetVisibility(false);
+			continue;
+		}
+
+		const Teinora::HotLight& Hot = Sim->HotLights[Index];
+		const FLinearColor Color(static_cast<float>(Hot.Color.X), static_cast<float>(Hot.Color.Y), static_cast<float>(Hot.Color.Z));
+		const float Peak = FMath::Max3(Color.R, Color.G, Color.B);
+		const float Flicker = Hot.FlameHeight > 0.0 ? 0.86f + 0.14f * FMath::Sin(Time * (9.0f + Index)) * FMath::Sin(Time * (5.3f + Index * 1.7f) + 1.0f) : 1.0f;
+
+		// The standalone game's GetFirelight falls off as one over 1 + d2 / Near. A light of pure inverse
+		// square is the same thing from that far above the point it would otherwise blaze on.
+		const double Near = Hot.Reach * Hot.Reach * 0.015;
+		UPointLightComponent* Light = FireLights[Index];
+		Light->SetWorldLocation(TeinoraConvert::ToUnreal(Hot.Point + Vec3{ 0.0, 0.0, FMath::Sqrt(Near) }));
+		Light->SetLightColor(Color / Peak);
+		Light->SetIntensity(static_cast<float>(Peak * Flicker * FireLightPower * Near));
+		Light->SetAttenuationRadius(static_cast<float>(Hot.Reach * TeinoraConvert::UnitsPerMetre));
+
+		UProceduralMeshComponent* Sheet = Flames[Index];
+		Sheet->SetVisibility(Hot.FlameHeight > 0.0);
+		if (Hot.FlameHeight > 0.0)
+		{
+			const FVector Foot = TeinoraConvert::ToUnreal(Hot.Point - Vec3{ 0.0, 0.0, Hot.FlameHeight * 0.33 });
+			Sheet->SetWorldLocationAndRotation(Foot, FRotator(0.0, FMath::RadiansToDegrees(FMath::Atan2(EyeAt.Y - Foot.Y, EyeAt.X - Foot.X)), 0.0));
+			Sheet->SetWorldScale3D(FVector(Hot.FlameHeight));
+			FlameMaterials[Index]->SetScalarParameterValue(TEXT("WorldTime"), Time);
+		}
+	}
+
+	// The farthest first, so that the nearer ones cover them. Each corner carries its place on the sheet,
+	// how thick and which puff it is, and how much light that gives back.
+	Sim->World.CollectPuffs(Eye, Sim->Puffs, MaxPuffs);
+	TArray<FVector> Corners;
+	TArray<FVector2D> Places;
+	TArray<FVector2D> Looks;
+	TArray<FVector2D> Shades;
+	TArray<int32> Triangles;
+	for (auto Puff = Sim->Puffs.rbegin(); Puff != Sim->Puffs.rend(); ++Puff)
+	{
+		Teinora::PuffCorner Sheet[5];
+		const int32 Count = Teinora::CutPuffSheet(*Puff, Eye, Sheet);
+		const int32 First = Corners.Num();
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			Corners.Add(TeinoraConvert::ToUnreal(Sheet[Index].Point));
+			Places.Add(FVector2D(Sheet[Index].Across, Sheet[Index].Up));
+			Looks.Add(FVector2D(Puff->Thickness, Puff->Seed));
+			Shades.Add(FVector2D(Puff->Shade, Puff->Firelight));
+		}
+		for (int32 Index = 2; Index < Count; ++Index)
+		{
+			Triangles.Append({ First, First + Index, First + Index - 1 });
+		}
+	}
+
+	if (!Triangles.IsEmpty())
+	{
+		PuffMesh->CreateMeshSection(0, Corners, Triangles, TArray<FVector>(), Places, Looks, Shades, TArray<FVector2D>(), TArray<FColor>(), TArray<FProcMeshTangent>(), false);
+		PuffMesh->SetMaterial(0, PuffMaterial);
+		PuffMaterial->SetScalarParameterValue(TEXT("WorldTime"), Time);
+		PuffMaterial->SetVectorParameterValue(TEXT("Light"), Sim->PuffLight);
+		Sim->bPuffsShown = true;
+	}
+	else if (Sim->bPuffsShown)
+	{
+		PuffMesh->ClearMeshSection(0);
+		Sim->bPuffsShown = false;
+	}
+}
+
 void ATeinoraWorld::UpdatePlants(const Vec3& Eye)
 {
 	Sim->World.GetPlants().CollectMoves(Eye, Sim->PlantMoves, MaxPlantMoves);
@@ -776,7 +1077,12 @@ void ATeinoraWorld::UpdateEyeInWater(ATeinoraCamera& Eye)
 	Eye.SetUnderwater(bUnder ? WaterTop - Here.Z : 0.0, Sim->WaterLight);
 
 	// From inside it the water between the eye and the bed is the camera's to show, not the bed's.
-	TerrainMaterial->SetScalarParameterValue(TEXT("EyeUnder"), bUnder ? 1.0f : 0.0f);
+	const float EyeUnder = bUnder ? 1.0f : 0.0f;
+	TerrainMaterial->SetScalarParameterValue(TEXT("EyeUnder"), EyeUnder);
+	for (FBodyGroup& Group : Sim->Groups)
+	{
+		Group.Surface->SetScalarParameterValue(TEXT("EyeUnder"), EyeUnder);
+	}
 }
 
 void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
@@ -813,14 +1119,50 @@ void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
 	const FLinearColor Sunlight = SunTint * (SunIntensity * SunUp * FMath::Max(Height, 0.0f)) + SecondSunTint * (SecondSunIntensity * SecondUp * FMath::Max(SecondHeight, 0.0f));
 	Sim->WaterLight = (Sunlight + Reflected) * 0.25f + FLinearColor(0.02f, 0.03f, 0.05f);
 
-	const float ReflectedPeak = Reflected.GetMax();
-	PlanetLight->SetVisibility(ReflectedPeak > 0.0f);
-	if (ReflectedPeak > 0.0f)
+	// The night's light: the planet's, and the stars' from overhead, which is all there is once it has set.
+	const float Dark = GetNight(Height, SecondHeight, Past, SecondPast);
+	const FLinearColor NightLight = Reflected + Starlight * Dark;
+	const float NightPeak = NightLight.GetMax();
+	// What lights steam and smoke, without the water's own glow. The standalone game lights them mostly by
+	// the sky, which is greyer than the suns' light alone, the blue-green one above all.
+	const FLinearColor OnPuffs = (Sunlight + NightLight * PuffNightShare) * PuffLight;
+	const float Grey = OnPuffs.GetLuminance();
+	Sim->PuffLight = FMath::Lerp(OnPuffs, FLinearColor(Grey, Grey, Grey), 0.5f);
+	PlanetLight->SetVisibility(NightPeak > 0.0f);
+	if (NightPeak > 0.0f)
 	{
-		PlanetLight->SetWorldRotation((TeinoraConvert::DirectionToUnreal(Planet) * -1.0).Rotation());
-		PlanetLight->SetLightColor(Reflected / ReflectedPeak);
-		PlanetLight->SetIntensity(ReflectedPeak);
+		// Most of it is scattered by the air on the way. Only a little still comes straight from
+		// the planet; the rest reaches the ground from the whole sky, through the sky light.
+		const double Overhead = FMath::SmoothStep(-0.02, 0.2, Planet.Z);
+		const Vec3 From = Teinora::Normalize(Planet * Overhead + Vec3{ 0.0, 0.0, 1.0 } * (1.0 - Overhead));
+		PlanetLight->SetWorldRotation((TeinoraConvert::DirectionToUnreal(From) * -1.0).Rotation());
+		PlanetLight->SetLightColor(NightLight / NightPeak);
+		PlanetLight->SetIntensity(NightPeak * PlanetDirect);
 	}
+
+	// The air has room for two lights. The first sun's place is free once it has set, and the night's
+	// light takes it until morning, which is what lights the clouds and the air in the dark.
+	const bool bPlanetInAir = SunUp <= 0.0f && NightPeak > 0.0f;
+	if (bPlanetInAir != bPlanetLightsAir)
+	{
+		bPlanetLightsAir = bPlanetInAir;
+		Sun->SetAtmosphereSunLight(!bPlanetInAir);
+		PlanetLight->SetAtmosphereSunLight(bPlanetInAir);
+	}
+
+	// The air at night: never quite black, and hazy in the distance with the same light.
+	const FLinearColor NightAir = NightLight * PlanetInAir * Dark;
+	SkyMaterial->SetVectorParameterValue(TEXT("NightAir"), NightAir);
+	if (FMath::Abs(Dark - Sim->HazeShown) > 0.01f || !NightAir.Equals(Sim->HazeColorShown, 0.0005f))
+	{
+		Sim->HazeShown = Dark;
+		Sim->HazeColorShown = NightAir;
+		Fog->SetFogDensity(FMath::Lerp(DayHaze, NightHaze, Dark));
+		Fog->SetFogInscatteringColor(FMath::Lerp(DayHazeColor, NightAir * NightHazeGlow, Dark));
+		SkyFill->SetIntensity(FMath::Lerp(1.0f, NightSkyFill, Dark));
+	}
+
+	LeafMaterial->SetScalarParameterValue(TEXT("LeafThrough"), FMath::Lerp(0.08f, 1.1f, FMath::SmoothStep(-0.05f, 0.25f, FMath::Max(Height * Past, SecondHeight * SecondPast))));
 
 	SkyMaterial->SetVectorParameterValue(TEXT("SunWay"), ToSkyVector(Towards));
 	SkyMaterial->SetVectorParameterValue(TEXT("SecondWay"), ToSkyVector(TowardsSecond));
@@ -834,7 +1176,12 @@ void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
 	if (Eye != nullptr)
 	{
 		SkyDome->SetWorldLocation(TeinoraConvert::ToUnreal(Eye->GetEye()));
-		Eye->SetExposure(FMath::Lerp(2.6f, 1.0f, FMath::SmoothStep(-0.2f, 0.02f, FMath::Max(Height, SecondHeight))));
+
+		// The camera follows the light that reaches the ground, as an eye does, whichever hour it is. An
+		// eclipse is left out of it, since that is meant to be seen, and is over before an eye would adjust.
+		const float FirstLight = SunTint.G * SunIntensity * FMath::SmoothStep(-0.02f, 0.03f, Height) * FMath::Max(Height, 0.0f);
+		const float NextLight = SecondSunTint.G * SecondSunIntensity * FMath::SmoothStep(-0.02f, 0.03f, SecondHeight) * FMath::Max(SecondHeight, 0.0f);
+		Eye->SetExposure(ExposureKey / (FirstLight + NextLight + DarkAdaptation), FMath::Lerp(1.0f, NightColor, Dark));
 	}
 }
 
@@ -846,6 +1193,7 @@ void ATeinoraWorld::UpdateBodies()
 	for (FBodyGroup& Group : Sim->Groups)
 	{
 		Group.Transforms.Reset();
+		Group.WaterLevels.Reset();
 	}
 
 	for (const Teinora::ObjectDraw& Item : Sim->Objects)
@@ -863,6 +1211,7 @@ void ATeinoraWorld::UpdateBodies()
 			Mesh->SetMobility(EComponentMobility::Movable);
 			Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 			Mesh->SetStaticMesh(Primitives[static_cast<int32>(Item.Primitive)]);
+			Mesh->NumCustomDataFloats = 1;
 			Mesh->RegisterComponent();
 
 			UMaterialInstanceDynamic* Tint = UMaterialInstanceDynamic::Create(BodyMaterial, Mesh);
@@ -873,9 +1222,11 @@ void ATeinoraWorld::UpdateBodies()
 			Group->Primitive = Item.Primitive;
 			Group->Color = Color;
 			Group->Mesh = Mesh;
+			Group->Surface = Tint;
 		}
 
 		Group->Transforms.Emplace(TeinoraConvert::ToUnreal(Item.Rotation), TeinoraConvert::ToUnreal(Item.Position), FVector(Item.Scale.X, Item.Scale.Y, Item.Scale.Z));
+		Group->WaterLevels.Add(static_cast<float>(Sim::FindWater(Item.Position.X, Item.Position.Y, Sim::WorldSeed).Level));
 	}
 
 	for (FBodyGroup& Group : Sim->Groups)
@@ -888,6 +1239,17 @@ void ATeinoraWorld::UpdateBodies()
 		{
 			Group.Mesh->ClearInstances();
 			Group.Mesh->AddInstances(Group.Transforms, false, true, false);
+			Group.ShownWaterLevels.Reset();
+		}
+
+		Group.ShownWaterLevels.SetNumZeroed(Group.WaterLevels.Num());
+		for (int32 Index = 0; Index < Group.WaterLevels.Num(); ++Index)
+		{
+			if (Group.WaterLevels[Index] != Group.ShownWaterLevels[Index])
+			{
+				Group.ShownWaterLevels[Index] = Group.WaterLevels[Index];
+				Group.Mesh->SetCustomDataValue(Index, 0, Group.WaterLevels[Index], true);
+			}
 		}
 	}
 }
@@ -899,7 +1261,9 @@ void ATeinoraWorld::UpdateMagic(ATeinoraCamera& Eye, float DeltaSeconds)
 		return;
 	}
 
-	Sim->Magic->Advance(Eye.GetEye(), Sim->World.GetAirDrift(), Sim->Time);
+	Sim->World.TakeMagicPushes(Sim->MagicPushes);
+	Sim->Magic->AddPushes(Sim->MagicPushes);
+	Sim->Magic->Advance(Eye.GetEye(), Sim->World.GetAirDrift(), Sim->Time, Teinora::GetSunHeat(Sim->Hour, Sim->Day));
 	if (Sim->Magic->TakeNear(Sim->NearMagic))
 	{
 		UploadMagicAtlas(MagicNearAtlas, Sim->NearMagic, 8, 6);
@@ -992,6 +1356,8 @@ void ATeinoraWorld::Tick(float DeltaSeconds)
 		UpdateLakes(Here);
 		UpdateLiquid(Here);
 		UpdatePlants(Here);
+		UpdateStorms(*Eye);
+		UpdateFires(Here);
 		UpdateMagic(*Eye, DeltaSeconds);
 	}
 

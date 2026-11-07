@@ -31,8 +31,8 @@ public:
 
 	void SetEyeFocus(bool bEnabled);
 
-	/** How much brighter than by day to show the scene, as the standalone renderer does at night. */
-	void SetExposure(double Multiplier);
+	/** How much brighter than by day to show the scene, and how much of its colour, as an eye does at night. */
+	void SetExposure(double Multiplier, float Saturation);
 
 	/** How far under water the eye is, zero above it. */
 	void SetUnderwater(double Depth, const FLinearColor& Light);

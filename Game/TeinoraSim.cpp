@@ -398,10 +398,15 @@ namespace Teinora::Sim
 			return std::max(std::hypot(Long, Wide) / Item.Radius + Wander * 0.3, 0.0);
 		}
 
+		constexpr double BasinHeld = 1.45; // how far the ground is held above the water, in radii
+		constexpr double BasinEnd = 1.75;  // and where it has gone back to what it was
+		constexpr double BeachFall = 0.25; // metres of height a shore counts for each metre from the water
+
 		double LetLakeIn(const Lake& Item, double X, double Y, double Ground, std::uint32_t Seed)
 		{
 			constexpr double ShoreRise = 0.35; // how far the ground stands above the water where the basin ends
-			constexpr double BasinEnd = 1.75;  // where the ground has gone back to what it was
+			constexpr double BankSlope = 0.12; // and how it climbs from there, for the width of a beach
+			constexpr double BankRise = 1.7;   // but not so far that the lake stands in a ring of its own
 
 			const double Reach = GetLakeReach(Item, X, Y, Seed);
 			if (Reach >= BasinEnd)
@@ -409,12 +414,12 @@ namespace Teinora::Sim
 				return Ground;
 			}
 
-			const double Bank = Item.Level + ShoreRise + std::max(Reach - 1.0, 0.0) * Item.Radius * 0.03;
+			const double Bank = Item.Level + ShoreRise + std::min(std::max(Reach - 1.0, 0.0) * Item.Radius * BankSlope, BankRise);
 			if (Reach >= 1.0)
 			{
 				// Everywhere the water might reach, the ground holds it in, however low the land beyond.
 				const double Back = SmoothStep(1.0, BasinEnd, Reach);
-				return std::max(Mix(Bank, Ground, Back), Mix(Item.Level + ShoreRise, Ground, SmoothStep(1.45, BasinEnd, Reach)));
+				return std::max(Mix(Bank, Ground, Back), Mix(Item.Level + ShoreRise, Ground, SmoothStep(BasinHeld, BasinEnd, Reach)));
 			}
 
 			// The bed shelves off the shore into a hollow, with ledges and banks of its own.
@@ -537,6 +542,20 @@ namespace Teinora::Sim
 			Result.bLake = true;
 		}
 		return Result;
+	}
+
+	double GetShoreLevel(double X, double Y, std::uint32_t Seed)
+	{
+		const Lake* Nearby = FindNearbyLake(X, Y, Seed);
+		if (Nearby == nullptr)
+		{
+			return SeaLevel;
+		}
+
+		// Falling away from the water, or on flat land a low meadow far from the lake would count as its beach.
+		const double Reach = GetLakeReach(*Nearby, X, Y, Seed);
+		const double Beach = Nearby->Level - std::max(Reach - 1.0, 0.0) * Nearby->Radius * BeachFall;
+		return Mix(Beach, SeaLevel, SmoothStep(BasinHeld, BasinEnd, Reach));
 	}
 
 	double WaterSurfaceAt(double X, double Y, double Time, std::uint32_t Seed)
@@ -798,6 +817,326 @@ namespace Teinora::Sim
 		return RelativeSpin * (0.5 * Density * MomentCoefficient * std::pow(Radius, 5.0) * Length(RelativeSpin));
 	}
 
+	double MagicFadeTime(EMagicType Type)
+	{
+		switch (Type)
+		{
+		case EMagicType::Earth:
+		case EMagicType::Water:
+			return 420.0; // long enough to lie in a layer some 45 m deep, and to trail away downstream
+		case EMagicType::Air:
+			return 70.0;
+		case EMagicType::Nature:
+			return 45.0;
+		case EMagicType::Fire:
+			return 30.0;
+		case EMagicType::Lightning:
+			return 10.0;
+		case EMagicType::Light:
+			return 2.0;
+		default:
+			return 1e30; // neutral has nothing to lose
+		}
+	}
+
+	std::vector<HotSpot> FindHotSpots(double X, double Y, std::uint32_t Seed)
+	{
+		constexpr double Spacing = 700.0;
+		constexpr int Reach = 2;
+
+		const auto CellX = static_cast<std::int64_t>(std::floor(X / Spacing));
+		const auto CellY = static_cast<std::int64_t>(std::floor(Y / Spacing));
+		const auto Share = [Seed](std::int64_t Column, std::int64_t Row, std::uint32_t Salt)
+		{
+			return HashLattice(Column, Row, Seed + 500u + Salt) / 4294967296.0;
+		};
+
+		std::vector<HotSpot> Spots;
+		for (std::int64_t Row = CellY - Reach; Row <= CellY + Reach; ++Row)
+		{
+			for (std::int64_t Column = CellX - Reach; Column <= CellX + Reach; ++Column)
+			{
+				const double Kind = Share(Column, Row, 0u);
+				if (Kind >= 0.55)
+				{
+					continue;
+				}
+
+				const double SpotX = (static_cast<double>(Column) + Share(Column, Row, 1u)) * Spacing;
+				const double SpotY = (static_cast<double>(Row) + Share(Column, Row, 2u)) * Spacing;
+				const double Ground = TerrainHeight(SpotX, SpotY, Seed);
+
+				// Only on dry, level ground, or it would hang in the air or sit in a lake.
+				if (Ground < GetShoreLevel(SpotX, SpotY, Seed) + 2.0 || TerrainNormal(SpotX, SpotY, Seed).Z < 0.96)
+				{
+					continue;
+				}
+
+				HotSpot Spot;
+				Spot.bLava = Kind < 0.15;
+				Spot.Position = { SpotX, SpotY, Ground };
+				Spot.Radius = Spot.bLava ? 6.0 + 9.0 * Share(Column, Row, 3u) : 0.7;
+				Spot.Depth = Spot.bLava ? 3.0 : 0.8;
+				Spot.Temperature = Spot.bLava ? 1050.0 + 150.0 * Share(Column, Row, 4u) : 900.0;
+				Spots.push_back(Spot);
+			}
+		}
+		return Spots;
+	}
+
+	double GetGroundTemperature(double Warmth, ESurface Surface, double SunHeat)
+	{
+		const double Cool = -5.0 + 35.0 * Warmth;
+		switch (Surface)
+		{
+		case ESurface::Sand:  return Cool + 45.0 * SunHeat;
+		case ESurface::Rock:  return Cool + 30.0 * SunHeat;
+		case ESurface::Grass: return Cool + 12.0 * SunHeat;
+		default:              return Cool;
+		}
+	}
+
+	double MagicHeatImprint(double Temperature, double VolumeShare)
+	{
+		constexpr double Contact = 0.35;      // per second, as for any matter, in something at FullHeat
+		constexpr double Lowest = 45.0;       // degrees: below this nothing counts as hot
+		constexpr double FullHeat = 1000.0;
+
+		// As a root, so that ground warm enough to raise thermals counts for something beside lava.
+		return Contact * std::clamp(VolumeShare, 0.0, 1.0) * std::sqrt(std::max(Temperature - Lowest, 0.0) / (FullHeat - Lowest));
+	}
+
+	double MagicHotImprint(const Vec3& Center, double CellSize, const std::vector<HotSpot>& Spots)
+	{
+		double Rate = 0.0;
+		for (const HotSpot& Spot : Spots)
+		{
+			const double AcrossX = Center.X - Spot.Position.X;
+			const double AcrossY = Center.Y - Spot.Position.Y;
+			const double Up = Center.Z - Spot.Position.Z;
+			const double Reach = Spot.Radius + CellSize * 0.75;
+			if (std::fabs(Up) < CellSize * 1.5 && AcrossX * AcrossX + AcrossY * AcrossY < Reach * Reach)
+			{
+				// The more of what is hot lies in a cell, the more of the magic there touches it.
+				const double Across = std::min(Spot.Radius * Spot.Radius * 3.14159265358979, CellSize * CellSize);
+				Rate += MagicHeatImprint(Spot.Temperature, Across * Spot.Depth / (CellSize * CellSize * CellSize));
+			}
+		}
+		return Rate;
+	}
+
+	void UpdateFireForms(MagicMix& Mix, double Pressure, double Dt)
+	{
+		constexpr double ChangeTime = 0.5; // seconds
+		constexpr EMagicType Forms[] = { EMagicType::Fire, EMagicType::Lightning, EMagicType::Light };
+
+		const EMagicType Held = Pressure >= MagicLightPressure ? EMagicType::Light : (Pressure >= MagicLightningPressure ? EMagicType::Lightning : EMagicType::Fire);
+		const double Share = 1.0 - std::exp(-Dt / ChangeTime);
+		for (const EMagicType Form : Forms)
+		{
+			if (Form != Held)
+			{
+				const double Moved = Mix.Amounts[static_cast<int>(Form)] * Share;
+				Mix.Amounts[static_cast<int>(Form)] -= Moved;
+				Mix.Amounts[static_cast<int>(Held)] += Moved;
+			}
+		}
+	}
+
+	double MagicRubPressure(double WaterMagic, double AirMagic, double Speed)
+	{
+		const double Both = WaterMagic + AirMagic;
+		return Both > 0.0 ? 0.5 * WaterMagic * AirMagic / Both * Speed * Speed : 0.0;
+	}
+
+	double MagicRubImprint(double RubPressure)
+	{
+		constexpr double AtLightning = 0.03; // per second, once it rubs hard enough to make lightning
+		return AtLightning * RubPressure / MagicLightningPressure;
+	}
+
+	double MagicVapourImprint(double Vapour)
+	{
+		constexpr double Contact = 0.006; // per second: cloud is mostly air, and touches far less than the sea
+		return Contact * Vapour;
+	}
+
+	double MagicHeldByVapour(double Vapour)
+	{
+		constexpr double Held = 1.6;
+		return Held * Vapour;
+	}
+
+	double CloudUpdraft(double Depth)
+	{
+		constexpr double Fastest = 42.0; // m/s, as in the tallest storms there are
+		constexpr double Lowest = 500.0; // metres of cloud
+		constexpr double Tallest = 1000.0;
+		return Fastest * std::clamp((Depth - Lowest) / (Tallest - Lowest), 0.0, 1.0);
+	}
+
+	void UpdateFireInWind(MagicMix& Mix, double WindSpeed, double Dt)
+	{
+		constexpr double FreshWind = 4.0;  // m/s, at which the air magic in a place counts for just what it is
+		constexpr double Burning = 0.6;    // per second, the share of the air magic that a great fire takes
+		constexpr double Heating = 3.0;    // kg of neutral magic that each kg of it burnt gives the aspect of fire
+		constexpr double Blowing = 0.08;   // per second, the share of a little fire that fresh wind blows away
+
+		const int Fire = static_cast<int>(EMagicType::Fire);
+		const int Air = static_cast<int>(EMagicType::Air);
+		const int Neutral = static_cast<int>(EMagicType::Neutral);
+
+		const double Wind = WindSpeed / FreshWind;
+		const double Brought = Mix.Amounts[Air] * Wind;
+		const double Sum = Mix.Amounts[Fire] + Brought;
+		if (Mix.Amounts[Fire] <= 0.0 || Brought <= 0.0)
+		{
+			return;
+		}
+
+		const double Balance = (Mix.Amounts[Fire] - Brought) / Sum; // 1 for all fire, -1 for all wind
+		if (Balance > 0.0)
+		{
+			const double Burnt = Mix.Amounts[Air] * (1.0 - std::exp(-Burning * Balance * std::min(Wind, 2.0) * Dt));
+			Mix.Amounts[Air] -= Burnt;
+			Mix.Amounts[Neutral] += Burnt;
+
+			const double Taken = std::min(Burnt * Heating, Mix.Amounts[Neutral]);
+			Mix.Amounts[Neutral] -= Taken;
+			Mix.Amounts[Fire] += Taken;
+		}
+		else
+		{
+			const double Lost = Mix.Amounts[Fire] * (1.0 - std::exp(Blowing * Balance * Wind * Dt));
+			Mix.Amounts[Fire] -= Lost;
+			Mix.Amounts[Neutral] += Lost;
+		}
+	}
+
+	bool CanBurn(double X, double Y, std::uint32_t Seed)
+	{
+		const double Height = TerrainHeight(X, Y, Seed);
+		const double Level = GetShoreLevel(X, Y, Seed);
+		return Height > Level + 0.5 && ClassifySurface(Height, TerrainNormal(X, Y, Seed).Z, Level) == ESurface::Grass;
+	}
+
+	Vec3 FireBlast(const Vec3& FireSlope, double Volume)
+	{
+		constexpr double SwellPerAmount = 2000.0; // Pa for each kg/m3, far less than air shut in would give
+		return FireSlope * (-SwellPerAmount * Volume);
+	}
+
+	double BoilWater(MagicMix& Mix, double Dt)
+	{
+		constexpr double Boiling = 2.0; // per second, the share of the fire that goes on it
+
+		const double Fire = Mix.GetAllFire();
+		if (Fire < MagicFierceFire)
+		{
+			return 0.0;
+		}
+
+		const double Left = std::exp(-Boiling * Dt);
+		for (const EMagicType Form : { EMagicType::Fire, EMagicType::Lightning, EMagicType::Light })
+		{
+			Mix.Amounts[static_cast<int>(Form)] *= Left;
+		}
+		const double Spent = Fire * (1.0 - Left);
+		Mix.Amounts[static_cast<int>(EMagicType::Neutral)] += Spent;
+		return Spent;
+	}
+
+	double FireUpdraft(double FireMagic)
+	{
+		constexpr double Fastest = 6.0;
+		constexpr double PerRoot = 12.0; // hot air rises as the root of how much warmer it is
+		return std::min(PerRoot * std::sqrt(std::max(FireMagic, 0.0)), Fastest);
+	}
+
+	MagicMix MagicImprint(double HeightAboveSurface, const MagicGround& Ground)
+	{
+		constexpr double Contact = 0.35;    // per second, inside land or water
+		constexpr double Reach = 4.0;       // metres over them that still counts as touching
+		constexpr double Growing = 0.04;    // per second, among plants
+		constexpr double Canopy = 14.0;     // about the height of the trees
+
+		const double Touching = HeightAboveSurface <= 0.0 ? 1.0 : std::max(1.0 - HeightAboveSurface / Reach, 0.0);
+
+		MagicMix Rates;
+		Rates.Amounts[static_cast<int>(EMagicType::Earth)] = Contact * Touching * Ground.Land;
+		Rates.Amounts[static_cast<int>(EMagicType::Water)] = Contact * Touching * (1.0 - Ground.Land);
+		Rates.Amounts[static_cast<int>(EMagicType::Nature)] = HeightAboveSurface < Canopy ? Growing * Ground.Plants : 0.0;
+		Rates.Amounts[static_cast<int>(EMagicType::Air)] = HeightAboveSurface >= 0.0 ? 1.0 / MagicFadeTime(EMagicType::Air) : 0.0;
+		return Rates;
+	}
+
+	double MagicSlowing(double HeightAboveSurface)
+	{
+		constexpr double Slowest = 0.1;
+		constexpr double Depth = 26.0; // metres over which the ground holds the stream back
+		return HeightAboveSurface <= 0.0 ? Slowest : 1.0 - (1.0 - Slowest) * std::exp(-HeightAboveSurface / Depth);
+	}
+
+	void UpdateMagicAspects(MagicMix& Mix, const MagicMix& Imprint, double Dt)
+	{
+		const int Neutral = static_cast<int>(EMagicType::Neutral);
+
+		double Rate = 0.0;
+		for (int Type = 0; Type < Neutral; ++Type)
+		{
+			Rate += Imprint.Amounts[Type];
+		}
+
+		// Implicit, which never takes more neutral magic than there is, however long the step.
+		const double Taken = Mix.Amounts[Neutral] * Rate * Dt / (1.0 + Rate * Dt);
+		double Returned = 0.0;
+		for (int Type = 0; Type < Neutral; ++Type)
+		{
+			const double Lost = Mix.Amounts[Type] * (1.0 - std::exp(-Dt / MagicFadeTime(static_cast<EMagicType>(Type))));
+			const double Given = Rate > 0.0 ? Taken * Imprint.Amounts[Type] / Rate : 0.0;
+			Mix.Amounts[Type] += Given - Lost;
+			Returned += Lost;
+		}
+		Mix.Amounts[Neutral] += Returned - Taken;
+	}
+
+	Vec3 MagicDrag(const MagicMix& Mix, const Vec3& Relative, double DragCoefficient, double FrontalArea)
+	{
+		return Relative * (0.5 * MagicDragShare * Mix.GetAspected() * DragCoefficient * FrontalArea * Length(Relative));
+	}
+
+	Vec3 MagicViscosity(double WaterMagic, const Vec3& Relative, double Radius)
+	{
+		constexpr double ThicknessPerAmount = 0.1; // Pa s for each kg/m3
+		return Relative * (6.0 * Pi * ThicknessPerAmount * WaterMagic * Radius);
+	}
+
+	Vec3 MagicPressure(const Vec3& AirSlope, double Volume)
+	{
+		constexpr double Grip = 10.0; // how much harder matter feels this pressure than magic itself does
+		return AirSlope * (-Grip * MagicSoundSpeed * MagicSoundSpeed * Volume);
+	}
+
+	Vec3 MagicCling(double EarthMagic, double Clearance, const Vec3& GroundNormal, double Mass)
+	{
+		constexpr double Strongest = 2.5;     // m/s2, in 3 kg/m3 of it, right on the ground
+		constexpr double FullAmount = 3.0;
+		constexpr double Range = 1.5;         // metres
+		return GroundNormal * (-Mass * Strongest * EarthMagic / FullAmount * std::exp(-std::max(Clearance, 0.0) / Range));
+	}
+
+	double MagicStiffening(double NatureMagic)
+	{
+		constexpr double Doubling = 0.28; // kg/m3 that would double it, which is more than there ever is
+		return 1.0 + NatureMagic / Doubling;
+	}
+
+	double MagicGrip(double EarthMagic)
+	{
+		constexpr double Doubling = 3.0; // kg/m3
+		return 1.0 + EarthMagic / Doubling;
+	}
+
 	std::vector<MagicWell> FindMagicWells(double X, double Y, std::uint32_t Seed)
 	{
 		constexpr double Spacing = 900.0;
@@ -840,12 +1179,19 @@ namespace Teinora::Sim
 	MagicGround ReadMagicGround(double X, double Y, std::uint32_t Seed)
 	{
 		const double Height = TerrainHeight(X, Y, Seed);
-		const double WaterLevel = FindWater(X, Y, Seed).Level;
+		const double WaterLevel = GetShoreLevel(X, Y, Seed);
 
 		MagicGround Ground;
 		Ground.Surface = std::max(Height, WaterLevel);
+		Ground.bWater = Height < WaterLevel;
 		Ground.Land = MagicLandShare(Height - WaterLevel);
-		Ground.Plants = ClassifySurface(Height, TerrainNormal(X, Y, Seed).Z, WaterLevel) == ESurface::Grass ? 1.0 : 0.0;
+		const ESurface Surface = ClassifySurface(Height, TerrainNormal(X, Y, Seed).Z, WaterLevel);
+		Ground.Plants = Surface == ESurface::Grass ? 1.0 : 0.0;
+
+		// Water only gets as warm as the air, and the suns are no source of anything by themselves: only what they heat is.
+		const double Warmth = ReadBiome(X, Y, Height, Seed).Warmth;
+		Ground.Cool = GetGroundTemperature(Warmth, Surface, 0.0);
+		Ground.Sunned = Height > WaterLevel ? GetGroundTemperature(Warmth, Surface, 1.0) - Ground.Cool : 0.0;
 		return Ground;
 	}
 
@@ -890,7 +1236,17 @@ namespace Teinora::Sim
 				Air += Well.Peak * std::exp(-Reach);
 			}
 		}
-		Mix.Amounts[static_cast<int>(EMagicType::Air)] = Air;
+
+		// Up in the air half of it has taken on the air's aspect, see MagicImprint.
+		Mix.Amounts[static_cast<int>(EMagicType::Air)] = Air * 0.5;
+		Mix.Amounts[static_cast<int>(EMagicType::Neutral)] = Air * 0.5;
+
+		// It goes up about 2 km, and thins out to nothing over the last few hundred metres.
+		const double Left = 1.0 - SmoothStep(MagicCeiling - 300.0, MagicCeiling + 300.0, Height);
+		for (double& Amount : Mix.Amounts)
+		{
+			Amount *= Left;
+		}
 		return Mix;
 	}
 

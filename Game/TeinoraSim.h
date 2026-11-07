@@ -90,6 +90,13 @@ namespace Teinora::Sim
 
 	WaterBody FindWater(double X, double Y, std::uint32_t Seed);
 
+	/**
+	 * The level that the ground at a point measures its height from, which decides where shores are:
+	 * a lake's around that lake, fading to the sea's where its basin gives way to the land about it.
+	 * FindWater cannot do this, since it says what is at a point and so jumps at the edge of a lake.
+	 */
+	double GetShoreLevel(double X, double Y, std::uint32_t Seed);
+
 	/** Height of the water's surface at a point, waves included, or below any ground if there is no water here. */
 	double WaterSurfaceAt(double X, double Y, double Time, std::uint32_t Seed);
 
@@ -185,25 +192,85 @@ namespace Teinora::Sim
 
 	// Magic is a transparent matter that flows and swirls as air does, measured in kilograms.
 	// In every formula that amount stands in for mass, and gravity does not act on it.
+	//
+	// All of it is one substance, neutral to begin with, that moves in streams through space and
+	// through whatever is in the way. What it obeys:
+	//  1. The amount of magic is conserved. An aspect is a property of magic, not a substance.
+	//  2. Out of contact with matter an aspect fades back to neutral, each at its own rate.
+	//  3. No aspect ever turns into another: the only way between them is through neutral.
+	//  4. Only neutral magic takes on an aspect, only from matter of that aspect, and a kilogram
+	//     has one aspect at a time.
+	//  5. Air gives its aspect as slowly as it fades, so in the air the two lie about half and half.
+	//  6. Matter slows the stream and holds it, so magic lies denser against the ground.
+	//  7. Only magic with an aspect acts on matter, and matter acts back on it just as hard.
+	//     Neutral magic passes through everything and pushes nothing.
+	//  8. Fire is the one aspect with forms, and pressure alone moves it between them: from fire
+	//     to lightning to light as it rises, and back as it falls. They are one aspect, not three.
+	//  9. Fire magic warms the air it is in, and that is the only way heat gets about: there is no
+	//     transfer of heat besides fire magic going somewhere. Air warmed swells and pushes outwards.
+	//     Wind brings air magic to fire. Where there is more fire than that, it burns the air magic,
+	//     which goes back to neutral, and the heat gives neutral magic the aspect of fire, as
+	//     oxygen feeds a blaze. Where there is less, the wind blows it away and it slowly weakens.
+	// 10. Water and air magic moving through each other rub. Rubbing is hot, so neutral magic beside
+	//     it takes the aspect of fire, the one aspect that comes from something other than matter.
+	//     And it squeezes: the energy of their motion through each other is a pressure, which counts
+	//     in 8 like any other. So where they rub hard enough, what it makes is lightning.
+	// 11. Lightning held in a cloud is a charge. Past a limit it breaks through the air to the
+	//     ground along one channel, and what was charged goes back to neutral.
+	// 12. Only dense fire changes matter. Where it reaches MagicFierceFire, in any of its forms, what
+	//     grows catches, and water boils to steam, which spends the fire back to neutral.
 
-	/** Off until the behaviour of magic and how its kinds act on each other have been reworked. */
-	inline constexpr bool bMagicEnabled = false;
+	inline constexpr bool bMagicEnabled = true;
 
 	/** Kilograms of inertia per kilogram of magic, in case a constant turns out to be needed here. */
 	inline constexpr double MagicInertia = 1.0;
 
+	/** How far the magic view sees, in metres. Also in Shaders/Magic.hlsl and Unreal/Scripts/make_content.py. */
+	inline constexpr double MagicSightRadius = 100.0;
+
+	/** Metres over the ground where magic gives out. There is magic everywhere below that. */
+	inline constexpr double MagicCeiling = 2000.0;
+
 	/** Density in kg/m3 at which magic starts to bend light, so that it shows without the magic view. */
 	inline constexpr double MagicVisibleDensity = 5.5;
 
-	/** The kinds of magic. They mix and flow together, and each one's amount is conserved on its own. */
+	/** How fast a pressure difference spreads through magic, in m/s. Its pressure is its density times this squared. */
+	inline constexpr double MagicSoundSpeed = 5.0;
+
+	/** Magic is mostly transparent to matter, so only this much of it counts for pushing on a body. */
+	inline constexpr double MagicDragShare = 0.3;
+
+	/** How much of the air's motion magic takes up. What vapour holds moves with the air, so the two pass each other. */
+	inline constexpr double MagicWindShare = 0.3;
+
+	/** Where clouds are. Also in Shaders/Clouds.hlsli. */
+	inline constexpr double CloudBottom = 1700.0;
+	inline constexpr double CloudTop = 3100.0;
+
+	/** How much lightning a cloud holds, in kg/m3, before it breaks through the air. */
+	inline constexpr double MagicBreakdown = 0.08;
+
+	/** What a bolt brings down to each cell of the gas along its channel, in kg/m3 and in kg. */
+	inline constexpr double MagicChannelDensity = 30.0;
+	inline constexpr double MagicChannelAmount = MagicChannelDensity * 64.0;
+
+	/** What magic can be. It all flows as one: the aspect only says what a kilogram of it does. */
 	enum class EMagicType : std::uint8_t
 	{
-		Earth,  // brown; at home in the ground, so it lies thin over land and thinner away from it
-		Water,  // blue; the same for the sea
-		Air,    // green turquoise; at home in the open, thin everywhere, and the only kind that gets dense, around the wells
-		Nature, // dark green; only close to plants, and very weak even there
+		Earth,   // brown; from land and rock, which lie in it, so it fades away with height
+		Water,   // blue; the same from the sea
+		Air,     // green turquoise; from the air, slowly, so about half of what is up there has it
+		Nature,  // dark green; from plants, and very weak even among them
+		Fire,    // orange; from what is very hot, the more of it and the hotter the more
+		Lightning, // violet; fire magic under pressure
+		Light,   // white; fire magic under more pressure still
+		Neutral, // what all magic is until something gives it an aspect
 		Count
 	};
+
+	/** Pressures of magic in Pa, its density times its sound speed squared, that take fire to its other forms. */
+	inline constexpr double MagicLightningPressure = 125.0; // 5 kg/m3
+	inline constexpr double MagicLightPressure = 200.0;     // 8 kg/m3
 
 	inline constexpr int MagicTypeCount = static_cast<int>(EMagicType::Count);
 
@@ -223,7 +290,108 @@ namespace Teinora::Sim
 		}
 
 		double Get(EMagicType Type) const { return Amounts[static_cast<int>(Type)]; }
+
+		/** All of it that has an aspect, which is all that matter feels. */
+		double GetAspected() const { return GetTotal() - Get(EMagicType::Neutral); }
+
+		/** All of the one aspect of fire, whatever form it has. */
+		double GetAllFire() const { return Get(EMagicType::Fire) + Get(EMagicType::Lightning) + Get(EMagicType::Light); }
 	};
+
+	/** Something hot enough to give magic the aspect of fire. */
+	struct HotSpot
+	{
+		Vec3 Position;
+		double Radius = 0.0;      // metres
+		double Depth = 0.0;       // how far it goes down or up from there, in metres
+		double Temperature = 0.0; // degrees Celsius
+		bool bLava = false;       // or else a campfire
+
+		double GetVolume() const { return 3.14159265358979 * Radius * Radius * Depth; }
+	};
+
+	/** The campfires and pools of lava within a few kilometres of a point. */
+	std::vector<HotSpot> FindHotSpots(double X, double Y, std::uint32_t Seed);
+
+	/** How hot the top of the ground gets, in degrees Celsius. SunHeat is 0 at night and about 1 under both suns. */
+	double GetGroundTemperature(double Warmth, ESurface Surface, double SunHeat);
+
+	/** How fast neutral magic takes on the aspect of fire from something hot filling a share of where it is, per second. */
+	double MagicHeatImprint(double Temperature, double VolumeShare);
+
+	/** The same for all the hot spots around a cell of the given size. */
+	double MagicHotImprint(const Vec3& Center, double CellSize, const std::vector<HotSpot>& Spots);
+
+	/** Moves fire magic towards the form that a pressure in Pa gives it. Nothing else changes a form. */
+	void UpdateFireForms(MagicMix& Mix, double Pressure, double Dt);
+
+	/**
+	 * The pressure of water and air magic passing through each other at Speed, in Pa: half of the
+	 * pair's reduced density times the speed squared, which is the energy of that motion per volume.
+	 */
+	double MagicRubPressure(double WaterMagic, double AirMagic, double Speed);
+
+	/** How fast neutral magic takes on the aspect of fire from that rubbing, per second. */
+	double MagicRubImprint(double RubPressure);
+
+	/** How fast neutral magic takes on the aspect of water from cloud of this density, from 0 to 1, per second. */
+	double MagicVapourImprint(double Vapour);
+
+	/** How many kg/m3 of magic cloud of this density holds to itself, on top of what the air has. */
+	double MagicHeldByVapour(double Vapour);
+
+	/** How fast the air rises through a cloud so many metres deep, in m/s. Only tall ones churn. */
+	double CloudUpdraft(double Depth);
+
+	/** What wind in m/s does to fire magic: more fire than the wind brings air magic grows on it, and less is blown away. */
+	void UpdateFireInWind(MagicMix& Mix, double WindSpeed, double Dt);
+
+	/** How many kg/m3 of fire magic, in all its forms together, it takes to light what grows or boil water. */
+	inline constexpr double MagicFierceFire = 8.5;
+
+	/** Spends fire magic on boiling water, back to neutral, if there is enough of it. Returns how many kg/m3 went. */
+	double BoilWater(MagicMix& Mix, double Dt);
+
+	/** Whether something grows here that can burn. */
+	bool CanBurn(double X, double Y, std::uint32_t Seed);
+
+	/** The push of air swelling out of where fire magic warms it, on a body of this volume. FireSlope is how that magic rises per metre. */
+	Vec3 FireBlast(const Vec3& FireSlope, double Volume);
+
+	/** How fast the air it has warmed rises, in m/s. */
+	double FireUpdraft(double FireMagic);
+
+	/** Seconds for an aspect to fall to about a third, out of contact with what gave it. */
+	double MagicFadeTime(EMagicType Type);
+
+	struct MagicGround;
+
+	/** How fast neutral magic takes on each aspect at a height over the land or water, per second. */
+	MagicMix MagicImprint(double HeightAboveSurface, const MagicGround& Ground);
+
+	/** How much of the stream's speed is left at a height over the land or water, from 0 to 1. */
+	double MagicSlowing(double HeightAboveSurface);
+
+	/** Advances what neutral magic takes on and what aspects lose. Nothing else changes an aspect, and the total stays as it is. */
+	void UpdateMagicAspects(MagicMix& Mix, const MagicMix& Imprint, double Dt);
+
+	/** The stream of aspected magic against a body, as air would push on it. Relative is the magic's speed past it. */
+	Vec3 MagicDrag(const MagicMix& Mix, const Vec3& Relative, double DragCoefficient, double FrontalArea);
+
+	/** Water magic carrying a body along with it. */
+	Vec3 MagicViscosity(double WaterMagic, const Vec3& Relative, double Radius);
+
+	/** Air magic pushing a body from where it is dense to where it is thin. Slope is its rise per metre. */
+	Vec3 MagicPressure(const Vec3& AirSlope, double Volume);
+
+	/** Earth magic holding a body to the ground under it, which fades within a metre or two of it. */
+	Vec3 MagicCling(double EarthMagic, double Clearance, const Vec3& GroundNormal, double Mass);
+
+	/** What natural magic does to the stiffness of what grows, at least 1. */
+	double MagicStiffening(double NatureMagic);
+
+	/** What earth magic does to a body's resistance to rolling, at least 1. */
+	double MagicGrip(double EarthMagic);
 
 	/** A place the world wells up with air magic, in a dense cloud around Position. */
 	struct MagicWell
@@ -240,8 +408,11 @@ namespace Teinora::Sim
 	struct MagicGround
 	{
 		double Surface = 0.0; // height of the land or the water
+		bool bWater = false;  // which of those it is
 		double Land = 0.0;    // how much this counts as land rather than sea, from 0 to 1
 		double Plants = 0.0;  // how much grows here, from 0 to 1
+		double Cool = 0.0;    // how warm the ground is with no sun on it, in degrees Celsius
+		double Sunned = 0.0;  // and how many degrees the suns add to that at most
 	};
 
 	/** How much a ground height counts as land rather than sea, from 0 to 1. */

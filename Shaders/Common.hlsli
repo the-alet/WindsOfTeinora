@@ -28,6 +28,9 @@
 	float4 LiquidArea;     // xy corner of the patch of moving water, relative to the camera; z one over its span; w 1 when there is anything in it
 	float4 PlantPoints[8]; // what has been moved of a plant, relative to the camera; w how far around that the move reaches
 	float4 PlantMoves[8];  // and by how much
+	float4 HotPoints[8];   // what burns near the camera, relative to it; w how tall its flames are
+	float4 HotLights[8];   // the light that gives; w how far it reaches, 0 past the last of them
+	float4 BoltFlash;      // where lightning is lighting up the clouds, relative to the camera; w how brightly
 };
 
 [[vk::binding(1, 0)]] cbuffer PassData : register(b1)
@@ -68,6 +71,14 @@ float3 SkyColor(float3 Direction)
 	const float Sun2Amount = saturate(dot(Direction, Sun2Direction.xyz));
 	Color += Sun2Color.rgb * (pow(Sun2Amount, 6.0) * 0.04 + pow(Sun2Amount, 48.0) * 0.12);
 
+	// The air holds on to a little of the planet's light at night, more along the horizon and around the planet.
+	const float Night = GetNight();
+	if (Night > 0.0)
+	{
+		const float Toward = saturate(dot(Direction, PlanetDirection.xyz));
+		Color += (PlanetColor.rgb * 0.08 + float3(0.004, 0.006, 0.012)) * (0.55 + 0.1 * GetAirMass(Up)) * (1.0 + 1.5 * pow(Toward, 6.0)) * Night;
+	}
+
 	// Below the horizon the sky fades into distant haze rather than a hard line.
 	return lerp(Color, SkyHorizon.rgb * 0.75, saturate(-Direction.z * 6.0));
 }
@@ -79,7 +90,7 @@ float3 ApplyFog(float3 Color, float3 Relative)
 
 	// Exponential height fog, thicker in the valleys.
 	const float Height = max(CameraPosition.z + Relative.z * 0.5, 0.0);
-	const float Density = Options.w * exp(-Height * 0.002);
+	const float Density = Options.w * exp(-Height * 0.002) * (1.0 + GetNight()); // the night air shows more of what it holds
 	const float Amount = 1.0 - exp(-Distance * Density);
 
 	return lerp(Color, SkyColor(float3(Direction.xy, max(Direction.z, 0.02))), Amount);

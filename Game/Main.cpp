@@ -11,6 +11,7 @@
 #include "Rhi/Rhi.h"
 #include "Settings.h"
 #include "StarMap.h"
+#include "Storms.h"
 #include "SurfaceTextures.h"
 #include "TeinoraSim.h"
 #include "WorldMap.h"
@@ -69,6 +70,8 @@ namespace
 		int Throws = 0;             // balls thrown during an automated run
 		double ThrowHold = 2.0;     // and how many seconds of holding each one stands for
 		bool bMagicView = false;    // starts in the magic view
+		double Strike = 0.0;        // an automated run ends with a bolt this far ahead
+		int StrikeFrame = -1;       // or has it at this frame
 	};
 
 	bool StartsWith(const char* Text, const char* Prefix)
@@ -128,6 +131,14 @@ namespace
 			else if (StartsWith(Argument, "--throw-hold="))
 			{
 				Result.ThrowHold = std::atof(Argument + 13);
+			}
+			else if (StartsWith(Argument, "--strike-frame="))
+			{
+				Result.StrikeFrame = std::atoi(Argument + 15);
+			}
+			else if (StartsWith(Argument, "--strike="))
+			{
+				Result.Strike = std::atof(Argument + 9);
 			}
 			else if (std::strcmp(Argument, "--magic") == 0)
 			{
@@ -234,6 +245,7 @@ namespace
 	{
 		bool bMagic = false;       // whether there is magic to report at all
 		Sim::MagicMix Magic;       // at the camera
+		StormField::Reading Cloud; // over the camera
 		bool bMagicView = false;
 		double ThrowCharge = -1.0; // share of the strongest throw while the button is held, otherwise below zero
 	};
@@ -251,7 +263,7 @@ namespace
 
 		constexpr Float4 Magic{ 0.70f, 1.0f, 0.42f, 1.0f };
 
-		char Lines[4][256];
+		char Lines[5][256];
 		std::snprintf(Lines[0], sizeof(Lines[0]), "%s | %s | %.0f FPS | %.1f M triangles", Rhi::GetBackendName(Device.GetBackend()), Device.GetAdapterName().c_str(),
 			FramesPerSecond, static_cast<double>(Output.GetTriangleCount()) / 1e6);
 		if (const char* Upscaler = Output.GetUpscalerName())
@@ -272,11 +284,14 @@ namespace
 		std::snprintf(Lines[2], sizeof(Lines[2]), "Position %.0f, %.0f   Altitude %.0f m   Bodies %zu, awake %zu, contacts %zu",
 			Camera.Position.X, Camera.Position.Y, Camera.Position.Z, World.GetPropCount(), Physics.GetAwakeCount(), Physics.GetContactCount());
 
-		std::snprintf(Lines[3], sizeof(Lines[3]), "Magic density %.3f kg/m3: earth %.3f, water %.3f, air %.3f, nature %.3f%s", Extras.Magic.GetTotal(),
+		std::snprintf(Lines[3], sizeof(Lines[3]), "Magic density %.3f kg/m3: earth %.3f, water %.3f, air %.3f, nature %.3f, fire %.3f, neutral %.3f%s", Extras.Magic.GetTotal(),
 			Extras.Magic.Get(Sim::EMagicType::Earth), Extras.Magic.Get(Sim::EMagicType::Water), Extras.Magic.Get(Sim::EMagicType::Air), Extras.Magic.Get(Sim::EMagicType::Nature),
-			Extras.bMagicView ? "   Magic view" : "");
+			Extras.Magic.GetAllFire(), Extras.Magic.Get(Sim::EMagicType::Neutral), Extras.bMagicView ? "   Magic view" : "");
 
-		const int LineCount = Extras.bMagic ? 4 : 3;
+		std::snprintf(Lines[4], sizeof(Lines[4]), "Cloud above %.0f m deep: water %.3f, air %.3f, passing at %.0f m/s, rubbing %.0f Pa, lightning %.3f of %.2f", Extras.Cloud.CloudDepth,
+			Extras.Cloud.Mix.Get(Sim::EMagicType::Water), Extras.Cloud.Mix.Get(Sim::EMagicType::Air), Extras.Cloud.Speed, Extras.Cloud.Rubbing, Extras.Cloud.Mix.Get(Sim::EMagicType::Lightning), Sim::MagicBreakdown);
+
+		const int LineCount = Extras.bMagic ? 5 : 3;
 
 		float Width = 0.0f;
 		for (int Index = 0; Index < LineCount; ++Index)
@@ -288,7 +303,7 @@ namespace
 		float Y = Margin + Padding;
 		for (int Index = 0; Index < LineCount; ++Index)
 		{
-			Output.DrawText(Margin + Padding, Y, Size, Lines[Index], Index == 3 ? Magic : (Index == 2 ? Soft : Bright));
+			Output.DrawText(Margin + Padding, Y, Size, Lines[Index], Index >= 3 ? Magic : (Index == 2 ? Soft : Bright));
 			Y += Line;
 		}
 
@@ -419,7 +434,8 @@ int main(int ArgumentCount, char** Arguments)
 	const SurfaceTextures Surfaces = MakeSurfaceTextures(SurfaceTextureSize);
 	Output.SetSurfaceTextures(static_cast<std::uint32_t>(Surfaces.Size), static_cast<std::uint32_t>(Surfaces.Mips), static_cast<std::uint32_t>(Surfaces.Layers),
 		Surfaces.Colors.data(), Surfaces.Normals.data());
-	Output.SetCloudNoise(MakeCloudNoise(CloudNoiseSize).data(), static_cast<std::uint32_t>(CloudNoiseSize));
+	std::vector<std::uint8_t> CloudNoise = MakeCloudNoise(CloudNoiseSize);
+	Output.SetCloudNoise(CloudNoise.data(), static_cast<std::uint32_t>(CloudNoiseSize));
 	const std::vector<SkyStar> Stars = MakeStarMap(Sim::WorldSeed);
 	Output.SetStarMap(Stars.data(), static_cast<std::uint32_t>(Stars.size()));
 
@@ -428,12 +444,16 @@ int main(int ArgumentCount, char** Arguments)
 	GameWorld World(Terrain, Physics, Settings.GetViewRadius(), Settings.Render.GeometryDetail);
 
 	std::unique_ptr<MagicSimulation> Magic;
+	std::unique_ptr<StormField> Storms;
 	if constexpr (Sim::bMagicEnabled)
 	{
 		Magic = std::make_unique<MagicSimulation>(Sim::WorldSeed);
+		Storms = std::make_unique<StormField>(Sim::WorldSeed, std::move(CloudNoise), CloudNoiseSize, Sim::CloudBottom, 1.0 / 80000.0);
 	}
 	MagicVolume NearMagic;
 	MagicVolume FarMagic;
+	std::vector<MagicPush> MagicPushes;
+	World.SetMagic(&NearMagic);
 	bool bMagicView = Magic != nullptr && Launch.bMagicView;
 	float MagicFade = bMagicView ? 1.0f : 0.0f;
 
@@ -464,6 +484,11 @@ int main(int ArgumentCount, char** Arguments)
 	std::vector<ObjectDraw> Objects;
 	std::vector<WaterDraw> Waters;
 	std::vector<PlantMove> PlantMoves;
+	std::vector<HotLight> HotLights;
+	std::vector<PuffDraw> Puffs;
+	std::vector<FireContact> FireContacts;
+	std::vector<BoltDraw> Bolts;
+	std::vector<BoltStrike> Strikes;
 	bool bLiquidShown = false;
 	std::uint32_t RenderedWidth = DeviceDesc.Width;
 	std::uint32_t RenderedHeight = DeviceDesc.Height;
@@ -557,7 +582,9 @@ int main(int ArgumentCount, char** Arguments)
 
 		if (Magic != nullptr)
 		{
-			Magic->Advance(Camera.Position, World.GetAirDrift(), SimTime);
+			World.TakeMagicPushes(MagicPushes);
+			Magic->AddPushes(MagicPushes);
+			Magic->Advance(Camera.Position, World.GetAirDrift(), SimTime, GetSunHeat(Clock.Hour, Clock.Day));
 			if (Magic->TakeNear(NearMagic))
 			{
 				const double Span = NearMagic.CellSize;
@@ -571,6 +598,9 @@ int main(int ArgumentCount, char** Arguments)
 					FarMagic.Corner, Vec3{ FarMagic.SizeX * Span, FarMagic.SizeY * Span, FarMagic.SizeZ * Span });
 			}
 			MagicFade += ((bMagicView ? 1.0f : 0.0f) - MagicFade) * std::min(static_cast<float>(Dt) * 7.0f, 1.0f);
+
+			Magic->TakeContacts(FireContacts);
+			World.ReceiveFire(FireContacts, SimTime);
 		}
 
 		const Vec3 Wind = Sim::WindAt(Camera.Position, SimTime, Sim::WorldSeed);
@@ -579,8 +609,32 @@ int main(int ArgumentCount, char** Arguments)
 			WindOffset += Wind * Dt;
 		}
 
+		if (Storms != nullptr)
+		{
+			Storms->Update(Camera.Position, WindOffset, Wind, Settings.Render.bClouds ? Settings.World.CloudCover : 0.0, SimTime);
+			if (Launch.Strike > 0.0 && SettledFrames == (Launch.StrikeFrame >= 0 ? Launch.StrikeFrame : Launch.Frames - 3))
+			{
+				Storms->ForceStrike(Camera.Position + Camera.GetGaze() * Launch.Strike);
+			}
+			Storms->TakeStrikes(Strikes);
+			for (const BoltStrike& Strike : Strikes)
+			{
+				World.ReceiveStrike(Strike.Point, SimTime);
+				for (const Vec3& Along : Strike.Channel)
+				{
+					Magic->AddDeposit({ Along, Sim::EMagicType::Lightning, Sim::MagicChannelDensity });
+				}
+			}
+			Storms->CollectBolts(Bolts);
+			Magic->SetBurning(World.GetBurning());
+		}
+
 		HudExtras Extras;
 		Extras.bMagic = Magic != nullptr;
+		if (Storms != nullptr)
+		{
+			Extras.Cloud = Storms->Read(Camera.Position);
+		}
 		Extras.Magic = NearMagic.GetMix(Camera.Position);
 		Extras.bMagicView = bMagicView;
 		Extras.ThrowCharge = ThrowHeld >= 0.0 ? Sim::ThrowSpeedAfterHold(ThrowHeld) / Sim::MaxThrowSpeed : -1.0;
@@ -651,6 +705,12 @@ int main(int ArgumentCount, char** Arguments)
 			bLiquidShown = true;
 		}
 		World.GetPlants().CollectMoves(Camera.Position, PlantMoves, 8);
+		World.CollectHotLights(Camera.Position, HotLights, 8);
+		if (Storms != nullptr)
+		{
+			Storms->AddFlashes(HotLights, 8);
+		}
+		World.CollectPuffs(Camera.Position, Puffs, 160);
 
 		SceneView View;
 		View.CameraPosition = Camera.Position;
@@ -667,6 +727,10 @@ int main(int ArgumentCount, char** Arguments)
 		View.Objects = &Objects;
 		View.Waters = &Waters;
 		View.PlantMoves = &PlantMoves;
+		View.HotLights = &HotLights;
+		View.Puffs = &Puffs;
+		View.Bolts = &Bolts;
+		View.FlashStrength = Storms != nullptr ? Storms->GetCloudFlash(View.FlashPoint) : 0.0;
 		View.CameraDepth = bUnderwater ? WaterTop - Camera.Position.Z : 0.0;
 		View.WaveHeight = Settings.World.WaveHeight;
 		View.CloudCover = Settings.World.CloudCover;
