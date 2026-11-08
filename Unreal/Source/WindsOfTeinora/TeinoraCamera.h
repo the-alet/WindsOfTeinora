@@ -41,6 +41,9 @@ public:
 	void ShowMagic(float ViewAmount, bool bBends, UTexture2D* NearAtlas, UTexture2D* FarAtlas, const Teinora::Vec3& NearCorner, const Teinora::Vec3& NearSize,
 		const Teinora::Vec3& FarCorner, const Teinora::Vec3& FarSize, double Time);
 
+	/** Feeds the rain: how hard it falls, how far the wind slants it across the view, and the time it falls by. */
+	void ShowRain(float Amount, float Slant, double Time);
+
 private:
 	void ReadInput(const ATeinoraController& Player, double Dt);
 	void UpdateFocus();
@@ -56,6 +59,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> UnderwaterMaterial;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> RainMaterial;
 
 	Teinora::Vec3 Eye;
 	Teinora::Gaze View;

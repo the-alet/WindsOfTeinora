@@ -151,18 +151,6 @@ void ATeinoraController::PlayerTick(float DeltaTime)
 		}
 	}
 
-	// What can be set down where the eye rests.
-	const FKey PlaceKeys[] ={ EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four };
-	for (int32 Index = 0; Index < UE_ARRAY_COUNT(PlaceKeys); ++Index)
-	{
-		const ATeinoraCamera* Eye = Cast<ATeinoraCamera>(GetPawn());
-		ATeinoraWorld* World = GetTeinoraWorld();
-		if (WasInputKeyJustPressed(PlaceKeys[Index]) && Eye != nullptr && World != nullptr)
-		{
-			World->PlaceByKey(Index + 1, Eye->GetEye(), Eye->GetLineOfSight());
-		}
-	}
-
 	// The longer the button stays down, the harder the ball goes when it comes up.
 	if (WasInputKeyJustPressed(EKeys::LeftMouseButton))
 	{

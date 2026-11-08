@@ -10,18 +10,23 @@
 // Magic passes through land and water like anything else, slowed by them. What it passes through
 // gives neutral magic an aspect, and away from there the aspect fades, by the rules in TeinoraSim.h,
 // so nothing here says where any aspect should be. The world only keeps up the total density: matter
-// holds magic to itself just hard enough to balance the pressure of that, and the wells feed it.
+// holds magic to itself just hard enough to balance the pressure of that, the wells feed it, and heat
+// gathers more around itself. The inertia of a cell is that of its mix, each kind as inert as
+// Sim::MagicInertness says, and each kind soaks into its neighbours the faster the less inert it is.
 #pragma once
 
 #include "Core/Math.h"
 #include "Core/ThreadPool.h"
+#include "Render/SceneTypes.h"
 #include "TeinoraSim.h"
 
+#include <array>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -33,7 +38,7 @@ namespace Teinora
 		// Red holds the square root of the total density over this scale, which keeps thin magic
 		// from vanishing in eight bits. The rest holds the colour of the mix, lit up a little
 		// where the gas spins, so the renderers need not know the kinds of magic.
-		static constexpr double DensityScale = 24.0;
+		static constexpr double DensityScale = 120.0; // well over the dew point, as wells and bolts are
 
 		int SizeX = 0;
 		int SizeY = 0;
@@ -120,8 +125,11 @@ namespace Teinora
 		/** Adds magic from elsewhere to the cell around a point, if it is in the grid. */
 		void Deposit(const MagicDeposit& Deposit);
 
-		/** What is burning that was not always there, which gives the magic around it the aspect of fire. */
+		/** What is burning that was not always there, which draws magic around it and gives it the aspect of fire. */
 		void SetBurning(const std::vector<Sim::HotSpot>& Spots) { Burning = Spots; }
+
+		/** Where the drops of light magic from the suns and the planet are coming from, see GetLightDropSources. */
+		void SetLightDrops(const std::array<LightDropSource, 3>& Sources) { DropSources = Sources; }
 
 		/** Adds on where dense fire has met plants or water since the last call. */
 		void TakeContacts(std::vector<FireContact>& Out);
@@ -145,9 +153,9 @@ namespace Teinora
 		void UpdateVelocity(float Dt);
 		void RestoreAmount(float Dt);
 		void UpdateAspects(float Dt);
-		void ApplyBurning(float Dt);
+		void GatherHeat();
+		void RainLight(float Dt);
 		void ActOnMatter(float Dt);
-		void RefreshHotImprints();
 		bool IsInGrid(const Vec3& Position) const;
 		void Transport(int Axis, float Dt);
 		void ParallelFor(int Count, const std::function<void(int)>& Body);
@@ -173,12 +181,19 @@ namespace Teinora
 		std::vector<Sim::MagicWell> Wells;
 		std::vector<Sim::HotSpot> HotSpots;
 		std::vector<Sim::HotSpot> Burning;
+		std::array<LightDropSource, 3> DropSources{};
+		std::mt19937 Dice{ 0x5eed1u };
 		std::vector<FireContact> Contacts;
 		double SunHeat = 0.0;
 		double WindSpeed = 0.0;
 		std::vector<float> Amounts[Sim::MagicTypeCount];
 		std::vector<float> Imprints[Sim::MagicTypeCount]; // per second, by what is in each cell
 		std::vector<float> Wanted;  // the density the world keeps up, which matter holds in place
+		std::vector<float> HotWanted; // and what heat gathers on top of that, which comes as fire, rule 13
+		std::vector<float> HotRate;   // how fast that heat gives neutral magic the aspect of fire, per second
+		std::vector<int> HotCells;    // the cells those two are not nothing in
+		std::vector<float> Inertness; // of the mix in each cell, its kinds weighed by their amounts
+		std::vector<float> Thickness; // and how much it holds back motion that differs from its neighbours'
 		std::vector<float> Slowing; // the share of the stream's speed left in each cell
 		std::vector<float> GroundCool;   // how warm the ground is in each cell, in degrees
 		std::vector<float> GroundSunned; // and what the suns add to that, where there is ground to heat
@@ -225,6 +240,9 @@ namespace Teinora
 		/** What is burning that was not always there. */
 		void SetBurning(const std::vector<Sim::HotSpot>& Spots);
 
+		/** Where drops of light magic are coming from now, see GetLightDropSources. */
+		void SetLightDrops(const std::array<LightDropSource, 3>& Sources);
+
 		/** Hands over where dense fire has met plants or water since the last call. */
 		void TakeContacts(std::vector<FireContact>& Out);
 
@@ -255,6 +273,7 @@ namespace Teinora
 		std::vector<MagicPush> Pending;
 		std::vector<MagicDeposit> PendingDeposits;
 		std::vector<Sim::HotSpot> PendingBurning;
+		std::array<LightDropSource, 3> PendingDrops{};
 		std::vector<FireContact> FinishedContacts;
 		bool bStarted = false;
 		bool bReady = false;

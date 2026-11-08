@@ -35,6 +35,7 @@
 	float4 CloudDrift;     // xy how far the wind aloft has carried the clouds, wrapped to 4096 m; z how far they have changed, from 0 to 1
 	float4 SkyShift;       // what to add to a direction from the sky's middle to see it from the camera, see SeenFrom in SceneTypes.h
 	float4 Coronas[2];     // the light of each sun's corona, which the planet in front of a sun does not take away
+	float4 Weather;        // x how hard it rains, from 0 to 1, y how stormy, z how far the wind slants the rain across the screen, w unused
 };
 
 [[vk::binding(1, 0)]] cbuffer PassData : register(b1)
@@ -92,12 +93,17 @@ float3 ApplyFog(float3 Color, float3 Relative)
 	const float Distance = length(Relative);
 	const float3 Direction = Relative / max(Distance, 0.001);
 
-	// Exponential height fog, thicker in the valleys.
+	// Exponential height fog, thicker in the valleys, and in rain.
+	const float Night = GetNight();
 	const float Height = max(CameraPosition.z + Relative.z * 0.5, 0.0);
-	const float Density = Options.w * exp(-Height * 0.002) * (1.0 + GetNight()); // the night air shows more of what it holds
+	const float Density = Options.w * exp(-Height * 0.002) * (1.0 + 0.3 * Night) * (1.0 + 2.5 * Weather.x);
 	const float Amount = 1.0 - exp(-Distance * Density);
 
-	return lerp(Color, SkyColor(float3(Direction.xy, max(Direction.z, 0.02))), Amount);
+	// By day the air in front of a far hill glows as the sky does. At night the little light there is comes
+	// from the whole depth of the sky behind a hill, and the few kilometres of air in front of it hold far
+	// less: a hill stands against the night sky as a dark shape rather than fading into its glow.
+	const float3 Air = SkyColor(float3(Direction.xy, max(Direction.z, 0.02))) * lerp(1.0, 0.35, Night);
+	return lerp(Color, Air, Amount);
 }
 
 // Must match Teinora::Sim::WaterHeight. A whole number of cycles fits in 4096 m,

@@ -528,7 +528,7 @@ def make_puff():
     material.set_editor_property('two_sided', True)
     material.set_editor_property('cast_ray_traced_shadows', False)
 
-    shared = ('Place', 'Look', 'WorldTime')
+    shared = ('Place', 'Look', 'WorldTime', 'Glow')
     # Lit from above by the sky and the suns, and from below by the fire under it: FlameLight is the standalone
     # game's flame colour, by the same 0.43 that M_Flame is dimmer by here.
     lit = '''
@@ -537,18 +537,37 @@ float3 Above = Light.rgb * (0.55 + 0.3 * Top + 0.5 * Billows);
 float3 Below = float3(2.6, 1.1, 0.3) * 0.43 * Shade.y * (0.5 - 0.25 * Top);
 return (Above + Below) * Shade.x;
 '''
-    color = custom_node(material, PUFF_BODY + lit, shared + ('Light', 'Shade'), -300, 0)
-    thickness = custom_node(material, PUFF_BODY + 'return Body * Look.x;', shared, -300, 300)
+    # A firefly, as in the standalone game's Shaders/Puffs.hlsl: a bright core in a soft round halo, all its own light
+    # in the colour of light magic. A dithered mask cannot fade, so the halo is the faint ring the mask keeps.
+    firefly_color = '''
+if (Glow.x > 0.0)
+{
+    float Away = length(Place);
+    float Core = exp(-Away * Away * 18.0);
+    return float3(1.0, 0.95, 0.8) * Glow.x * 6.0 * (Core * 2.0 + 0.2);
+}
+'''
+    firefly_mask = '''
+if (Glow.x > 0.0)
+{
+    return saturate(1.0 - length(Place) * 1.6) * 2.0;
+}
+'''
+    color = custom_node(material, firefly_color + PUFF_BODY + lit, shared + ('Light', 'Shade'), -300, 0)
+    thickness = custom_node(material, firefly_mask + PUFF_BODY + 'return Body * Look.x;', shared, -300, 300)
     thickness.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT1)
 
     place = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 0)
     look = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 100)
     look.set_editor_property('coordinate_index', 1)
     time = scalar_parameter(material, 'WorldTime', 0.0, -800, 200)
+    glow = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 500)
+    glow.set_editor_property('coordinate_index', 3)
     for node in (color, thickness):
         link(place, '', node, 'Place')
         link(look, '', node, 'Look')
         link(time, '', node, 'WorldTime')
+        link(glow, '', node, 'Glow')
     link(vector_parameter(material, 'Light', -800, 300), '', color, 'Light')
     shade = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 400)
     shade.set_editor_property('coordinate_index', 2)
@@ -872,6 +891,57 @@ def make_focus():
     finish(material)
 
 
+# A sheet of rain streaks over the view, as Shaders/Tonemap.hlsl draws it. Runs after the scene's tonemap, in sRGB.
+RAIN_CODE = '''
+float2 Uv = GetViewportUV(Parameters);
+float3 Color = Scene.rgb;
+if (Rain <= 0.001)
+{
+    return Color;
+}
+struct Drops
+{
+    uint Hash(int3 Cell)
+    {
+        uint Mixed = uint(Cell.x) * 1597334677u ^ uint(Cell.y) * 3812015801u ^ uint(Cell.z) * 2246822519u;
+        Mixed ^= Mixed >> 15;
+        Mixed *= 2654435769u;
+        Mixed ^= Mixed >> 13;
+        return Mixed;
+    }
+};
+Drops Library;
+float3 Lit = float3(0.62, 0.68, 0.78) * 1.4;
+float2 Size = Parameters.ViewSizeAndInvSize.xy;
+float Aspect = Size.x / Size.y;
+Color = lerp(Color, dot(Color, float3(0.333, 0.333, 0.333)).xxx, 0.25 * Rain) * (1.0 - 0.2 * Rain);
+for (int Layer = 0; Layer < 5; ++Layer)
+{
+    float Distance = 1.3 + float(Layer) * 5.7;
+    float Across = 1.2 * Distance;
+    float Columns = clamp(Across / 0.09, 24.0, 420.0);
+    float Rows = Columns * 0.35;
+    float Falling = 9.0 / Across * Aspect;
+    float2 Place = float2(Uv.x * Aspect, Uv.y);
+    Place.x += Place.y * Slant;
+    float Column = floor(Place.x * Columns / Aspect);
+    uint Own = Library.Hash(int3(int(Column), Layer, 7));
+    float Down = Place.y * Rows - RainTime * Falling * Rows + float(Own & 1023u) / 1023.0 * 17.0;
+    uint Drop = Library.Hash(int3(int(Column), int(floor(Down)), Layer));
+    if (float(Drop & 65535u) / 65535.0 > Rain * 0.55)
+    {
+        continue;
+    }
+    float Where = 0.2 + 0.6 * float((Drop >> 16) & 255u) / 255.0;
+    float Side = abs(frac(Place.x * Columns / Aspect) - Where);
+    float Along = frac(Down);
+    float Streak = (1.0 - smoothstep(0.03, 0.09, Side)) * (Along < 0.55 ? 1.0 - Along / 0.55 : 0.0);
+    Color = lerp(Color, Lit, Streak * (0.45 - 0.06 * float(Layer)));
+}
+return Color;
+'''
+
+
 # The standalone game's Shaders/Magic.hlsl and the magic part of its Tonemap.hlsl, in one
 # pass. The boxes of magic arrive as sheets of slices, and the rays run in that game's axes.
 MAGIC_CODE = '''
@@ -887,7 +957,7 @@ struct Sheets
         float2 A = (float2(fmod(First, Columns), floor(First / Columns)) + Inside) / Shape;
         float2 B = (float2(fmod(Next, Columns), floor(Next / Columns)) + Inside) / Shape;
         float4 Texel = lerp(Sheet.SampleLevel(Filter, A, 0.0), Sheet.SampleLevel(Filter, B, 0.0), Slice - First);
-        float Density = Texel.r * Texel.r * 24.0;
+        float Density = Texel.r * Texel.r * 120.0; // MagicVolume::DensityScale
         return float4(Density, Texel.gba * Density);
     }
 };
@@ -935,10 +1005,11 @@ for (int Index = 0; Index < 44 && Near < Limit; ++Index)
     float Density = Sampled.x;
     if (Density > 0.0001)
     {
-        float Taken = (1.0 - exp(-Density * 0.0035 * Span)) * (1.0 - smoothstep(70.0, 100.0, Near));
+        // As Hiding in Shaders/Magic.hlsl, and bending from the dew point, Sim::MagicDewPoint, up.
+        float Taken = (1.0 - exp(-Density * 0.0035 / (1.0 + Density / 20.0) * Span)) * (1.0 - smoothstep(70.0, 100.0, Near));
         Glow += Sampled.yzw / Density * Clear * Taken;
         Clear *= 1.0 - Taken;
-        Dense += saturate((Density - 5.5) / 2.5) * Span;
+        Dense += saturate((Density - 30.0) / 13.6) * Span;
     }
     Near = Far;
 }
@@ -1104,7 +1175,7 @@ if (dot(Way, PlanetWay) > 0.85 && PlanetWay.z > -0.25)
 {
     float3 Across = normalize(cross(PlanetAxis, PlanetWay));
     float3 Up = cross(PlanetWay, Across);
-    float2 Spot = float2(dot(Way, Across), dot(Way, Up)) / 0.04; // PlanetSize in Engine/Render/SceneTypes.h
+    float2 Spot = float2(dot(Way, Across), dot(Way, Up)) / 0.035; // PlanetSize in Engine/Render/SceneTypes.h
     float Reach = dot(Spot, Spot);
     if (Reach <= 25.0)
     {
@@ -1198,6 +1269,25 @@ def make_sky():
     finish(material)
 
 
+def make_rain():
+    material = begin('M_Rain')
+    material.set_editor_property('material_domain', unreal.MaterialDomain.MD_POST_PROCESS)
+    material.set_editor_property('blendable_location', unreal.BlendableLocation.BL_SCENE_COLOR_AFTER_TONEMAPPING)
+
+    # The standalone game's Shaders/Tonemap.hlsl, without its depth: there the rain falls only in front of
+    # whatever is further than it, here it falls over the whole view.
+    names = ('Rain', 'Slant', 'RainTime', 'Scene')
+    node = custom_node(material, RAIN_CODE, names, -300, 0)
+    scene = materials.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, -100)
+    scene.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
+    link(scene, 'Color', node, 'Scene')
+    link(scalar_parameter(material, 'Rain', 0.0, -700, 100), '', node, 'Rain')
+    link(scalar_parameter(material, 'Slant', 0.0, -700, 200), '', node, 'Slant')
+    link(scalar_parameter(material, 'RainTime', 0.0, -700, 300), '', node, 'RainTime')
+    connect(node, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    finish(material)
+
+
 def make_magic():
     material = begin('M_Magic')
     material.set_editor_property('material_domain', unreal.MaterialDomain.MD_POST_PROCESS)
@@ -1242,3 +1332,5 @@ make_underwater()
 make_focus()
 make_sky()
 make_magic()
+make_rain()
+make_rain()

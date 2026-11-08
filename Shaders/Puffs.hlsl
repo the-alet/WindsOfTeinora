@@ -11,17 +11,21 @@ struct Varyings
 	float3 Relative : TEXCOORD0;
 	float2 Place : TEXCOORD1; // from -1 to 1 across the sheet
 	float4 Look : TEXCOORD2;  // x how thick it is, y a number of its own, z how much light it gives back, w how much firelight reaches it
+	float2 Own : TEXCOORD3;   // x the light of its own, which makes it a firefly
 };
 
 static const float3 FlameLight = float3(2.6, 1.1, 0.3); // FlameLightRed and so on in Engine/Render/SceneTypes.h
+static const float3 MagicLight = float3(1.0, 0.95, 0.8); // the colour of light magic, warm white
+static const float GlowScale = 6.0;                       // a firefly against a dim day sky is a bright speck
 
-Varyings VSMain(float3 Position : TEXCOORD0, float2 Place : TEXCOORD1, float4 Look : TEXCOORD2)
+Varyings VSMain(float3 Position : TEXCOORD0, float2 Place : TEXCOORD1, float4 Look : TEXCOORD2, float2 Own : TEXCOORD3)
 {
 	Varyings Output;
 	Output.Clip = mul(ViewProjection, float4(Position, 1.0));
 	Output.Relative = Position;
 	Output.Place = Place;
 	Output.Look = Look;
+	Output.Own = Own;
 	return Output;
 }
 
@@ -46,6 +50,15 @@ float GetNoise(float2 Place)
 
 float4 PSMain(Varyings Input) : SV_Target
 {
+	// A firefly: a bright core in a soft round halo, all its own light.
+	if (Input.Own.x > 0.0)
+	{
+		const float Away = length(Input.Place);
+		const float Halo = saturate(1.0 - Away);
+		const float Core = exp(-Away * Away * 18.0);
+		return float4(MagicLight * Input.Own.x * GlowScale * (Core * 2.0 + Halo * Halo * 0.4), saturate(Halo * Halo * 1.5 + Core));
+	}
+
 	const float Rise = frac(CameraPosition.w * 0.004) * 60.0; // it starts over every few minutes, as flames do
 	const float2 Place = Input.Place + Input.Look.y;
 	const float2 Moving = float2(Place.x, Place.y - Rise);

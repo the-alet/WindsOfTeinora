@@ -13,7 +13,8 @@ namespace Teinora
 		constexpr float DragTime = 1.0f;       // seconds for magic to take up the motion driving it
 		constexpr float RestoreTime = 5.0f;    // seconds for the world to make up the density it keeps
 		constexpr float Confinement = 1.4f;    // per second, how strongly swirls are kept up
-		constexpr float Diffusivity = 3.0f;    // m2/s, how fast magic soaks into its neighbours
+		constexpr float Diffusivity = 3.0f;    // m2/s, how fast neutral magic soaks into its neighbours; the others over their inertness
+		constexpr float ThicknessPerInertness = 0.5f; // m2/s of viscosity per inertness squared: earth 8, light 0.03
 		constexpr float ThinDensity = 0.02f;   // below this, pressure forces no longer grow
 		constexpr float MaxCourant = 0.45f;    // cells per step along an axis, which transport needs below 0.5
 
@@ -217,6 +218,10 @@ namespace Teinora
 		: Seed(InSeed)
 		, Settings(InOptions)
 		, Wanted(CellCount, 0.0f)
+		, HotWanted(CellCount, 0.0f)
+		, HotRate(CellCount, 0.0f)
+		, Inertness(CellCount, 1.0f)
+		, Thickness(CellCount, 0.0f)
 		, Slowing(CellCount, 1.0f)
 		, GroundCool(CellCount, 0.0f)
 		, GroundSunned(CellCount, 0.0f)
@@ -327,8 +332,7 @@ namespace Teinora
 		// Magic goes on under the ground as it lies on top of it, on its way through.
 		const Vec3 Center{ (WorldX + 0.5) * CellSize, (WorldY + 0.5) * CellSize, Height };
 		const Sim::MagicMix Mix = Sim::MagicBaseline(Center, Wells, Below, Seed);
-		Sim::MagicMix Rates = Sim::MagicImprint(Above, Below);
-		Rates.Amounts[static_cast<int>(Sim::EMagicType::Fire)] = Sim::MagicHotImprint(Center, CellSize, HotSpots);
+		const Sim::MagicMix Rates = Sim::MagicImprint(Above, Below); // heat is reckoned each step, see GatherHeat
 		for (int Type = 0; Type < Sim::MagicTypeCount; ++Type)
 		{
 			Amounts[Type][Cell] = static_cast<float>(Mix.Amounts[Type]);
@@ -367,10 +371,9 @@ namespace Teinora
 		}
 		else if (Placed != PlacedSeen)
 		{
-			// A campfire lit since: the cells already in the grid learn of it too.
+			// A campfire lit since.
 			HotSpots = Sim::FindHotSpots(Focus.X, Focus.Y, Seed);
 			PlacedSeen = Placed;
-			RefreshHotImprints();
 		}
 
 		if (!bPlaced)
@@ -524,17 +527,32 @@ namespace Teinora
 
 	void MagicField::AddUpDensity()
 	{
+		float Inert[Sim::MagicTypeCount];
+		float Thick[Sim::MagicTypeCount];
+		for (int Type = 0; Type < Sim::MagicTypeCount; ++Type)
+		{
+			Inert[Type] = static_cast<float>(Sim::MagicInertness(static_cast<Sim::EMagicType>(Type)));
+			Thick[Type] = Inert[Type] * Inert[Type] * ThicknessPerInertness;
+		}
+
 		ParallelFor(GridZ, [&](int Slice)
 		{
 			const int First = Slice * ColumnCount;
 			for (int Cell = First; Cell < First + ColumnCount; ++Cell)
 			{
 				float Total = 0.0f;
-				for (const std::vector<float>& Kind : Amounts)
+				float Inertia = 0.0f;
+				float Holding = 0.0f;
+				for (int Type = 0; Type < Sim::MagicTypeCount; ++Type)
 				{
-					Total += Kind[Cell];
+					const float Amount = Amounts[Type][Cell];
+					Total += Amount;
+					Inertia += Amount * Inert[Type];
+					Holding += Amount * Thick[Type];
 				}
 				Density[Cell] = Total;
+				Inertness[Cell] = Total > 1e-6f ? Inertia / Total : 1.0f;
+				Thickness[Cell] = Total > 1e-6f ? Holding / Total : 0.0f;
 			}
 		});
 	}
@@ -547,7 +565,8 @@ namespace Teinora
 		const float Pressure = SoundSpeed * SoundSpeed; // pressure per unit of density
 		const float MaxSpeed = MaxCourant * Width / Dt;
 		const float Volume = Width * Width * Width;
-		const float Blend = 1.0f - std::exp(-Dt / (DragTime * static_cast<float>(Sim::MagicInertia)));
+		const float Inertia = static_cast<float>(Sim::MagicInertia);
+		const float Soak = Dt / (Width * Width); // of viscosity, per m2/s of it
 
 		ParallelFor(GridZ, [&](int Z)
 		{
@@ -598,12 +617,22 @@ namespace Teinora
 					const int Below = CellIndex(X, Y, Z - 1);
 					const int Above = CellIndex(X, Y, Z + 1);
 
-					const auto Beside = [&](int Cell) { return Density[Cell] - Wanted[Cell]; };
-					const float Amount = std::max(Density[Here], ThinDensity) * Volume * static_cast<float>(Sim::MagicInertia);
+					// Heat gathers magic as matter holds it. What a cell moves is as inert as its mix.
+					const auto Beside = [&](int Cell) { return Density[Cell] - Wanted[Cell] - HotWanted[Cell]; };
+					const float Amount = std::max(Density[Here], ThinDensity) * Volume * Inertia * Inertness[Here];
 					const float ForceScale = -Pressure * Half * Volume / Amount * Dt;
 					NewX += (Beside(Right) - Beside(Left)) * ForceScale;
 					NewY += (Beside(Front) - Beside(Back)) * ForceScale;
 					NewZ += (Beside(Above) - Beside(Below)) * ForceScale;
+
+					// A thick mix drags its neighbours along and is dragged by them: earth is viscous, light hardly at all.
+					const float Sticking = std::min(Thickness[Here] * Soak, 1.0f / 7.0f);
+					if (Sticking > 0.0f)
+					{
+						NewX += (VelocityX[Left] + VelocityX[Right] + VelocityX[Back] + VelocityX[Front] + VelocityX[Below] + VelocityX[Above] - 6.0f * VelocityX[Here]) * Sticking;
+						NewY += (VelocityY[Left] + VelocityY[Right] + VelocityY[Back] + VelocityY[Front] + VelocityY[Below] + VelocityY[Above] - 6.0f * VelocityY[Here]) * Sticking;
+						NewZ += (VelocityZ[Left] + VelocityZ[Right] + VelocityZ[Back] + VelocityZ[Front] + VelocityZ[Below] + VelocityZ[Above] - 6.0f * VelocityZ[Here]) * Sticking;
+					}
 
 					// Vorticity confinement: a push around each swirl, against the numerical
 					// blurring of the grid, directed from the weak side of the swirl to the strong.
@@ -651,6 +680,7 @@ namespace Teinora
 						const float Held = Slowing[Here];
 						const float Fire = Amounts[static_cast<int>(Sim::EMagicType::Fire)][Here];
 						const float Rising = Fire > 1e-5f ? static_cast<float>(Sim::FireUpdraft(Fire) * WindShare) : 0.0f;
+						const float Blend = 1.0f - std::exp(-Dt / (DragTime * Inertia * Inertness[Here])); // the inert take the longest to follow
 						NewX += (Drive(AirX) * Held - NewX) * Blend;
 						NewY += (Drive(AirY) * Held - NewY) * Blend;
 						NewZ += (Drive(AirZ) * Held + Rising - NewZ) * Blend;
@@ -672,6 +702,7 @@ namespace Teinora
 	{
 		const float Share = 1.0f - std::exp(-Dt / RestoreTime);
 		const int Neutral = static_cast<int>(Sim::EMagicType::Neutral);
+		const int Fire = static_cast<int>(Sim::EMagicType::Fire);
 		ParallelFor(GridZ, [&](int Slice)
 		{
 			const int First = Slice * ColumnCount;
@@ -683,11 +714,15 @@ namespace Teinora
 					Total += Kind[Cell];
 				}
 
-				// What the stream brings is neutral. What it takes away goes in the same shares as what is there.
-				const float Change = (Wanted[Cell] - Total) * Share;
+				// What the stream brings is neutral, but what heat draws in comes as fire. What it takes away
+				// goes in the same shares as what is there.
+				const float Kept = Wanted[Cell] + HotWanted[Cell];
+				const float Change = (Kept - Total) * Share;
 				if (Change >= 0.0f)
 				{
-					Amounts[Neutral][Cell] += Change;
+					const float Hot = Kept > 0.0f ? Change * HotWanted[Cell] / Kept : 0.0f;
+					Amounts[Fire][Cell] += Hot;
+					Amounts[Neutral][Cell] += Change - Hot;
 				}
 				else if (Total > 0.0f)
 				{
@@ -715,6 +750,7 @@ namespace Teinora
 					Mix.Amounts[Type] = Amounts[Type][Cell];
 					Rates.Amounts[Type] = Imprints[Type][Cell];
 				}
+				Rates.Amounts[static_cast<int>(Sim::EMagicType::Fire)] += HotRate[Cell];
 
 				// Ground the suns have heated counts as anything else hot, though only its top is.
 				if (GroundSunned[Cell] > 0.0f)
@@ -724,9 +760,12 @@ namespace Teinora
 				}
 
 				Sim::UpdateMagicAspects(Mix, Rates, Dt);
-				if (Mix.GetAllFire() > 1e-7)
+				Sim::UpdateNatureFeeding(Mix, Dt);
+				const double AllFire = Mix.GetAllFire();
+				if (AllFire > 1e-7)
 				{
-					Sim::UpdateFireInWind(Mix, WindSpeed * Slowing[Cell], Dt); // the ground holds the wind back as it does magic
+					// The ground holds the wind back as it does magic. The fire's own draft is not held back.
+					Sim::UpdateFireInWind(Mix, WindSpeed * Slowing[Cell], Sim::FireUpdraft(AllFire), Dt);
 					Sim::UpdateFireForms(Mix, Density[Cell] * Sim::MagicSoundSpeed * Sim::MagicSoundSpeed, Dt);
 				}
 
@@ -741,7 +780,7 @@ namespace Teinora
 	void MagicField::Push(const MagicPush& Push)
 	{
 		const int Cell = FindCell(Push.Position);
-		const double Amount = std::max(static_cast<double>(Density[Cell]), static_cast<double>(ThinDensity)) * CellSize * CellSize * CellSize * Sim::MagicInertia;
+		const double Amount = std::max(static_cast<double>(Density[Cell]), static_cast<double>(ThinDensity)) * CellSize * CellSize * CellSize * Sim::MagicInertia * Inertness[Cell];
 		VelocityX[Cell] += static_cast<float>(Push.Impulse.X / Amount);
 		VelocityY[Cell] += static_cast<float>(Push.Impulse.Y / Amount);
 		VelocityZ[Cell] += static_cast<float>(Push.Impulse.Z / Amount);
@@ -751,6 +790,11 @@ namespace Teinora
 	{
 		const float Courant = Dt / static_cast<float>(CellSize);
 		const float Soaking = Diffusivity * Dt / static_cast<float>(CellSize * CellSize);
+		float Mobility[Sim::MagicTypeCount];
+		for (int Type = 0; Type < Sim::MagicTypeCount; ++Type)
+		{
+			Mobility[Type] = static_cast<float>(1.0 / Sim::MagicInertness(static_cast<Sim::EMagicType>(Type)));
+		}
 		const std::vector<float>& Velocity = Axis == 0 ? VelocityX : (Axis == 1 ? VelocityY : VelocityZ);
 		const int Count = Axis == 0 ? GridX : (Axis == 1 ? GridY : GridZ);
 		const int* Along = Axis == 0 ? MapX : (Axis == 1 ? MapY : MapZ);
@@ -781,14 +825,16 @@ namespace Teinora
 					Blocked[Count + 2] = 1;
 				}
 
-				for (std::vector<float>& Kind : Amounts)
+				for (int Type = 0; Type < Sim::MagicTypeCount; ++Type)
 				{
+					std::vector<float>& Kind = Amounts[Type];
 					for (int Cell = 0; Cell < Count + 4; ++Cell)
 					{
 						Line[Cell] = Kind[Base + Along[Cell]];
 					}
 
-					TransportLine(Line, Speed, Blocked, Count, Courant, Soaking);
+					// Each kind evens itself out, the faster the less inert it is.
+					TransportLine(Line, Speed, Blocked, Count, Courant, Soaking * Mobility[Type]);
 
 					for (int Cell = 2; Cell < Count + 2; ++Cell)
 					{
@@ -811,12 +857,16 @@ namespace Teinora
 			{
 				ComputeAir(AirDrift, Time);
 			}
+		}
+		GatherHeat();
+		if (Settings.bOpen)
+		{
 			RestoreAmount(Span);
 		}
-		ApplyBurning(Span);
 		UpdateAspects(Span);
 		if (Settings.bOpen)
 		{
+			RainLight(Span);
 			ActOnMatter(Span);
 		}
 
@@ -995,30 +1045,159 @@ namespace Teinora
 		}
 	}
 
-	void MagicField::ApplyBurning(float Dt)
+	void MagicField::GatherHeat()
 	{
-		constexpr int Reach = 2; // cells around what burns
+		for (const int Cell : HotCells)
+		{
+			HotWanted[Cell] = 0.0f;
+			HotRate[Cell] = 0.0f;
+		}
+		HotCells.clear();
 
-		const int Fire = static_cast<int>(Sim::EMagicType::Fire);
-		const int Neutral = static_cast<int>(Sim::EMagicType::Neutral);
+		// The world's campfires and lava, and what has caught since, each over the cells it reaches.
+		const auto Gather = [this](const Sim::HotSpot& Spot)
+		{
+			const double Reach = Sim::MagicHotReach(Spot);
+			const Vec3 Local = Spot.Position - GetCellCenter(0, 0, 0);
+			const auto First = [Reach](double At) { return std::max(FloorToInt((At - Reach) / CellSize), 0); };
+			const auto Last = [Reach](double At, int Size) { return std::min(FloorToInt((At + Reach) / CellSize) + 1, Size - 1); };
+			for (int Z = First(Local.Z); Z <= Last(Local.Z, GridZ); ++Z)
+			{
+				for (int Y = First(Local.Y); Y <= Last(Local.Y, GridY); ++Y)
+				{
+					for (int X = First(Local.X); X <= Last(Local.X, GridX); ++X)
+					{
+						const Sim::HotDraw Draw = Sim::MagicHotDraw(GetCellCenter(X, Y, Z), Spot);
+						if (Draw.Density < 1e-3)
+						{
+							continue;
+						}
+						const int Cell = CellIndex(X, Y, Z);
+						if (HotWanted[Cell] == 0.0f && HotRate[Cell] == 0.0f)
+						{
+							HotCells.push_back(Cell);
+						}
+						// Where two fires' heat overlaps, the hotter counts: heat does not pile up.
+						HotWanted[Cell] = std::max(HotWanted[Cell], static_cast<float>(Draw.Density));
+						HotRate[Cell] = std::max(HotRate[Cell], static_cast<float>(Draw.Rate));
+					}
+				}
+			}
+		};
+		for (const Sim::HotSpot& Spot : HotSpots)
+		{
+			Gather(Spot);
+		}
 		for (const Sim::HotSpot& Spot : Burning)
 		{
-			for (int Z = -1; Z <= 1; ++Z)
+			Gather(Spot);
+		}
+	}
+
+	void MagicField::RainLight(float Dt)
+	{
+		constexpr double DropsOverhead = 2e-4;    // drops per m2 of ground per second, from a sun overhead
+		constexpr double DropMass = 200.0;        // kg of light magic in each
+		constexpr double StoppingColumn = 100.0;  // kg/m2 of other magic a drop runs through, on average, before it has slowed to a stop
+		constexpr double SoakingColumn = 2.0;     // kg/m2 of nature magic that takes up about two thirds of one
+		// A drop at two thirds of the speed of light that handed all its momentum to the gas would blow it apart.
+		// What it stirs up is put as if it had come to rest from this speed instead.
+		constexpr double Stirring = 6.0;          // m/s
+
+		const int Light = static_cast<int>(Sim::EMagicType::Light);
+		const int Nature = static_cast<int>(Sim::EMagicType::Nature);
+		const double Volume = CellSize * CellSize * CellSize;
+		const Vec3 Low = GetCellCenter(0, 0, 0) - Vec3{ CellSize, CellSize, CellSize } * 0.5;
+		const Vec3 High = Low + Vec3{ GridX * CellSize, GridY * CellSize, GridZ * CellSize };
+		std::uniform_real_distribution<double> Share(0.0, 1.0);
+		std::vector<std::pair<int, double>> Slowed;
+
+		for (const LightDropSource& Source : DropSources)
+		{
+			if (Source.Rate <= 0.0 || Source.From.Z <= 0.0)
 			{
-				for (int Y = -Reach; Y <= Reach; ++Y)
+				continue;
+			}
+			// They fall on the ground as a slanting light does, thinner the lower the sun.
+			const double Expected = DropsOverhead * Source.Rate * Source.From.Z * GridX * GridY * CellSize * CellSize * Dt;
+			int Count = static_cast<int>(Expected);
+			Count += Share(Dice) < Expected - Count ? 1 : 0;
+			const Vec3 From = Normalize(Source.From);
+			const Vec3 Way = From * -1.0;
+
+			for (; Count > 0; --Count)
+			{
+				// Where it would reach the ground, and back up its line to where it comes into the grid.
+				const int ColumnX = std::min(static_cast<int>(Share(Dice) * GridX), GridX - 1);
+				const int ColumnY = std::min(static_cast<int>(Share(Dice) * GridY), GridY - 1);
+				const Sim::MagicGround& Below = Columns[static_cast<std::size_t>(Wrap(OriginX + ColumnX, GridX) + Wrap(OriginY + ColumnY, GridY) * GridX)];
+				const Vec3 Landing{ Low.X + (ColumnX + Share(Dice)) * CellSize, Low.Y + (ColumnY + Share(Dice)) * CellSize, Below.Surface };
+				if (Landing.Z < Low.Z || Landing.Z >= High.Z)
 				{
-					for (int X = -Reach; X <= Reach; ++X)
+					continue;
+				}
+				double Back = 1e9;
+				for (int Axis = 0; Axis < 3; ++Axis)
+				{
+					const double Along = Axis == 0 ? From.X : (Axis == 1 ? From.Y : From.Z);
+					const double Here = Axis == 0 ? Landing.X : (Axis == 1 ? Landing.Y : Landing.Z);
+					const double Lowest = Axis == 0 ? Low.X : (Axis == 1 ? Low.Y : Low.Z);
+					const double Highest = Axis == 0 ? High.X : (Axis == 1 ? High.Y : High.Z);
+					if (Along > 1e-6)
 					{
-						const Vec3 Where = Spot.Position + Vec3{ X * CellSize, Y * CellSize, (Z + 0.5) * CellSize };
-						const double Rate = Sim::MagicHotImprint(Where, CellSize, { Spot });
-						if (Rate > 0.0 && IsInGrid(Where))
-						{
-							const int Cell = FindCell(Where);
-							const float Taken = Amounts[Neutral][Cell] * (1.0f - std::exp(-static_cast<float>(Rate) * Dt));
-							Amounts[Neutral][Cell] -= Taken;
-							Amounts[Fire][Cell] += Taken;
-						}
+						Back = std::min(Back, (Highest - Here) / Along);
 					}
+					else if (Along < -1e-6)
+					{
+						Back = std::min(Back, (Lowest - Here) / Along);
+					}
+				}
+
+				// On its way it runs into the other magic and slows, until it has run through enough of it to stop.
+				// Nature magic takes it up instead, and grows by it.
+				const double Stop = -std::log(std::max(Share(Dice), 1e-9)) * StoppingColumn;
+				double Mass = DropMass;
+				double Crossed = 0.0;
+				double Left = Back;
+				Vec3 At = Landing + From * Back;
+				int Cell = FindCell(At);
+				Slowed.clear();
+				while (Left > 0.0 && Crossed < Stop)
+				{
+					const double Span = std::min(CellSize * 0.5, Left);
+					At = At + Way * Span;
+					Left -= Span;
+					Cell = FindCell(At);
+
+					const double Soaked = Mass * (1.0 - std::exp(-Amounts[Nature][Cell] * Span / SoakingColumn));
+					Amounts[Nature][Cell] += static_cast<float>(Soaked / Volume);
+					Mass -= Soaked;
+
+					const double Other = std::max(static_cast<double>(Density[Cell] - Amounts[Nature][Cell]), 0.0) * Span;
+					const double Braking = std::min(Other, Stop - Crossed);
+					Crossed += Other;
+					if (Braking > 0.0)
+					{
+						Slowed.push_back({ Cell, Braking });
+					}
+				}
+
+				// It comes to rest where it stopped, or on the ground, which stops anything this small.
+				Amounts[Light][Cell] += static_cast<float>(Mass / Volume);
+
+				// And what it ran into is pushed on along its way, the harder where it slowed the most.
+				double Total = 0.0;
+				for (const auto& [Index, Braking] : Slowed)
+				{
+					Total += Braking;
+				}
+				for (const auto& [Index, Braking] : Slowed)
+				{
+					const double Pushed = DropMass * Stirring * Braking / Total;
+					const double Amount = std::max(static_cast<double>(Density[Index]), static_cast<double>(ThinDensity)) * Volume * Sim::MagicInertia * Inertness[Index];
+					VelocityX[Index] += static_cast<float>(Way.X * Pushed / Amount);
+					VelocityY[Index] += static_cast<float>(Way.Y * Pushed / Amount);
+					VelocityZ[Index] += static_cast<float>(Way.Z * Pushed / Amount);
 				}
 			}
 		}
@@ -1068,20 +1247,6 @@ namespace Teinora
 		}
 	}
 
-	void MagicField::RefreshHotImprints()
-	{
-		const int Fire = static_cast<int>(Sim::EMagicType::Fire);
-		ParallelFor(GridZ, [this, Fire](int Z)
-		{
-			for (int Y = 0; Y < GridY; ++Y)
-			{
-				for (int X = 0; X < GridX; ++X)
-				{
-					Imprints[Fire][CellIndex(X, Y, Z)] = static_cast<float>(Sim::MagicHotImprint(GetCellCenter(X, Y, Z), CellSize, HotSpots));
-				}
-			}
-		});
-	}
 
 	void MagicField::TakeContacts(std::vector<FireContact>& Out)
 	{
@@ -1106,6 +1271,12 @@ namespace Teinora
 	{
 		std::lock_guard Lock(Mutex);
 		PendingBurning = Spots;
+	}
+
+	void MagicSimulation::SetLightDrops(const std::array<LightDropSource, 3>& Sources)
+	{
+		std::lock_guard Lock(Mutex);
+		PendingDrops = Sources;
 	}
 
 	void MagicSimulation::AddPushes(const std::vector<MagicPush>& Pushes)
@@ -1230,6 +1401,7 @@ namespace Teinora
 				Pushes.swap(Pending);
 				Deposits.swap(PendingDeposits);
 				Field.SetBurning(PendingBurning);
+				Field.SetLightDrops(PendingDrops);
 				if (!bWarmedUp)
 				{
 					Clock = TargetTime;

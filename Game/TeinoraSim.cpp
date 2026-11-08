@@ -818,6 +818,56 @@ namespace Teinora::Sim
 		return RelativeSpin * (0.5 * Density * MomentCoefficient * std::pow(Radius, 5.0) * Length(RelativeSpin));
 	}
 
+	Weather GetWeather(double CloudDepth, double Lightning)
+	{
+		constexpr double RainsFrom = 450.0;  // metres of full cloud overhead before any rain falls
+		constexpr double Pouring = 1100.0;   // and where it pours
+		constexpr double StormsFrom = 750.0; // where a cloud is tall enough to be a storm cloud
+
+		Weather Result;
+		Result.Storm = std::clamp((CloudDepth - StormsFrom) / 500.0 + Lightning / MagicBreakdown * 0.6, 0.0, 1.0);
+		Result.Rain = std::max(std::clamp((CloudDepth - RainsFrom) / (Pouring - RainsFrom), 0.0, 1.0), Result.Storm);
+		return Result;
+	}
+
+	MagicMix MagicMix::GetActing() const
+	{
+		MagicMix Result;
+		for (int Type = 0; Type < static_cast<int>(EMagicType::Neutral); ++Type)
+		{
+			Result.Amounts[Type] = std::max(Amounts[Type] - MagicActsOnMatter, 0.0);
+		}
+		return Result;
+	}
+
+	double MagicManifestDensity(EMagicType Type)
+	{
+		switch (Type)
+		{
+		case EMagicType::Light:  return 40.0; // fireflies: not insects, only light showing itself
+		case EMagicType::Air:    return 35.0; // a whirlwind
+		case EMagicType::Nature: return 38.0; // plants
+		case EMagicType::Water:  return 40.0; // a current
+		case EMagicType::Earth:  return 50.0; // minerals
+		default:                 return MagicFierceFire; // fire, in any of its forms
+		}
+	}
+
+	double MagicInertness(EMagicType Type)
+	{
+		switch (Type)
+		{
+		case EMagicType::Earth:     return 4.0;
+		case EMagicType::Water:     return 2.5;
+		case EMagicType::Nature:    return 1.8;
+		case EMagicType::Fire:      return 1.0;
+		case EMagicType::Lightning: return 0.6;
+		case EMagicType::Air:       return 0.5;
+		case EMagicType::Light:     return 0.25;
+		default:                    return 1.0; // neutral
+		}
+	}
+
 	double MagicFadeTime(EMagicType Type)
 	{
 		switch (Type)
@@ -904,6 +954,32 @@ namespace Teinora::Sim
 	std::uint32_t GetPlacedVersion()
 	{
 		return PlacedVersion.load();
+	}
+
+	namespace
+	{
+		std::mutex GrowthGuard;
+		std::vector<MagicGrowth> Growths;
+	}
+
+	void AddMagicGrowth(const MagicGrowth& Growth)
+	{
+		std::lock_guard Lock(GrowthGuard);
+		Growths.push_back(Growth);
+	}
+
+	std::vector<MagicGrowth> FindMagicGrowths(double MinX, double MinY, double MaxX, double MaxY)
+	{
+		std::lock_guard Lock(GrowthGuard);
+		std::vector<MagicGrowth> Found;
+		for (const MagicGrowth& Each : Growths)
+		{
+			if (Each.Position.X >= MinX && Each.Position.X < MaxX && Each.Position.Y >= MinY && Each.Position.Y < MaxY)
+			{
+				Found.push_back(Each);
+			}
+		}
+		return Found;
 	}
 
 	std::vector<HotSpot> FindHotSpots(double X, double Y, std::uint32_t Seed)
@@ -993,23 +1069,37 @@ namespace Teinora::Sim
 		return Contact * std::clamp(VolumeShare, 0.0, 1.0) * std::sqrt(std::max(Temperature - Lowest, 0.0) / (FullHeat - Lowest));
 	}
 
-	double MagicHotImprint(const Vec3& Center, double CellSize, const std::vector<HotSpot>& Spots)
+	namespace
 	{
-		double Rate = 0.0;
-		for (const HotSpot& Spot : Spots)
+		/** How far around a hot spot its heat reaches, as the scale of a Gaussian, in metres. */
+		double HotSpread(const HotSpot& Spot)
 		{
-			const double AcrossX = Center.X - Spot.Position.X;
-			const double AcrossY = Center.Y - Spot.Position.Y;
-			const double Up = Center.Z - Spot.Position.Z;
-			const double Reach = Spot.Radius + CellSize * 0.75;
-			if (std::fabs(Up) < CellSize * 1.5 && AcrossX * AcrossX + AcrossY * AcrossY < Reach * Reach)
-			{
-				// The more of what is hot lies in a cell, the more of the magic there touches it.
-				const double Across = std::min(Spot.Radius * Spot.Radius * 3.14159265358979, CellSize * CellSize);
-				Rate += MagicHeatImprint(Spot.Temperature, Across * Spot.Depth / (CellSize * CellSize * CellSize));
-			}
+			constexpr double Least = 5.0;
+			return Least + 0.5 * Spot.Radius;
 		}
-		return Rate;
+	}
+
+	HotDraw MagicHotDraw(const Vec3& Position, const HotSpot& Spot)
+	{
+		constexpr double Gathered = 18.0; // kg/m3 in a fire at FullHeat: well short of where fire turns to lightning
+		constexpr double Taking = 1.0;    // per second there
+		constexpr double Lowest = 45.0;   // degrees, as in MagicHeatImprint
+		constexpr double FullHeat = 1000.0;
+
+		// How far outside what is hot: across from its rim, and up from its top or down from its foot.
+		const double Across = std::max(std::hypot(Position.X - Spot.Position.X, Position.Y - Spot.Position.Y) - Spot.Radius, 0.0);
+		const double Up = Position.Z - Spot.Position.Z;
+		const double Over = Up > Spot.Depth ? Up - Spot.Depth : (Up < -Spot.Depth ? -Spot.Depth - Up : 0.0);
+		const double Spread = HotSpread(Spot);
+		const double Near = std::exp(-(Across * Across + Over * Over) / (Spread * Spread));
+
+		const double Heat = std::sqrt(std::max(Spot.Temperature - Lowest, 0.0) / (FullHeat - Lowest));
+		return { Gathered * Heat * Near, Taking * Heat * Near };
+	}
+
+	double MagicHotReach(const HotSpot& Spot)
+	{
+		return Spot.Radius + Spot.Depth + 2.5 * HotSpread(Spot); // the draw is under 0.2% of its peak beyond
 	}
 
 	void UpdateFireForms(MagicMix& Mix, double Pressure, double Dt)
@@ -1032,8 +1122,11 @@ namespace Teinora::Sim
 
 	double MagicRubPressure(double WaterMagic, double AirMagic, double Speed)
 	{
+		// The squeeze of rubbing counts for as much more than the energy of the motion as the dew point is over
+		// the density, 5.5 kg/m3, that was once enough to show. Storms make lightning as they always have.
+		constexpr double Squeeze = MagicDewPoint / 5.5;
 		const double Both = WaterMagic + AirMagic;
-		return Both > 0.0 ? 0.5 * WaterMagic * AirMagic / Both * Speed * Speed : 0.0;
+		return Both > 0.0 ? Squeeze * 0.5 * WaterMagic * AirMagic / Both * Speed * Speed : 0.0;
 	}
 
 	double MagicRubImprint(double RubPressure)
@@ -1062,7 +1155,7 @@ namespace Teinora::Sim
 		return Fastest * std::clamp((Depth - Lowest) / (Tallest - Lowest), 0.0, 1.0);
 	}
 
-	void UpdateFireInWind(MagicMix& Mix, double WindSpeed, double Dt)
+	void UpdateFireInWind(MagicMix& Mix, double WindSpeed, double Draft, double Dt)
 	{
 		constexpr double FreshWind = 4.0;  // m/s, at which the air magic in a place counts for just what it is
 		constexpr double Burning = 0.6;    // per second, the share of the air magic that a great fire takes
@@ -1073,8 +1166,10 @@ namespace Teinora::Sim
 		const int Air = static_cast<int>(EMagicType::Air);
 		const int Neutral = static_cast<int>(EMagicType::Neutral);
 
+		// The wind brings air magic, and so does the draft of the fire's own heat drawing it in from around.
 		const double Wind = WindSpeed / FreshWind;
-		const double Brought = Mix.Amounts[Air] * Wind;
+		const double Drawn = (WindSpeed + std::max(Draft, 0.0)) / FreshWind;
+		const double Brought = Mix.Amounts[Air] * Drawn;
 		const double Sum = Mix.Amounts[Fire] + Brought;
 		if (Mix.Amounts[Fire] <= 0.0 || Brought <= 0.0)
 		{
@@ -1084,7 +1179,7 @@ namespace Teinora::Sim
 		const double Balance = (Mix.Amounts[Fire] - Brought) / Sum; // 1 for all fire, -1 for all wind
 		if (Balance > 0.0)
 		{
-			const double Burnt = Mix.Amounts[Air] * (1.0 - std::exp(-Burning * Balance * std::min(Wind, 2.0) * Dt));
+			const double Burnt = Mix.Amounts[Air] * (1.0 - std::exp(-Burning * Balance * std::min(Drawn, 2.0) * Dt));
 			Mix.Amounts[Air] -= Burnt;
 			Mix.Amounts[Neutral] += Burnt;
 
@@ -1190,6 +1285,25 @@ namespace Teinora::Sim
 		Mix.Amounts[Neutral] += Returned - Taken;
 	}
 
+	void UpdateNatureFeeding(MagicMix& Mix, double Dt)
+	{
+		constexpr double TakingLight = 2.0;  // per second, for each kg/m3 of nature magic
+		constexpr double TakingWater = 0.05; // the same for water magic, far slower
+		constexpr double FromWater = 0.4;    // of the water magic taken up, the share nature grows by
+
+		const double Nature = Mix.Get(EMagicType::Nature);
+		if (Nature <= 0.0)
+		{
+			return;
+		}
+		const double Light = Mix.Get(EMagicType::Light) * (1.0 - std::exp(-TakingLight * Nature * Dt));
+		const double Water = Mix.Get(EMagicType::Water) * (1.0 - std::exp(-TakingWater * Nature * Dt));
+		Mix.Amounts[static_cast<int>(EMagicType::Light)] -= Light;
+		Mix.Amounts[static_cast<int>(EMagicType::Water)] -= Water;
+		Mix.Amounts[static_cast<int>(EMagicType::Nature)] += Light + Water * FromWater;
+		Mix.Amounts[static_cast<int>(EMagicType::Neutral)] += Water * (1.0 - FromWater);
+	}
+
 	Vec3 MagicDrag(const MagicMix& Mix, const Vec3& Relative, double DragCoefficient, double FrontalArea)
 	{
 		return Relative * (0.5 * MagicDragShare * Mix.GetAspected() * DragCoefficient * FrontalArea * Length(Relative));
@@ -1253,7 +1367,7 @@ namespace Teinora::Sim
 					MagicWell Well;
 					Well.Position = { WellX, WellY, Ground + 10.0 + 26.0 * Share(Column, Row, 3u) };
 					Well.Radius = 28.0 + 44.0 * Share(Column, Row, 4u);
-					Well.Peak = 8.0 + 2.0 * Share(Column, Row, 5u);
+					Well.Peak = 44.0 + 11.0 * Share(Column, Row, 5u); // over the dew point, so a well shows
 					Wells.push_back(Well);
 				}
 			}

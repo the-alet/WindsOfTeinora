@@ -166,7 +166,9 @@ namespace Teinora
 
 	double StormField::MeasureCloud(double CarriedX, double CarriedY, double CloudCover) const
 	{
-		// SampleCloud in Shaders/Clouds.hlsli, without its finer shapes, at a few heights.
+		// SampleCloud in Shaders/Clouds.hlsli, without its finer shapes, at a few heights, and as thick as that cloud is.
+		const double Heavy = SampleNoise(CarriedX / 16384.0, CarriedY / 16384.0, 0.37 + Drift.Z * 0.25);
+		const double Thickness = 0.45 + (2.2 - 0.45) * SmoothStep(0.3, 0.75, Heavy);
 		double Depth = 0.0;
 		for (int Layer = 0; Layer < 7; ++Layer)
 		{
@@ -174,7 +176,7 @@ namespace Teinora
 			const double Height = (Altitude - Sim::CloudBottom) / (Sim::CloudTop - Sim::CloudBottom);
 			const double Profile = SmoothStep(0.0, 0.08, Height) * (1.0 - SmoothStep(0.25, 1.0, Height));
 			const double Broad = SampleNoise(CarriedX / 4096.0, CarriedY / 4096.0, Altitude / 2048.0 + Drift.Z); // Z: how far they have changed
-			Depth += Saturate((Broad - 0.74 + CloudCover * 0.2 - (1.0 - Profile) * 0.16) * 5.0) * LayerStep;
+			Depth += Saturate((Broad - 0.74 + CloudCover * 0.2 - (1.0 - Profile) * 0.16) * 5.0) * Thickness * LayerStep;
 		}
 		return Depth;
 	}

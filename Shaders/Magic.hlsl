@@ -30,10 +30,19 @@ static const float SightFade = 70.0;    // where it starts to give out
 static const int SightSteps = 32;
 static const float SightGrowth = 1.1402; // (SightRadius / FirstStep)^(1 / SightSteps)
 
-static const float DensityScale = 24.0;   // MagicVolume::DensityScale
-static const float VisibleDensity = 5.5;  // Sim::MagicVisibleDensity
+static const float DensityScale = 120.0;  // MagicVolume::DensityScale
+static const float DewPoint = 30.0;       // Sim::MagicDewPoint, where magic shows and bends light
+static const float BendRamp = 13.6;       // kg/m3 over that for it to bend fully
 static const float ThickDensity = 0.8;    // thinner than this, the haze has no structure worth drawing
-static const float Extinction = 0.0035;   // square metres per kilogram of magic
+static const float Extinction = 0.0035;   // square metres per kilogram of thin magic
+static const float Crowding = 20.0;       // kg/m3 at which the dense hides only half as much more again
+
+/** How much a density hides, per metre: in proportion while thin, less and less so when dense, so that the dense cores
+ * of wells and bolts do not black out what is behind them. */
+float Hiding(float Density)
+{
+	return Density * Extinction / (1.0 + Density / Crowding);
+}
 
 struct Varyings
 {
@@ -73,11 +82,13 @@ float4 SampleMagic(float3 Relative)
 	return Result;
 }
 
-// Curls smaller than the grid's cells can hold, slowly turning over.
+// Curls smaller than the grid's cells can hold, slowly turning over where they are. Magic weighs nothing,
+// so they drift no way in particular: only the warp that twists them changes with time.
 float Curls(float3 World, float Scale)
 {
-	const float3 Point = World * Scale + float3(0.0, 0.0, CameraPosition.w * 0.2);
-	const float2 Warp = float2(Noise(Point.xy + 5.1), Noise(Point.yz + 1.7)) - 0.5;
+	const float3 Point = World * Scale;
+	const float Turning = CameraPosition.w * 0.05;
+	const float2 Warp = float2(Noise(Point.xy + 5.1 + float2(Turning, -Turning * 0.7)), Noise(Point.yz + 1.7 + float2(-Turning * 0.8, Turning * 0.6))) - 0.5;
 	const float Value = Noise(Point.zx * 2.1 + Warp * 7.0);
 	return 0.45 + 1.1 * Value * Value;
 }
@@ -135,7 +146,7 @@ float4 PSMain(Varyings Input) : SV_Target
 		if (Density > 1e-4)
 		{
 			const float Seen = 1.0 - smoothstep(SightFade, SightRadius, Near);
-			const float Taken = (1.0 - exp(-Density * Extinction * Span)) * Seen;
+			const float Taken = (1.0 - exp(-Hiding(Density) * Span)) * Seen;
 			Glow += Sampled.yzw / Density * Clear * Taken * (0.35 + 0.65 * Swirl);
 			Clear *= 1.0 - Taken;
 		}
@@ -161,7 +172,7 @@ float4 BendMain(Varyings Input) : SV_Target
 		const float4 Sampled = SampleMagic(Relative);
 
 		// Only the swirls count: a smooth cloud would act as one big lens.
-		const float Excess = saturate((Sampled.x - VisibleDensity) / 2.5);
+		const float Excess = saturate((Sampled.x - DewPoint) / BendRamp);
 		if (Excess > 0.0)
 		{
 			Path += Excess * (Curls(ToWorld(Relative), 0.09) - 1.0) * Span;

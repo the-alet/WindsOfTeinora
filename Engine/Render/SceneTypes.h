@@ -5,6 +5,7 @@
 #include "Core/Math.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -128,6 +129,7 @@ namespace Teinora
 		double Floor = 0.0;     // the water or ground it came off, which hides what is below it
 		double Shade = 1.0;     // how much of the light on it it gives back: all for steam, less for smoke
 		double Firelight = 0.0; // how much a fire's light reaches it, as a share of that light at the flame
+		double Glow = 0.0;      // light of its own, in the colour of light magic: a firefly is a small round glowing puff
 	};
 
 	/** The colour of a flame's light, which HotLight carries for each fire. Also in Shaders/Puffs.hlsl and Unreal/Scripts/make_content.py. */
@@ -195,7 +197,7 @@ namespace Teinora
 	// Sizes as the sky draws them, in radians across the radius. The planet's are also in Shaders/Planet.hlsli.
 	inline constexpr double SunSize = 0.0173;
 	inline constexpr double SecondSunSize = 0.0126;
-	inline constexpr double PlanetSize = 0.04;  // half again as far off as it once stood, at 0.06
+	inline constexpr double PlanetSize = 0.035; // 1.7 times as far off as it once stood, at 0.06; still twice the suns' radius, so it covers both
 	inline constexpr double RingInner = 1.38; // in radii of the planet
 	inline constexpr double RingOuter = 2.5;
 
@@ -400,5 +402,51 @@ namespace Teinora
 		const double Depth = -Y * Dot(Axis, Up) / (std::fabs(Facing) > 1e-3 ? Facing : 1e-3);
 		const double Radius = Length(Across * X + Up * Y + Planet * Depth);
 		return Radius > RingInner && Radius < RingOuter ? Past * 0.6 : Past;
+	}
+
+	/** How fast the suns' drops of light magic fly, in m/s: two thirds of the speed of light, always. */
+	inline constexpr double LightDropSpeed = 2.0 / 3.0 * 299792458.0;
+
+	/** Of the drops that strike the planet, the share it sends back towards the ground. */
+	inline constexpr double PlanetDropShare = 0.05;
+
+	/** Drops of light magic coming in from one way: the way they come from, and how many, as a share of a sun overhead's. */
+	struct LightDropSource
+	{
+		Vec3 From;
+		double Rate = 0.0;
+	};
+
+	/**
+	 * The two suns' drops of light magic, and the few the planet sends back of those that strike it, as they
+	 * reach the ground at Hour. They take about half a second from the suns, so what arrives left them that
+	 * long before: an eclipse cuts them off that much later. A sun below the horizon sends none through the
+	 * ground, and the planet hides those behind it as it does the light.
+	 */
+	inline std::array<LightDropSource, 3> GetLightDropSources(double Hour, double Day)
+	{
+		double Then = Hour - SunDistance / LightDropSpeed / DaySeconds * 24.0;
+		double ThenDay = Day;
+		if (Then < 0.0)
+		{
+			Then += 24.0;
+			ThenDay -= 1.0;
+		}
+		const Vec3 Sun = GetSeenSun(Then, ThenDay);
+		const Vec3 Second = GetSeenSecondSun(Then, ThenDay);
+		const Vec3 Planet = GetPlanetDirection(Then, ThenDay);
+		const Vec3 Axis = GetPlanetAxis(ThenDay + Then / 24.0);
+		const auto Risen = [](const Vec3& Way)
+		{
+			const double Up = std::clamp((Way.Z + 0.02) / 0.05, 0.0, 1.0);
+			return Up * Up * (3.0 - 2.0 * Up);
+		};
+
+		// The planet sends back the share of each sun's drops that strike the side of it turned to the ground.
+		const double Struck = (0.5 - 0.5 * Dot(Planet, Sun)) + (0.5 - 0.5 * Dot(Planet, Second));
+		return { {
+			{ Sun, Risen(Sun) * GetLightPastPlanet(Sun, Planet, Axis, SunSize) },
+			{ Second, Risen(Second) * GetLightPastPlanet(Second, Planet, Axis, SecondSunSize) },
+			{ Planet, Risen(Planet) * PlanetDropShare * Struck } } };
 	}
 }

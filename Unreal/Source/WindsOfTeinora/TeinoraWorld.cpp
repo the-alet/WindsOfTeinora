@@ -68,12 +68,13 @@ namespace
 	const FLinearColor Starlight(0.36f, 0.5f, 0.9f);     // on the scale of the planet's light at its fullest
 	constexpr float DayHaze = 0.003f;
 	constexpr float NightHaze = 0.02f;
-	constexpr float NightHazeGlow = 1.0f;   // how bright the night haze is, against the air
+	constexpr float NightHazeGlow = 0.35f;  // how bright the night haze is, against the air: dim, so that far hills stand dark against the sky
 	constexpr float NightSkyFill = 1.8f;    // how much the dark sky lights the ground, against the bright one
 	const FLinearColor PlanetCloudGlow(1.2f, 1.2f, 1.5f); // what the planet does to clouds, against what it does to the ground
 	const FLinearColor CloudGlow(1.9f, 1.55f, 1.9f); // the two suns on clouds: brighter than on the ground, and with their green taken out
 	constexpr double SkyDomeRadius = 2.0e7; // 200 km, past all the ground there is to see
 	constexpr double CloudCoverReach = 0.5; // what the most and the least of the setting do to the cloud material's coverage
+	constexpr float CloudThickening = 2.2f; // the clouds as much denser than the engine's own as the standalone game's are now
 
 	constexpr int32 MaxPlantMoves = 8;      // as in the standalone renderer
 	constexpr int32 MaxHotLights = 8;       // and this
@@ -260,6 +261,7 @@ struct FTeinoraSimulation
 	Teinora::MagicVolume NearMagic;
 	Teinora::MagicVolume FarMagic;
 	std::vector<Teinora::MagicPush> MagicPushes;
+	std::vector<Teinora::MagicDeposit> MagicDeposits;
 	double Time = 0.0;
 	double Accumulator = 0.0;
 	double Hour = 10.0;
@@ -283,6 +285,9 @@ struct FTeinoraSimulation
 	FLinearColor PuffLight;      // and steam and smoke
 	float HazeShown = -1.0f;     // what the height fog was last told, since telling it rebuilds its state
 	FLinearColor HazeColorShown;
+	float RainShown = -1.0f;
+	Sim::Weather Weather;        // what the clouds overhead make of it, as in the standalone game
+	double ForcedRain = -1.0;    // or what an automated run asks for
 	TArray<FBodyGroup> Groups;
 	TArray<FVector> WaterVertices;
 	TArray<FVector> WaterNormals;
@@ -375,9 +380,9 @@ void ATeinoraWorld::BeginPlay()
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraFrames="), AutoFrames);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraShot="), ShotPath);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraThrows="), ThrowsLeft);
-	FParse::Value(FCommandLine::Get(), TEXT("TeinoraPlace="), PlaceLeft);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraHour="), Sim->Hour);
 	FParse::Value(FCommandLine::Get(), TEXT("TeinoraDay="), Sim->Day);
+	FParse::Value(FCommandLine::Get(), TEXT("TeinoraRain="), Sim->ForcedRain);
 	if (FParse::Param(FCommandLine::Get(), TEXT("TeinoraMagic")))
 	{
 		bMagicView = true;
@@ -469,18 +474,6 @@ void ATeinoraWorld::SetView(int32 ViewRadius, int32 GeometryDetail, bool bClouds
 void ATeinoraWorld::ThrowBall(const Vec3& Eye, const Vec3& LineOfSight, double Speed)
 {
 	Sim->World.ThrowBall(Eye, LineOfSight, Speed);
-}
-
-void ATeinoraWorld::PlaceByKey(int32 Key, const Vec3& Eye, const Vec3& LineOfSight)
-{
-	switch (Key)
-	{
-	case 1: Sim->World.PlaceCampfire(Eye, LineOfSight); break;
-	case 2: Sim->World.PlaceProp(Teinora::EPropKind::Crate, Eye, LineOfSight); break;
-	case 3: Sim->World.PlaceProp(Teinora::EPropKind::Barrel, Eye, LineOfSight); break;
-	case 4: Sim->World.PlaceProp(Teinora::EPropKind::Ball, Eye, LineOfSight); break;
-	default: break;
-	}
 }
 
 void ATeinoraWorld::ShowChunk(int32 X, int32 Y, const Teinora::ChunkMesh& Mesh)
@@ -616,6 +609,14 @@ void ATeinoraWorld::SpawnSky()
 	Clouds = CloudActor->FindComponentByClass<UVolumetricCloudComponent>();
 	CloudMaterial = UMaterialInstanceDynamic::Create(LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineSky/VolumetricClouds/m_SimpleVolumetricCloud_Inst.m_SimpleVolumetricCloud_Inst")), this);
 	Clouds->SetMaterial(CloudMaterial);
+
+	// Thicker than the engine's own, as the standalone game's: a cloud overhead hides the stars at night.
+	float Density = 1.0f;
+	if (CloudMaterial->GetScalarParameterValue(TEXT("Cloud_GlobalDensity"), Density))
+	{
+		CloudBaseDensity = Density;
+		CloudMaterial->SetScalarParameterValue(TEXT("Cloud_GlobalDensity"), Density * CloudThickening);
+	}
 }
 
 void ATeinoraWorld::SpawnSkyDome()
@@ -1032,6 +1033,7 @@ void ATeinoraWorld::UpdateFires(const Vec3& Eye)
 	TArray<FVector2D> Places;
 	TArray<FVector2D> Looks;
 	TArray<FVector2D> Shades;
+	TArray<FVector2D> Glows;
 	TArray<int32> Triangles;
 	for (auto Puff = Sim->Puffs.rbegin(); Puff != Sim->Puffs.rend(); ++Puff)
 	{
@@ -1044,6 +1046,7 @@ void ATeinoraWorld::UpdateFires(const Vec3& Eye)
 			Places.Add(FVector2D(Sheet[Index].Across, Sheet[Index].Up));
 			Looks.Add(FVector2D(Puff->Thickness, Puff->Seed));
 			Shades.Add(FVector2D(Puff->Shade, Puff->Firelight));
+			Glows.Add(FVector2D(Puff->Glow, 0.0));
 		}
 		for (int32 Index = 2; Index < Count; ++Index)
 		{
@@ -1053,7 +1056,7 @@ void ATeinoraWorld::UpdateFires(const Vec3& Eye)
 
 	if (!Triangles.IsEmpty())
 	{
-		PuffMesh->CreateMeshSection(0, Corners, Triangles, TArray<FVector>(), Places, Looks, Shades, TArray<FVector2D>(), TArray<FColor>(), TArray<FProcMeshTangent>(), false);
+		PuffMesh->CreateMeshSection(0, Corners, Triangles, TArray<FVector>(), Places, Looks, Shades, Glows, TArray<FColor>(), TArray<FProcMeshTangent>(), false);
 		PuffMesh->SetMaterial(0, PuffMaterial);
 		PuffMaterial->SetScalarParameterValue(TEXT("WorldTime"), Time);
 		PuffMaterial->SetVectorParameterValue(TEXT("Light"), Sim->PuffLight);
@@ -1190,11 +1193,13 @@ void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
 	// The air at night: never quite black, and hazy in the distance with the same light.
 	const FLinearColor NightAir = NightLight * PlanetInAir * Dark;
 	SkyMaterial->SetVectorParameterValue(TEXT("NightAir"), NightAir);
-	if (FMath::Abs(Dark - Sim->HazeShown) > 0.01f || !NightAir.Equals(Sim->HazeColorShown, 0.0005f))
+	const float Rain = static_cast<float>(Sim->Weather.Rain);
+	if (FMath::Abs(Dark - Sim->HazeShown) > 0.01f || !NightAir.Equals(Sim->HazeColorShown, 0.0005f) || FMath::Abs(Rain - Sim->RainShown) > 0.01f)
 	{
 		Sim->HazeShown = Dark;
 		Sim->HazeColorShown = NightAir;
-		Fog->SetFogDensity(FMath::Lerp(DayHaze, NightHaze, Dark));
+		Sim->RainShown = Rain;
+		Fog->SetFogDensity(FMath::Lerp(DayHaze, NightHaze, Dark) * (1.0f + 2.5f * Rain));
 		Fog->SetFogInscatteringColor(FMath::Lerp(DayHazeColor, NightAir * NightHazeGlow, Dark));
 		SkyFill->SetIntensity(FMath::Lerp(1.0f, NightSkyFill, Dark));
 	}
@@ -1294,6 +1299,37 @@ void ATeinoraWorld::UpdateBodies()
 	}
 }
 
+void ATeinoraWorld::UpdateWeather(ATeinoraCamera& Eye, double WorldDt)
+{
+	// The weather follows the cloud overhead, as in the standalone game's Main.cpp: deep cloud rains, and a storm
+	// pours, covers more of the sky and turns the clouds dark.
+	Sim::Weather Wanted;
+	if (Sim->Storms != nullptr && StormCover > 0.0)
+	{
+		const Teinora::StormField::Reading Cloud = Sim->Storms->Read(Eye.GetEye());
+		Wanted = Sim::GetWeather(Cloud.CloudDepth, Cloud.Mix.Get(Sim::EMagicType::Lightning));
+	}
+	const double Share = FMath::Min(WorldDt / Sim::WeatherChangeTime, 1.0);
+	Sim->Weather.Rain += (Wanted.Rain - Sim->Weather.Rain) * Share;
+	Sim->Weather.Storm += (Wanted.Storm - Sim->Weather.Storm) * Share;
+	if (Sim->ForcedRain >= 0.0)
+	{
+		Sim->Weather.Rain = Sim->ForcedRain;
+		Sim->Weather.Storm = Sim->ForcedRain;
+	}
+
+	if (CloudMaterial != nullptr)
+	{
+		CloudMaterial->SetScalarParameterValue(TEXT("Cloud_GlobalCoverage"), static_cast<float>((StormCover + Sim->Weather.Storm * Sim::StormCloudCover - 1.0) * CloudCoverReach));
+		CloudMaterial->SetScalarParameterValue(TEXT("StormClouds"), static_cast<float>(Sim->Weather.Storm));
+	}
+
+	const Vec3 Forward = Eye.GetLineOfSight();
+	const Vec3 Right = Teinora::Normalize(Teinora::Cross(Forward, Vec3{ 0.0, 0.0, 1.0 }));
+	const Vec3 Wind = Sim::WindAt(Eye.GetEye(), Sim->Time, Sim::WorldSeed);
+	Eye.ShowRain(static_cast<float>(Sim->Weather.Rain), static_cast<float>(Teinora::Dot(Wind, Right) / 9.0 * 0.6), Sim->Time);
+}
+
 void ATeinoraWorld::UpdateMagic(ATeinoraCamera& Eye, float DeltaSeconds)
 {
 	if (Sim->Magic == nullptr)
@@ -1303,6 +1339,12 @@ void ATeinoraWorld::UpdateMagic(ATeinoraCamera& Eye, float DeltaSeconds)
 
 	Sim->World.TakeMagicPushes(Sim->MagicPushes);
 	Sim->Magic->AddPushes(Sim->MagicPushes);
+	Sim->World.TakeMagicDeposits(Sim->MagicDeposits);
+	for (const Teinora::MagicDeposit& Each : Sim->MagicDeposits)
+	{
+		Sim->Magic->AddDeposit(Each);
+	}
+	Sim->Magic->SetLightDrops(Teinora::GetLightDropSources(Sim->Hour, Sim->Day));
 	Sim->Magic->Advance(Eye.GetEye(), Sim->World.GetAirDrift(), Sim->Time, Teinora::GetSunHeat(Sim->Hour, Sim->Day));
 	if (Sim->Magic->TakeNear(Sim->NearMagic))
 	{
@@ -1318,7 +1360,7 @@ void ATeinoraWorld::UpdateMagic(ATeinoraCamera& Eye, float DeltaSeconds)
 	{
 		const Teinora::MagicVolume& Near = Sim->NearMagic;
 		const Teinora::MagicVolume& Far = Sim->FarMagic;
-		Eye.ShowMagic(MagicFade, Near.PeakDensity > Sim::MagicVisibleDensity, MagicNearAtlas, MagicFarAtlas,
+		Eye.ShowMagic(MagicFade, Near.PeakDensity > Sim::MagicDewPoint, MagicNearAtlas, MagicFarAtlas,
 			Near.Corner, Vec3{ Near.SizeX * Near.CellSize, Near.SizeY * Near.CellSize, Near.SizeZ * Near.CellSize },
 			Far.Corner, Vec3{ Far.SizeX * Far.CellSize, Far.SizeY * Far.CellSize, Far.SizeZ * Far.CellSize }, Sim->Time);
 	}
@@ -1345,11 +1387,6 @@ void ATeinoraWorld::RunAutomation()
 	{
 		--ThrowsLeft;
 		ThrowBall(Eye->GetEye(), Eye->GetLineOfSight(), Sim::MaxThrowSpeed);
-	}
-	if (!PlaceLeft.IsEmpty() && Eye != nullptr)
-	{
-		PlaceByKey(PlaceLeft[0] - TEXT('0'), Eye->GetEye(), Eye->GetLineOfSight());
-		PlaceLeft.RemoveAt(0);
 	}
 
 	++SettledFrames;
@@ -1412,6 +1449,7 @@ void ATeinoraWorld::Tick(float DeltaSeconds)
 		UpdateLiquid(Here);
 		UpdatePlants(Here);
 		UpdateStorms(*Eye);
+		UpdateWeather(*Eye, WorldDt);
 		UpdateFires(Here);
 		UpdateMagic(*Eye, DeltaSeconds);
 	}

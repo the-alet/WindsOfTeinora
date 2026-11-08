@@ -127,6 +127,30 @@ void ATeinoraCamera::BeginPlay()
 		Camera->PostProcessSettings.WeightedBlendables.Array.Add(FWeightedBlendable(1.0f, FocusMaterial));
 		Camera->PostProcessBlendWeight = 1.0f;
 	}
+
+	if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Rain.M_Rain")))
+	{
+		RainMaterial = UMaterialInstanceDynamic::Create(Base, this);
+		Camera->PostProcessSettings.WeightedBlendables.Array.Add(FWeightedBlendable(0.0f, RainMaterial));
+	}
+}
+
+void ATeinoraCamera::ShowRain(float Amount, float Slant, double Time)
+{
+	if (RainMaterial == nullptr)
+	{
+		return;
+	}
+	for (FWeightedBlendable& Item : Camera->PostProcessSettings.WeightedBlendables.Array)
+	{
+		if (Item.Object == RainMaterial)
+		{
+			Item.Weight = Amount > 0.0f ? 1.0f : 0.0f;
+		}
+	}
+	RainMaterial->SetScalarParameterValue(TEXT("Rain"), Amount);
+	RainMaterial->SetScalarParameterValue(TEXT("Slant"), Slant);
+	RainMaterial->SetScalarParameterValue(TEXT("RainTime"), static_cast<float>(Time));
 }
 
 void ATeinoraCamera::SetEyeFocus(bool bEnabled)

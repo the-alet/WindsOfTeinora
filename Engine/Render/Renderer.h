@@ -79,6 +79,9 @@ namespace Teinora
 		double CameraDepth = 0.0;  // how far under water the camera is
 		double WaveHeight = 1.0;   // share of the usual height of the waves
 		double CloudCover = 1.0;   // share of the usual amount of cloud
+		double Rain = 0.0;         // how hard it rains, from 0 to 1
+		double Storm = 0.0;        // how stormy the weather is, from 0 to 1
+		double RainSlant = 0.0;    // how far the wind blows the rain across the view, as the wind across it over the rain's fall
 		double LiquidCornerX = 0.0; // the patch of moving water, see SetLiquid
 		double LiquidCornerY = 0.0;
 		double LiquidSpan = 0.0;

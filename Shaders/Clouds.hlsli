@@ -13,7 +13,8 @@
 static const float CloudBottom = 1700.0;
 static const float CloudTop = 3100.0;
 static const float CloudReach = 26000.0;     // metres of the layer that a ray goes through at most
-static const float CloudExtinction = 0.0055; // per metre, at full density: lower is more see-through
+static const float CloudExtinction = 0.010;  // per metre, at full density: lower is more see-through
+static const float HazeFrom = 6000.0;        // metres of the ray before far clouds begin to sink into the haze
 static const float WorldRadius = 40000.0;    // small enough for the sky to be seen to curve
 
 // Integer mixing: the usual sin() hash runs out of float precision for the
@@ -75,11 +76,15 @@ float SampleCloud(float3 Relative, bool bFine)
 	// Carried by the wind aloft, and slowly changing their shape as they go: Storms.cpp's MeasureCloud reads the same.
 	const float2 Carried = Relative.xy + CameraPosition.xy - CloudDrift.xy;
 	const float Broad = CloudNoise.SampleLevel(LinearWrap, float3(Carried / 4096.0, Altitude / 2048.0 + CloudDrift.z), 0.0).r;
-	float Density = saturate((Broad - 0.74 + Conditions.z * 0.2 - (1.0 - Profile) * 0.16) * 5.0);
+	// Some clouds are thin and some thick: a far broader noise says how thick each one is. Storms.cpp's MeasureCloud reads the same.
+	const float Heavy = CloudNoise.SampleLevel(LinearWrap, float3(Carried / 16384.0, 0.37 + CloudDrift.z * 0.25), 0.0).r;
+	const float Thickness = lerp(0.45, 2.2, smoothstep(0.3, 0.75, Heavy));
+	float Density = saturate((Broad - 0.74 + Conditions.z * 0.2 - (1.0 - Profile) * 0.16) * 5.0) * Thickness;
 	if (bFine && Density > 0.0)
 	{
 		const float Fine = CloudNoise.SampleLevel(LinearWrap, float3(Carried / 512.0, Altitude / 512.0 + CloudDrift.z * 4.0), 0.0).g;
-		Density = saturate(Density - (1.0 - Fine) * 0.45 * (1.0 - Density * 0.6));
+		const float Shape = saturate(Density / Thickness);
+		Density = max(Density - (1.0 - Fine) * 0.45 * (1.0 - Shape * 0.6) * Thickness, 0.0);
 	}
 	return Density;
 }
@@ -174,8 +179,9 @@ float3 AddClouds(float3 Color, float3 Direction, int Steps, float Dither)
 		}
 	}
 
-	// Far away they sink into the haze along the horizon, and past it from below.
-	const float Near = exp(-Enter * 0.00011) * saturate(1.0 + Direction.z * 40.0);
+	// Far away they sink into the haze along the horizon, and past it from below. Those overhead hide what is
+	// behind them as much as they are thick: the stars do not show through a thick cloud at night.
+	const float Near = exp(-max(Enter - HazeFrom, 0.0) * 0.00011) * saturate(1.0 + Direction.z * 40.0);
 	return lerp(Color, Color * Clear + Light, Near);
 }
 

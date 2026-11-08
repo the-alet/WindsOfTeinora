@@ -16,7 +16,6 @@ namespace Teinora
 		constexpr double ChunkSize = 256.0;
 		constexpr double SkirtDepth = 25.0;
 		constexpr int RockAttempts = 6;
-		constexpr int PropAttempts = 6;
 		constexpr double LoneTrees = 0.025;     // the chance of a tree out in the open, where a wood would be sure of one
 		constexpr double BrushHeight = 0.3;     // what rolls through grass this close to the ground brushes through it
 		constexpr double BrushDrag = 1.3;       // per second
@@ -51,6 +50,7 @@ namespace Teinora
 		constexpr double SteamLife = 12.0;      // seconds
 		constexpr double SmokeLife = 12.0;
 		constexpr double FlameReach = 26.0;     // metres that a flame's light goes
+		constexpr double FireKeptInWind = 0.5;  // of the fire magic a fire's heat gathers, what a light wind leaves in it
 
 		/** Mass follows from what a thing is made of and how big it is, inertia from mass and shape. */
 		struct PropSpec
@@ -165,6 +165,48 @@ namespace Teinora
 			Out.push_back(MakeVertex(B, Normal, Root, 0.0));
 			Out.push_back(MakeVertex(A, Normal, Root, 0.0));
 			Out.push_back(MakeVertex(Tip, Normal, End, 0.35));
+		}
+
+		/**
+		 * Minerals that dense earth magic has made: a cluster of six-sided crystals with pointed tips, leaning
+		 * out from where they grew, in one of a few colours of stone, rule 14 in TeinoraSim.h.
+		 */
+		void AddCrystals(std::vector<TerrainVertex>& Out, const Vec3& Base, double Size, std::uint32_t Seed)
+		{
+			constexpr Color Kinds[] = {
+				{ 0.42, 0.24, 0.62 }, // amethyst
+				{ 0.80, 0.82, 0.86 }, // rock crystal
+				{ 0.72, 0.52, 0.18 }, // citrine
+				{ 0.16, 0.50, 0.34 }, // emerald
+				{ 0.20, 0.36, 0.66 }, // sapphire
+			};
+			Random Rng(static_cast<std::uint64_t>(Seed) * 2654435761ull + 1ull);
+			const Color Tint = Kinds[static_cast<std::size_t>(Rng.Next() * std::size(Kinds)) % std::size(Kinds)];
+			const int Count = 3 + static_cast<int>(Rng.Next() * 4.0);
+			for (int Index = 0; Index < Count; ++Index)
+			{
+				const double Lean = Rng.Range(0.0, 0.6);
+				const double Toward = Rng.Range(0.0, 2.0 * Pi);
+				const Vec3 Axis = Normalize(Vec3{ std::sin(Lean) * std::cos(Toward), std::sin(Lean) * std::sin(Toward), std::cos(Lean) });
+				const double Long = Size * Rng.Range(0.45, 1.0) * (Index == 0 ? 1.3 : 1.0);
+				const double Radius = Long * Rng.Range(0.14, 0.22);
+				const Vec3 Foot = Base + Vec3{ Rng.Range(-0.3, 0.3), Rng.Range(-0.3, 0.3), 0.0 } * Size - Axis * Radius;
+				const Vec3 Side = Normalize(Cross(Axis, std::fabs(Axis.Z) > 0.9 ? Vec3{ 1.0, 0.0, 0.0 } : Vec3{ 0.0, 0.0, 1.0 }));
+				const Vec3 Other = Cross(Axis, Side);
+				const Vec3 Top = Foot + Axis * (Long * 0.78);
+				const Vec3 Tip = Foot + Axis * Long;
+				const Color Shade = Scale(Tint, Rng.Range(0.85, 1.15));
+				for (int Face = 0; Face < 6; ++Face)
+				{
+					const double A = Face * Pi / 3.0;
+					const double B = (Face + 1) * Pi / 3.0;
+					const Vec3 Out1 = Side * std::cos(A) + Other * std::sin(A);
+					const Vec3 Out2 = Side * std::cos(B) + Other * std::sin(B);
+					AddFacet(Out, Foot + Out1 * Radius, Foot + Out2 * Radius, Top + Out2 * Radius, Shade);
+					AddFacet(Out, Foot + Out1 * Radius, Top + Out2 * Radius, Top + Out1 * Radius, Shade);
+					AddFacet(Out, Top + Out1 * Radius, Top + Out2 * Radius, Tip, Scale(Shade, 1.25));
+				}
+			}
 		}
 
 		/**
@@ -648,7 +690,7 @@ namespace Teinora
 	void GameWorld::UpdateBurning(double Time)
 	{
 		constexpr double Settling = 8.0;  // seconds for a new fire to settle before the wind can put it out
-		constexpr double GoneOut = 0.008; // kg/m3 of fire magic that a fire needs around it to stay alight
+		constexpr double GoneOut = 0.15;  // of the fire magic its heat would gather, what a fire needs around it to stay alight
 
 		std::erase_if(Steam, [Time](const SteamPuff& Item) { return Time > Item.Born + SteamLife; });
 		std::erase_if(BurntOut, [Time](const Smouldering& Item) { return Time > Item.Out + SmokeLife; });
@@ -656,7 +698,8 @@ namespace Teinora
 		for (std::size_t Index = Burning.size(); Index-- > 0;)
 		{
 			const Vec3 Air = Burning[Index].Position + Vec3{ 0.0, 0.0, 2.0 };
-			const bool bBlownOut = Time > BurningUntil[Index] - BurnTime + Settling && Magic != nullptr && Magic->Contains(Air) && Magic->GetMix(Air).GetAllFire() < GoneOut;
+			const bool bBlownOut = Time > BurningUntil[Index] - BurnTime + Settling && Magic != nullptr && Magic->Contains(Air)
+				&& Magic->GetMix(Air).GetAllFire() < GoneOut * Sim::MagicHotDraw(Air, Burning[Index]).Density;
 			if (Time > BurningUntil[Index] || bBlownOut)
 			{
 				BurntOut.push_back({ Burning[Index], BurningUntil[Index] - BurnTime, Time });
@@ -771,6 +814,9 @@ namespace Teinora
 			}
 		}
 
+		// Fireflies, and the dust whirlwinds lift.
+		Shows.CollectPuffs(LastUpdateTime, Out);
+
 		std::sort(Out.begin(), Out.end(), [&Eye](const PuffDraw& A, const PuffDraw& B)
 		{
 			return Length(A.Point - Eye) < Length(B.Point - Eye);
@@ -797,7 +843,8 @@ namespace Teinora
 		{
 			return 1.0;
 		}
-		const double Usual = Spot.Radius < 1.0 ? 0.002 : 0.05;
+		// Its heat gathers fire magic around it, and wind takes some of that away again.
+		const double Usual = std::max(Sim::MagicHotDraw(Point, Spot).Density * FireKeptInWind, 1e-3);
 		return std::clamp(std::sqrt(Magic->GetMix(Point).GetAllFire() / Usual), 0.5, 1.7);
 	}
 
@@ -835,6 +882,25 @@ namespace Teinora
 			Light.Color = Light.Color * Strength;
 			Out.push_back(Light);
 		}
+
+		// Big fireflies light what is around them too, as far as there is room.
+		std::vector<HotLight> Glowing;
+		Shows.CollectLights(Glowing);
+		std::sort(Glowing.begin(), Glowing.end(), [&Eye](const HotLight& A, const HotLight& B) { return Length(A.Point - Eye) < Length(B.Point - Eye); });
+		for (const HotLight& Each : Glowing)
+		{
+			if (Out.size() == Most)
+			{
+				break;
+			}
+			Out.push_back(Each);
+		}
+	}
+
+	void GameWorld::TakeMagicDeposits(std::vector<MagicDeposit>& Out)
+	{
+		Out.clear();
+		Shows.TakeDeposits(Out);
 	}
 
 	void GameWorld::ScatterObjects(ChunkBuild& Build)
@@ -942,6 +1008,24 @@ namespace Teinora
 			}
 		}
 
+		// What dense magic has made, which stays: minerals out of earth magic, bushes out of nature magic.
+		for (const Sim::MagicGrowth& Growth : Sim::FindMagicGrowths(Origin.X, Origin.Y, Origin.X + ChunkSize, Origin.Y + ChunkSize))
+		{
+			const Vec3 Local{ Growth.Position.X - Origin.X, Growth.Position.Y - Origin.Y, Growth.Position.Z };
+			if (Growth.Kind == Sim::EMagicGrowth::Minerals)
+			{
+				AddCrystals(Build.Vertices, Local, Growth.Size, Growth.Seed);
+				if (Build.Lod == 0)
+				{
+					Build.Statics.push_back({ P::Shape::MakeSphere(Growth.Size * 0.4), Growth.Position + Vec3{ 0.0, 0.0, Growth.Size * 0.2 } });
+				}
+			}
+			else
+			{
+				GrowPlant(EPlantKind::Bush, Local, Origin, Growth.Size, Plants, Growth.Seed, Output);
+			}
+		}
+
 		for (const Sim::HotSpot& Spot : Build.HotSpots)
 		{
 			// Each belongs to the chunk it stands in, which draws all of it.
@@ -960,22 +1044,6 @@ namespace Teinora
 			{
 				AddCampfire(Build.Vertices, Origin, Spot);
 				Build.Statics.push_back({ P::Shape::MakeSphere(Spot.Radius), Spot.Position - Vec3{ 0.0, 0.0, Spot.Radius * 0.75 } });
-			}
-		}
-
-		if (Build.Lod == 0)
-		{
-			for (int Attempt = 0; Attempt < PropAttempts; ++Attempt)
-			{
-				const Vec3 Local = RandomPoint();
-				const double WorldX = Origin.X + Local.X;
-				const double WorldY = Origin.Y + Local.Y;
-				const double Height = std::max(Sim::TerrainHeight(WorldX, WorldY, Sim::WorldSeed), Sim::FindWater(WorldX, WorldY, Sim::WorldSeed).Level);
-
-				PropSpawn Spawn;
-				Spawn.Kind = Rng.Next() < 0.5 ? EPropKind::Crate : EPropKind::Barrel;
-				Spawn.Position = { WorldX, WorldY, Height + 2.0 };
-				Build.Props.push_back(Spawn);
 			}
 		}
 	}
@@ -1079,6 +1147,7 @@ namespace Teinora
 		const int CenterX = ToChunk(Focus.X);
 		const int CenterY = ToChunk(Focus.Y);
 
+		const double Dt = std::clamp(Time - LastUpdateTime, 0.0, 0.25);
 		AirDrift += Sim::PrevailingWind(Time, Sim::WorldSeed) * (Time - LastUpdateTime);
 		LastUpdateTime = Time;
 
@@ -1087,6 +1156,25 @@ namespace Teinora
 		ApplyFinishedChunks();
 		CullProps(Time);
 		UpdateBurning(Time);
+
+		// What dense magic makes. Minerals and plants are built into the ground's chunks, so those are built again.
+		if (Magic != nullptr)
+		{
+			Shows.Update(*Magic, Time, Dt);
+			std::vector<Sim::MagicGrowth> Grown;
+			Shows.TakeGrowths(Grown);
+			for (const Sim::MagicGrowth& Growth : Grown)
+			{
+				Sim::AddMagicGrowth(Growth);
+				for (int ChunkY = ToChunk(Growth.Position.Y - Growth.Size); ChunkY <= ToChunk(Growth.Position.Y + Growth.Size); ++ChunkY)
+				{
+					for (int ChunkX = ToChunk(Growth.Position.X - Growth.Size); ChunkX <= ToChunk(Growth.Position.X + Growth.Size); ++ChunkX)
+					{
+						Stale.insert(ChunkKey(ChunkX, ChunkY));
+					}
+				}
+			}
+		}
 
 		if (Length(Focus - WellsCenter) > 200.0)
 		{
@@ -1396,7 +1484,7 @@ namespace Teinora
 			const Vec3 Flat{ Target.X - Start.X, Target.Y - Start.Y, 0.0 };
 			const double Distance = Length(Flat);
 			// The aim allows for the magic around the thrower as well as the air, as a thrower would by feel.
-			const double Thick = Magic != nullptr && Magic->Contains(Start) ? Magic->GetMix(Start).GetAspected() * Sim::MagicDragShare : 0.0;
+			const double Thick = Magic != nullptr && Magic->Contains(Start) ? Magic->GetMix(Start).GetActing().GetAspected() * Sim::MagicDragShare : 0.0;
 			const double DragPerMass = 0.5 * (Sim::AirDensity + Thick) * Spec.DragCoefficient * Spec.FrontalArea / Spec.GetMass();
 			const double NetGravity = Sim::Gravity * (1.0 - Sim::AirDensity / Spec.Density);
 
@@ -1556,17 +1644,21 @@ namespace Teinora
 				Felt->Time = Time;
 			}
 
+			// Only what an aspect has over Sim::MagicActsOnMatter pushes on anything. The swelling of air that
+			// fire magic warms is the air's push, not the magic's.
+			const Sim::MagicMix Acting = Felt->Mix.GetActing();
 			const Vec3 Past = Felt->Flow - Item.Velocity;
-			const Vec3 Pushed = Sim::MagicDrag(Felt->Mix, Past, Spec.DragCoefficient, Spec.FrontalArea)
-				+ Sim::MagicViscosity(Felt->Mix.Get(Sim::EMagicType::Water), Past, Radius)
-				+ Sim::MagicPressure(Felt->AirSlope, Spec.GetVolume())
+			const bool bAirActs = Acting.Get(Sim::EMagicType::Air) > 0.0;
+			const Vec3 Pushed = Sim::MagicDrag(Acting, Past, Spec.DragCoefficient, Spec.FrontalArea)
+				+ Sim::MagicViscosity(Acting.Get(Sim::EMagicType::Water), Past, Radius)
+				+ (bAirActs ? Sim::MagicPressure(Felt->AirSlope, Spec.GetVolume()) : Vec3{})
 				+ Sim::FireBlast(Felt->FireSlope, Spec.GetVolume());
 			Item.Force += Pushed;
 			Felt->Impulse -= Pushed * Dt;
 		}
 
-		// Fire magic warms the air, and warm air rises and takes things with it.
-		const Vec3 Moving = Air.Flow.Velocity + Vec3{ 0.0, 0.0, Felt != nullptr ? Felt->Rising : 0.0 };
+		// Fire magic warms the air, and warm air rises and takes things with it. Dense air magic spins it into whirlwinds.
+		const Vec3 Moving = Air.Flow.Velocity + Shows.GetWhirl(Item.Position) + Vec3{ 0.0, 0.0, Felt != nullptr ? Felt->Rising : 0.0 };
 		Item.Force += (Sim::AeroForce(Moving - Item.Velocity, Spec.DragCoefficient, Spec.FrontalArea) + Sim::AirLift(Spec.GetVolume())) * Exposed;
 
 		// Spinning air turns what is in it, until the body keeps pace at half the vorticity.
@@ -1575,8 +1667,9 @@ namespace Teinora
 
 		if (Submerged > 0.0)
 		{
-			// Water carries along what floats in it, and is shoved aside by what comes in.
-			Item.Force += Sim::WaterForce(Submerged, Spec.GetVolume(), Item.Velocity - Liquid.GetFlow(Item.Position.X, Item.Position.Y), 1.2, Item.GetMass());
+			// Water carries along what floats in it, and is shoved aside by what comes in. Dense water magic drives it in a current.
+			const Vec3 Flowing = Liquid.GetFlow(Item.Position.X, Item.Position.Y) + Shows.GetCurrent(Item.Position);
+			Item.Force += Sim::WaterForce(Submerged, Spec.GetVolume(), Item.Velocity - Flowing, 1.2, Item.GetMass());
 			Item.AngularAcceleration += Item.AngularVelocity * (-2.4 * Submerged);
 		}
 		DisplaceWater(Index, Item.Position, Submerged * Spec.GetVolume(), Spec.HalfHeight);
@@ -1584,7 +1677,7 @@ namespace Teinora
 		const double Speed = Length(Item.Velocity);
 		if (Speed > 0.05)
 		{
-			const double Stiffening = Felt != nullptr ? Sim::MagicStiffening(Felt->Mix.Get(Sim::EMagicType::Nature)) : 1.0;
+			const double Stiffening = Felt != nullptr ? Sim::MagicStiffening(Felt->Mix.GetActing().Get(Sim::EMagicType::Nature)) : 1.0;
 			Item.Force += Plants.Touch(Item.Position, Spec.HalfHeight, Item.Velocity, Item.GetMass(), Dt, Stiffening);
 		}
 
@@ -1595,7 +1688,7 @@ namespace Teinora
 		}
 
 		const double Clearance = Item.Position.Z - Spec.HalfHeight - Ground.Height;
-		const double EarthMagic = Felt != nullptr ? Felt->Mix.Get(Sim::EMagicType::Earth) : 0.0;
+		const double EarthMagic = Felt != nullptr ? Felt->Mix.GetActing().Get(Sim::EMagicType::Earth) : 0.0;
 		if (Felt != nullptr)
 		{
 			const Vec3 Clung = Sim::MagicCling(EarthMagic, Clearance, Ground.Normal, Item.GetMass());

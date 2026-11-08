@@ -68,12 +68,12 @@ namespace
 		double FlyTurn = 0.0;       // and radians of yaw, per frame so the path ignores the frame rate
 		Menu::EPage Page = Menu::EPage::Closed;
 		int Throws = 0;             // balls thrown during an automated run
-		std::string Place;          // and the keys from 1 to 4 pressed in it, one a frame, to set things down
 		int TimeStep = -1;          // the speed of time for this run, as an index into WorldSettings::GetTimeRate, unsaved
 		double ThrowHold = 2.0;     // and how many seconds of holding each one stands for
 		bool bMagicView = false;    // starts in the magic view
 		double Strike = 0.0;        // an automated run ends with a bolt this far ahead
 		int StrikeFrame = -1;       // or has it at this frame
+		double Rain = -1.0;         // a run can ask for rain this hard and as stormy, from 0 to 1, whatever the clouds say
 	};
 
 	bool StartsWith(const char* Text, const char* Prefix)
@@ -130,10 +130,6 @@ namespace
 			{
 				Result.Throws = std::atoi(Argument + 9);
 			}
-			else if (StartsWith(Argument, "--place="))
-			{
-				Result.Place = Argument + 8;
-			}
 			else if (StartsWith(Argument, "--time-step="))
 			{
 				Result.TimeStep = std::atoi(Argument + 12);
@@ -149,6 +145,10 @@ namespace
 			else if (StartsWith(Argument, "--strike="))
 			{
 				Result.Strike = std::atof(Argument + 9);
+			}
+			else if (StartsWith(Argument, "--rain="))
+			{
+				Result.Rain = std::clamp(std::atof(Argument + 7), 0.0, 1.0);
 			}
 			else if (std::strcmp(Argument, "--magic") == 0)
 			{
@@ -334,7 +334,7 @@ namespace
 		const bool bWord = Forward.size() + Left.size() + Back.size() + Right.size() == 4;
 		const std::string Gap = bWord ? "" : " ";
 		const std::string Help = Forward + Gap + Left + Gap + Back + Gap + Right + " move   " + Name(EAction::Up) + " / " + Name(EAction::Down) + " up, down   "
-			+ Name(EAction::Fast) + " fast   Hold LMB throw ball   1 fire  2 crate  3 barrel  4 ball   + - time   " + (Extras.bMagic ? "M magic   " : "") + Name(EAction::WorldMenu) + " world   Esc menu";
+			+ Name(EAction::Fast) + " fast   Hold LMB throw ball   + - time   " + (Extras.bMagic ? "M magic   " : "") + Name(EAction::WorldMenu) + " world   Esc menu";
 
 		const float HelpY = static_cast<float>(Input.GetHeight()) - Margin - Line - Padding * 2.0f;
 		Output.DrawRect(Margin, HelpY, Output.MeasureText(Size, Help.c_str()) + Padding * 2.0f, Line + Padding * 2.0f, Backdrop);
@@ -475,6 +475,8 @@ int main(int ArgumentCount, char** Arguments)
 	MagicVolume NearMagic;
 	MagicVolume FarMagic;
 	std::vector<MagicPush> MagicPushes;
+	std::vector<MagicDeposit> MagicDeposits;
+	Sim::Weather Weather;
 	World.SetMagic(&NearMagic);
 	bool bMagicView = Magic != nullptr && Launch.bMagicView;
 	float MagicFade = bMagicView ? 1.0f : 0.0f;
@@ -503,7 +505,6 @@ int main(int ArgumentCount, char** Arguments)
 	Vec3 CloudDrift; // how far the wind aloft has carried the clouds, and in Z how far they have changed
 	int SettledFrames = 0;
 	int ThrowsLeft = Launch.Throws;
-	std::size_t PlacedSoFar = 0;
 	double WorldDt = 0.0;        // the world's seconds that this frame got through
 	double CountedFromSim = 0.0; // where the world's time and the gas's stood when an automated run began to count frames
 	double CountedFromGas = 0.0;
@@ -599,25 +600,6 @@ int main(int ArgumentCount, char** Arguments)
 				}
 			}
 
-			// What can be set down where the eye rests.
-			char Pressed = 0;
-			if (bHandsFree)
-			{
-				Pressed = AppWindow.WasKeyPressed(EKey::One) ? '1' : AppWindow.WasKeyPressed(EKey::Two) ? '2' : AppWindow.WasKeyPressed(EKey::Three) ? '3' : AppWindow.WasKeyPressed(EKey::Four) ? '4' : 0;
-			}
-			else if (!Launch.Place.empty() && World.IsSettled() && PlacedSoFar < Launch.Place.size())
-			{
-				Pressed = Launch.Place[PlacedSoFar++];
-			}
-			switch (Pressed)
-			{
-			case '1': World.PlaceCampfire(Camera.Position, Camera.GetGaze()); break;
-			case '2': World.PlaceProp(EPropKind::Crate, Camera.Position, Camera.GetGaze()); break;
-			case '3': World.PlaceProp(EPropKind::Barrel, Camera.Position, Camera.GetGaze()); break;
-			case '4': World.PlaceProp(EPropKind::Ball, Camera.Position, Camera.GetGaze()); break;
-			default: break;
-			}
-
 			// The world runs at the speed of time that the menu sets, as far as the physics can keep up, and
 			// the suns and the wind go by the time it has got through, so that nothing runs ahead of the rest.
 			const double Before = SimTime;
@@ -649,6 +631,12 @@ int main(int ArgumentCount, char** Arguments)
 		{
 			World.TakeMagicPushes(MagicPushes);
 			Magic->AddPushes(MagicPushes);
+			World.TakeMagicDeposits(MagicDeposits);
+			for (const MagicDeposit& Each : MagicDeposits)
+			{
+				Magic->AddDeposit(Each);
+			}
+			Magic->SetLightDrops(GetLightDropSources(Clock.Hour, Clock.Day));
 			Magic->Advance(Camera.Position, World.GetAirDrift(), SimTime, GetSunHeat(Clock.Hour, Clock.Day));
 			if (Magic->TakeNear(NearMagic))
 			{
@@ -703,6 +691,22 @@ int main(int ArgumentCount, char** Arguments)
 		if (Storms != nullptr)
 		{
 			Extras.Cloud = Storms->Read(Camera.Position);
+		}
+
+		// The weather follows the cloud overhead: deep cloud rains, and a storm pours and darkens the sky. It
+		// comes and goes over some seconds of the world's time.
+		{
+			const Sim::Weather Wanted = Storms != nullptr && Settings.Render.bClouds
+				? Sim::GetWeather(Extras.Cloud.CloudDepth, Extras.Cloud.Mix.Get(Sim::EMagicType::Lightning))
+				: Sim::Weather{};
+			const double Share = std::min(WorldDt / Sim::WeatherChangeTime, 1.0);
+			Weather.Rain += (Wanted.Rain - Weather.Rain) * Share;
+			Weather.Storm += (Wanted.Storm - Weather.Storm) * Share;
+			if (Launch.Rain >= 0.0)
+			{
+				Weather.Rain = Launch.Rain;
+				Weather.Storm = Launch.Rain;
+			}
 		}
 		Extras.Magic = NearMagic.GetMix(Camera.Position);
 		Extras.bMagicView = bMagicView;
@@ -810,12 +814,19 @@ int main(int ArgumentCount, char** Arguments)
 		View.FlashStrength = Storms != nullptr ? Storms->GetCloudFlash(View.FlashPoint) : 0.0;
 		View.CameraDepth = bUnderwater ? WaterTop - Camera.Position.Z : 0.0;
 		View.WaveHeight = Settings.World.WaveHeight;
-		View.CloudCover = Settings.World.CloudCover;
+		View.CloudCover = Settings.World.CloudCover + Weather.Storm * Sim::StormCloudCover;
+		View.Rain = Weather.Rain;
+		View.Storm = Weather.Storm;
+		{
+			// The wind across the view slants the rain: across over down, as the drops fall.
+			const Vec3 Right = Normalize(Cross(Camera.GetForward(), Vec3{ 0.0, 0.0, 1.0 }));
+			View.RainSlant = Dot(Wind, Right) / 9.0 * 0.6;
+		}
 		View.LiquidCornerX = World.GetLiquid().GetCornerX();
 		View.LiquidCornerY = World.GetLiquid().GetCornerY();
 		View.LiquidSpan = World.GetLiquid().GetSpan();
 		View.MagicView = MagicFade;
-		View.bMagicBends = NearMagic.PeakDensity > Sim::MagicVisibleDensity;
+		View.bMagicBends = NearMagic.PeakDensity > Sim::MagicDewPoint;
 		Output.Render(View);
 
 		if (bLastFrame)

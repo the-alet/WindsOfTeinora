@@ -34,7 +34,7 @@ foreach(WOT_LIB PhysX PhysXCommon PhysXFoundation PhysXExtensions PhysXCooking P
     target_link_libraries(TeinoraPhysics PUBLIC "${WOT_PHYSX_DIR}/lib/${WOT_LIB}_static_64.lib")
 endforeach()
 
-add_library(TeinoraSim STATIC Game/Liquid.cpp Game/MagicField.cpp Game/Plants.cpp Game/StarMap.cpp Game/Storms.cpp Game/SurfaceTextures.cpp Game/TeinoraSim.cpp Game/WorldMap.cpp)
+add_library(TeinoraSim STATIC Game/Liquid.cpp Game/MagicField.cpp Game/MagicShows.cpp Game/Plants.cpp Game/StarMap.cpp Game/Storms.cpp Game/SurfaceTextures.cpp Game/TeinoraSim.cpp Game/WorldMap.cpp)
 target_include_directories(TeinoraSim PUBLIC Engine Game)
 target_link_libraries(TeinoraSim PRIVATE TeinoraWarnings)
 

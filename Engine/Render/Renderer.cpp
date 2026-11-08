@@ -53,6 +53,8 @@ namespace Teinora
 			float Seed;
 			float Shade;
 			float Firelight;
+			float Glow;
+			float Unused;
 		};
 
 		std::uint16_t ToHalf(float Value)
@@ -402,6 +404,7 @@ namespace Teinora
 		Float4 CloudDrift;
 		Float4 SkyShift;
 		Float4 Coronas[2];
+		Float4 Weather;
 	};
 
 	Renderer::Renderer(Rhi::Device& InDevice, std::uint32_t InWindowWidth, std::uint32_t InWindowHeight, const RenderSettings& InSettings)
@@ -582,7 +585,7 @@ namespace Teinora
 		Puffs.Vertex = GetShader("PuffVS", Backend);
 		Puffs.Pixel = GetShader("PuffPS", Backend);
 		Puffs.Streams = { { sizeof(PuffVertex), false } };
-		Puffs.Attributes = { { EFormat::RGB32Float, 0, 0 }, { EFormat::RG32Float, 12, 0 }, { EFormat::RGBA32Float, 20, 0 } };
+		Puffs.Attributes = { { EFormat::RGB32Float, 0, 0 }, { EFormat::RG32Float, 12, 0 }, { EFormat::RGBA32Float, 20, 0 }, { EFormat::RG32Float, 36, 0 } };
 		Puffs.Blend = EBlend::Alpha;
 		PuffPipeline = Device.CreatePipeline(Puffs);
 
@@ -1191,7 +1194,8 @@ namespace Teinora
 			const auto Add = [&](const PuffCorner& Corner)
 			{
 				Vertices.push_back({ ToFloat(Corner.Point - View.CameraPosition), static_cast<float>(Corner.Across), static_cast<float>(Corner.Up),
-					static_cast<float>(Puff->Thickness), static_cast<float>(Puff->Seed), static_cast<float>(Puff->Shade), static_cast<float>(Puff->Firelight) });
+					static_cast<float>(Puff->Thickness), static_cast<float>(Puff->Seed), static_cast<float>(Puff->Shade), static_cast<float>(Puff->Firelight),
+					static_cast<float>(Puff->Glow), 0.0f });
 			};
 			for (int Index = 2; Index < Count; ++Index)
 			{
@@ -1395,6 +1399,7 @@ namespace Teinora
 		Tonemap.Reads[0] = Source;
 		Tonemap.Reads[1] = bMagicHaze ? MagicTarget : Rhi::TextureHandle{};
 		Tonemap.Reads[2] = bMagicBends ? MagicBendTarget : Rhi::TextureHandle{};
+		Tonemap.Reads[3] = SceneDepth; // rain falls in front of what is further than it
 		Device.BeginPass(Tonemap);
 
 		const float MagicData[4] = {
@@ -1402,10 +1407,10 @@ namespace Teinora
 			bMagicBends ? 1.0f : 0.0f,
 			2.0f / static_cast<float>(PostWidth),
 			2.0f / static_cast<float>(PostHeight) };
-		const Rhi::TextureHandle TonemapTextures[] = { Source, bMagicHaze ? MagicTarget : Rhi::TextureHandle{}, bMagicBends ? MagicBendTarget : Rhi::TextureHandle{} };
+		const Rhi::TextureHandle TonemapTextures[] = { Source, bMagicHaze ? MagicTarget : Rhi::TextureHandle{}, bMagicBends ? MagicBendTarget : Rhi::TextureHandle{}, SceneDepth };
 		Device.SetPipeline(TonemapPipeline);
 		Device.SetPushConstants(MagicData, sizeof(MagicData));
-		Device.SetTextures(TonemapTextures, 3);
+		Device.SetTextures(TonemapTextures, 4);
 		Device.Draw(3);
 		Device.EndPass();
 
@@ -1535,6 +1540,7 @@ namespace Teinora
 		Frame.Sun2Color = ToFloat4(Sky.Sun2Color);
 		Frame.Coronas[0] = ToFloat4(Sky.SunCorona);
 		Frame.Coronas[1] = ToFloat4(Sky.Sun2Corona);
+		Frame.Weather = { static_cast<float>(View.Rain), static_cast<float>(View.Storm), static_cast<float>(View.RainSlant), 0.0f };
 		Frame.PlanetDirection = ToFloat4(ToFloat(Sky.PlanetDirection));
 		Frame.PlanetColor = ToFloat4(Sky.PlanetColor);
 

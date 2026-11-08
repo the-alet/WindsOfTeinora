@@ -5,6 +5,7 @@
 #include "Core/ThreadPool.h"
 #include "Liquid.h"
 #include "MagicField.h"
+#include "MagicShows.h"
 #include "Physics/Physics.h"
 #include "Plants.h"
 #include "Render/SceneTypes.h"
@@ -60,6 +61,12 @@ namespace Teinora
 
 		/** Hands over what bodies have done back to the magic since the last call. */
 		void TakeMagicPushes(std::vector<MagicPush>& Out);
+
+		/** Hands over the magic that what dense magic made has let out since the last call: the big fireflies' waves of light magic. */
+		void TakeMagicDeposits(std::vector<MagicDeposit>& Out);
+
+		/** What dense magic has made: fireflies, whirlwinds, currents. */
+		const MagicShows& GetShows() const { return Shows; }
 
 		/** How far the wind has carried the air so far, which moves its eddies with it. */
 		const Vec3& GetAirDrift() const { return AirDrift; }
@@ -235,6 +242,7 @@ namespace Teinora
 		std::vector<MagicReading> MagicByBody;
 		std::vector<MagicPush> MagicPushes;
 		const MagicVolume* Magic = nullptr;
+		MagicShows Shows;
 		std::vector<Sim::HotSpot> HotSpotsAround;
 		Vec3 HotSpotsCenter{ 1e12, 0.0, 0.0 };
 		std::vector<Sim::MagicWell> WellsAround;

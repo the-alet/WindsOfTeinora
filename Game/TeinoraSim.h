@@ -197,13 +197,18 @@ namespace Teinora::Sim
 	// through whatever is in the way. What it obeys:
 	//  1. The amount of magic is conserved. An aspect is a property of magic, not a substance.
 	//  2. Out of contact with matter an aspect fades back to neutral, each at its own rate.
-	//  3. No aspect ever turns into another: the only way between them is through neutral.
+	//  3. No aspect ever turns into another but by rule 15: otherwise the only way between them is through neutral.
 	//  4. Only neutral magic takes on an aspect, only from matter of that aspect, and a kilogram
 	//     has one aspect at a time.
 	//  5. Air gives its aspect as slowly as it fades, so in the air the two lie about half and half.
-	//  6. Matter slows the stream and holds it, so magic lies denser against the ground.
-	//  7. Only magic with an aspect acts on matter, and matter acts back on it just as hard.
+	//  6. Magic weighs nothing and sinks nowhere. Each aspect spreads out towards an even density of its
+	//     own, the faster the less inert it is: earth the most inert and sluggish, then water, nature,
+	//     fire, air, and light the most mobile. Matter slows the stream, and what it gives an aspect
+	//     lies thicker beside it only because it is made there.
+	//  7. Only magic with an aspect acts on matter, and matter acts back on it just as hard. Below
+	//     MagicActsOnMatter an aspect acts on nothing; above it, it acts by what it has over that.
 	//     Neutral magic passes through everything and pushes nothing.
+	//     Below MagicDewPoint magic is there but not present to plain sight. Over it, it shows.
 	//  8. Fire is the one aspect with forms, and pressure alone moves it between them: from fire
 	//     to lightning to light as it rises, and back as it falls. They are one aspect, not three.
 	//  9. Fire magic warms the air it is in, and that is the only way heat gets about: there is no
@@ -219,6 +224,15 @@ namespace Teinora::Sim
 	//     ground along one channel, and what was charged goes back to neutral.
 	// 12. Only dense fire changes matter. Where it reaches MagicFierceFire, in any of its forms, what
 	//     grows catches, and water boils to steam, which spends the fire back to neutral.
+	// 13. Heat draws magic: what is hot gathers magic around itself and gives it the aspect of fire,
+	//     densest in the fire and thinner further out, as the heat around it is.
+	// 14. Any aspect dense enough makes something of its own, see MagicManifestDensity: air a
+	//     whirlwind, water a current, earth minerals, fire fire, nature plants, light fireflies.
+	// 15. The suns pelt the world with small drops of light magic at two thirds of the speed of light,
+	//     and the planet sends back 5% of those that strike it. A drop runs into the other magic in its
+	//     way, slows, and stirs it into eddies as it does, and comes to rest where it has slowed or on
+	//     the ground. Nature magic is the exception: it takes the drop up and grows by it. It takes up
+	//     water magic too, more slowly and growing by less. These are the only ways one aspect becomes another.
 
 	inline constexpr bool bMagicEnabled = true;
 
@@ -231,8 +245,11 @@ namespace Teinora::Sim
 	/** Metres over the ground where magic gives out. There is magic everywhere below that. */
 	inline constexpr double MagicCeiling = 2000.0;
 
-	/** Density in kg/m3 at which magic starts to bend light, so that it shows without the magic view. */
-	inline constexpr double MagicVisibleDensity = 5.5;
+	/** Magic's dew point: the density in kg/m3 at which it becomes present to plain sight, and bends light. */
+	inline constexpr double MagicDewPoint = 30.0;
+
+	/** The density in kg/m3 of one aspect below which it does nothing to bodies. Above it, only the excess acts. */
+	inline constexpr double MagicActsOnMatter = 50.0;
 
 	/** How fast a pressure difference spreads through magic, in m/s. Its pressure is its density times this squared. */
 	inline constexpr double MagicSoundSpeed = 5.0;
@@ -246,6 +263,25 @@ namespace Teinora::Sim
 	/** Where clouds are. Also in Shaders/Clouds.hlsli. */
 	inline constexpr double CloudBottom = 1700.0;
 	inline constexpr double CloudTop = 3100.0;
+
+	/** The weather under the clouds: how hard it rains, and how stormy it is, each from 0 to 1. */
+	struct Weather
+	{
+		double Rain = 0.0;
+		double Storm = 0.0;
+	};
+
+	/**
+	 * The weather under cloud so many metres deep, holding this much lightning in kg/m3. Thin cloud gives none.
+	 * Deep cloud rains, and a storm, deep cloud full of lightning, pours. See CloudDepth in Storms.h.
+	 */
+	Weather GetWeather(double CloudDepth, double Lightning);
+
+	/** Seconds of the world's time for the weather to change most of the way to what the clouds overhead say. */
+	inline constexpr double WeatherChangeTime = 12.0;
+
+	/** How much more of the sky a storm covers in cloud, as a share of the usual cover. */
+	inline constexpr double StormCloudCover = 0.45;
 
 	/** How much faster the wind is up where the clouds are than near the ground, which holds it back. */
 	inline constexpr double CloudWindRatio = 2.5;
@@ -261,7 +297,7 @@ namespace Teinora::Sim
 	inline constexpr double MagicBreakdown = 0.08;
 
 	/** What a bolt brings down to each cell of the gas along its channel, in kg/m3 and in kg. */
-	inline constexpr double MagicChannelDensity = 30.0;
+	inline constexpr double MagicChannelDensity = 160.0;
 	inline constexpr double MagicChannelAmount = MagicChannelDensity * 64.0;
 
 	/** What magic can be. It all flows as one: the aspect only says what a kilogram of it does. */
@@ -279,8 +315,8 @@ namespace Teinora::Sim
 	};
 
 	/** Pressures of magic in Pa, its density times its sound speed squared, that take fire to its other forms. */
-	inline constexpr double MagicLightningPressure = 125.0; // 5 kg/m3
-	inline constexpr double MagicLightPressure = 200.0;     // 8 kg/m3
+	inline constexpr double MagicLightningPressure = 675.0; // 27 kg/m3, a little short of the dew point
+	inline constexpr double MagicLightPressure = 1100.0;    // 44 kg/m3
 
 	inline constexpr int MagicTypeCount = static_cast<int>(EMagicType::Count);
 
@@ -306,6 +342,9 @@ namespace Teinora::Sim
 
 		/** All of the one aspect of fire, whatever form it has. */
 		double GetAllFire() const { return Get(EMagicType::Fire) + Get(EMagicType::Lightning) + Get(EMagicType::Light); }
+
+		/** What acts on bodies: of each aspect, what it has over MagicActsOnMatter. */
+		MagicMix GetActing() const;
 	};
 
 	/** Something hot enough to give magic the aspect of fire. */
@@ -329,14 +368,47 @@ namespace Teinora::Sim
 	/** Goes up by one each time a campfire is placed, so that what keeps hot spots knows to look again. */
 	std::uint32_t GetPlacedVersion();
 
+	/** What dense magic has made of matter, which stays once it is made, rule 14. */
+	enum class EMagicGrowth : std::uint8_t
+	{
+		Minerals, // a cluster of crystals, out of earth magic
+		Plant,    // a bush, out of nature magic
+	};
+
+	struct MagicGrowth
+	{
+		Vec3 Position; // on the ground
+		EMagicGrowth Kind = EMagicGrowth::Minerals;
+		double Size = 1.0; // metres
+		std::uint32_t Seed = 0;
+	};
+
+	/** Keeps something dense magic has made, for as long as the game runs. */
+	void AddMagicGrowth(const MagicGrowth& Growth);
+
+	/** What dense magic has made within a box of the map. */
+	std::vector<MagicGrowth> FindMagicGrowths(double MinX, double MinY, double MaxX, double MaxY);
+
 	/** How hot the top of the ground gets, in degrees Celsius. SunHeat is 0 at night and about 1 under both suns. */
 	double GetGroundTemperature(double Warmth, ESurface Surface, double SunHeat);
 
 	/** How fast neutral magic takes on the aspect of fire from something hot filling a share of where it is, per second. */
 	double MagicHeatImprint(double Temperature, double VolumeShare);
 
-	/** The same for all the hot spots around a cell of the given size. */
-	double MagicHotImprint(const Vec3& Center, double CellSize, const std::vector<HotSpot>& Spots);
+	/**
+	 * What something hot does to the magic at a point, rule 13: how much more of it gathers there, in kg/m3,
+	 * which comes with the aspect of fire, and how fast neutral magic there takes that aspect, per second.
+	 * Both are greatest in what is hot and fall away within some metres of it, further from the bigger ones.
+	 */
+	struct HotDraw
+	{
+		double Density = 0.0;
+		double Rate = 0.0;
+	};
+	HotDraw MagicHotDraw(const Vec3& Position, const HotSpot& Spot);
+
+	/** How far from a hot spot's middle its draw is worth reckoning with, in metres. */
+	double MagicHotReach(const HotSpot& Spot);
 
 	/** Moves fire magic towards the form that a pressure in Pa gives it. Nothing else changes a form. */
 	void UpdateFireForms(MagicMix& Mix, double Pressure, double Dt);
@@ -359,11 +431,24 @@ namespace Teinora::Sim
 	/** How fast the air rises through a cloud so many metres deep, in m/s. Only tall ones churn. */
 	double CloudUpdraft(double Depth);
 
-	/** What wind in m/s does to fire magic: more fire than the wind brings air magic grows on it, and less is blown away. */
-	void UpdateFireInWind(MagicMix& Mix, double WindSpeed, double Dt);
+	/**
+	 * What wind in m/s does to fire magic: more fire than the wind brings air magic grows on it, and less is
+	 * blown away. Draft is the air the fire's own heat draws in from around it, which feeds it but blows nothing out.
+	 */
+	void UpdateFireInWind(MagicMix& Mix, double WindSpeed, double Draft, double Dt);
 
 	/** How many kg/m3 of fire magic, in all its forms together, it takes to light what grows or boil water. */
-	inline constexpr double MagicFierceFire = 8.5;
+	inline constexpr double MagicFierceFire = 45.0;
+
+	/**
+	 * How dense an aspect has to be to make something of its own, in kg/m3: air a whirlwind, nature plants,
+	 * water a current, light fireflies, which are no insects but light showing itself, fire, in any form,
+	 * fire, and earth, the most inert, minerals. All of them are over the dew point.
+	 */
+	double MagicManifestDensity(EMagicType Type);
+
+	/** How inert each aspect is, as a share of neutral magic's: earth the most, light the least. */
+	double MagicInertness(EMagicType Type);
 
 	/** Spends fire magic on boiling water, back to neutral, if there is enough of it. Returns how many kg/m3 went. */
 	double BoilWater(MagicMix& Mix, double Dt);
@@ -388,8 +473,14 @@ namespace Teinora::Sim
 	/** How much of the stream's speed is left at a height over the land or water, from 0 to 1. */
 	double MagicSlowing(double HeightAboveSurface);
 
-	/** Advances what neutral magic takes on and what aspects lose. Nothing else changes an aspect, and the total stays as it is. */
+	/** Advances what neutral magic takes on and what aspects lose. Besides this, only UpdateNatureFeeding changes an aspect, and the total stays as it is. */
 	void UpdateMagicAspects(MagicMix& Mix, const MagicMix& Imprint, double Dt);
+
+	/**
+	 * Rule 15: nature magic takes up light magic and grows by all of it, and water magic, more slowly, growing by
+	 * less of it: the rest of that goes back to neutral. The more nature magic there is, the faster it feeds.
+	 */
+	void UpdateNatureFeeding(MagicMix& Mix, double Dt);
 
 	/** The stream of aspected magic against a body, as air would push on it. Relative is the magic's speed past it. */
 	Vec3 MagicDrag(const MagicMix& Mix, const Vec3& Relative, double DragCoefficient, double FrontalArea);

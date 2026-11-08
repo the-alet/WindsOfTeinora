@@ -2,6 +2,7 @@
 #include "Gaze.h"
 #include "Liquid.h"
 #include "MagicField.h"
+#include "MagicShows.h"
 #include "Plants.h"
 #include "Render/SceneTypes.h"
 #include "StarMap.h"
@@ -9,6 +10,7 @@
 #include "SurfaceTextures.h"
 #include "TeinoraSim.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -731,7 +733,8 @@ namespace
 			Mixing.Step(Center, {}, Step * 0.05, 0.05);
 		}
 		const double Soaked = Mixing.GetDensity({ 6.0, 2.0, 2.0 }, EMagicType::Earth);
-		const double Predicted = std::erfc(6.0 / (2.0 * std::sqrt(3.0 * 10.0))) * std::exp(-10.0 / MagicFadeTime(EMagicType::Earth));
+		const double EarthSoaking = 3.0 / MagicInertness(EMagicType::Earth); // m2/s, the slowest of all
+		const double Predicted = std::erfc(6.0 / (2.0 * std::sqrt(EarthSoaking * 10.0))) * std::exp(-10.0 / MagicFadeTime(EMagicType::Earth));
 		std::printf("       after 10 s, earth magic 6 m into the water magic: %.3f kg/m3, predicted %.3f\n", Soaked, Predicted);
 		Expect(std::fabs(Soaked - Predicted) < 0.03, "kinds of magic diffuse into each other at the set rate");
 		Expect(Mixing.GetDensity({ 6.0, 2.0, 2.0 }) > 1.99 && Mixing.GetDensity({ 6.0, 2.0, 2.0 }) < 2.01, "mixing leaves the total density alone");
@@ -797,13 +800,55 @@ namespace
 		Expect(MagicHeatImprint(30.0, 1.0) == 0.0, "nothing cool gives the aspect of fire");
 		Expect(MagicHeatImprint(1000.0, 1.0) > MagicHeatImprint(500.0, 1.0), "the hotter, the more of it");
 		Expect(MagicHeatImprint(1000.0, 0.5) > MagicHeatImprint(1000.0, 0.05), "and the bigger, the more of it");
+		// Heat gathers fire magic: densest in the fire, thinner further out, and further round bigger fires.
 		const HotSpot Pool{ { 0.0, 0.0, 0.0 }, 12.0, 3.0, 1100.0, true };
 		const HotSpot Camp{ { 0.0, 0.0, 0.0 }, 0.7, 0.8, 900.0, false };
-		const double FromPool = MagicHotImprint({ 1.0, 1.0, 2.0 }, 4.0, { Pool });
-		const double FromCamp = MagicHotImprint({ 1.0, 1.0, 2.0 }, 4.0, { Camp });
-		std::printf("       per second, lava gives %.3f of the neutral magic beside it the aspect of fire, and a campfire %.4f\n", FromPool, FromCamp);
-		Expect(FromPool > FromCamp * 10.0 && FromCamp > 0.0, "a lake of lava gives far more than a campfire");
-		Expect(MagicHotImprint({ 200.0, 0.0, 2.0 }, 4.0, { Pool }) == 0.0, "and only what touches it");
+		const auto CampAt = [&Camp](double Away) { return MagicHotDraw({ Away, 0.0, 0.5 }, Camp).Density; };
+		std::printf("       a campfire's heat gathers %.1f kg/m3 of fire magic in it, %.1f at 4 m, %.2f at 8 m, %.3f at 12 m\n", CampAt(0.0), CampAt(4.0), CampAt(8.0), CampAt(12.0));
+		Expect(CampAt(0.0) > CampAt(4.0) && CampAt(4.0) > CampAt(8.0) && CampAt(8.0) > CampAt(12.0) && CampAt(12.0) > 0.0, "a fire's magic is densest in it and thinner further out");
+		Expect(CampAt(0.0) * MagicSoundSpeed * MagicSoundSpeed < MagicLightningPressure && CampAt(0.0) < MagicFierceFire, "a campfire's magic stays fire, and does not set what is around it alight");
+		Expect(MagicHotDraw({ 20.0, 0.0, 0.0 }, Pool).Density > MagicHotDraw({ 20.0, 0.0, 0.0 }, Camp).Density * 10.0, "a lake of lava reaches far further");
+		Expect(MagicHotDraw({ MagicHotReach(Camp), 0.0, 0.0 }, Camp).Density < 0.01 * CampAt(0.0), "and nothing reaches past where it is reckoned");
+		const HotSpot Cold{ { 0.0, 0.0, 0.0 }, 0.7, 0.8, 30.0, false };
+		Expect(MagicHotDraw({}, Cold).Density == 0.0, "nothing cool draws any");
+
+		// Nature magic takes up light magic and grows by all of it, and water magic more slowly, growing by less.
+		MagicMix Feeding;
+		Feeding.Amounts[static_cast<int>(EMagicType::Nature)] = 0.5;
+		Feeding.Amounts[static_cast<int>(EMagicType::Light)] = 1.0;
+		Feeding.Amounts[static_cast<int>(EMagicType::Water)] = 1.0;
+		const double FedTotal = Feeding.GetTotal();
+		UpdateNatureFeeding(Feeding, 1.0);
+		const double LightTaken = 1.0 - Feeding.Get(EMagicType::Light);
+		const double WaterTaken = 1.0 - Feeding.Get(EMagicType::Water);
+		std::printf("       in a second 0.5 kg/m3 of nature magic takes up %.3f of light magic and %.4f of water magic, and grows to %.3f\n", LightTaken, WaterTaken, Feeding.Get(EMagicType::Nature));
+		Expect(LightTaken > 0.3 && WaterTaken > 0.0 && WaterTaken < 0.2 * LightTaken, "nature magic takes up light magic, and water magic far more slowly");
+		Expect(Feeding.Get(EMagicType::Nature) > 0.5 + LightTaken && Feeding.Get(EMagicType::Nature) < 0.5 + LightTaken + WaterTaken, "it grows by all of the light and by less of the water");
+		Expect(std::fabs(Feeding.GetTotal() - FedTotal) < 1e-12, "and changes no amount of magic");
+
+		// The suns' drops come by day, and none during the triple eclipse, when the planet hides both suns and turns its dark side here.
+		const auto Drops = [](double Hour, double Day)
+		{
+			double Sum = 0.0;
+			for (const LightDropSource& Each : GetLightDropSources(Hour, Day))
+			{
+				Sum += Each.Rate;
+			}
+			return Sum;
+		};
+		std::printf("       drops of light magic at noon %.2f, at midnight %.2f, in the triple eclipse %.3f\n", Drops(12.0, 1.0), Drops(0.5, 1.0), Drops(SunsMeetHour, FirstEclipseDay));
+		Expect(Drops(12.0, 1.0) > 0.5 && Drops(SunsMeetHour, FirstEclipseDay) < 0.05, "the suns pelt the ground by day, and the planet stops it in the triple eclipse");
+		Expect(GetLightDropSources(12.0, 1.0)[2].Rate <= PlanetDropShare * 2.0, "the planet sends back only a few of the drops");
+
+		// Thin magic does nothing to bodies, and over that only the excess does.
+		Expect(Only(EMagicType::Earth, MagicActsOnMatter - 1.0).GetActing().GetTotal() == 0.0, "magic thinner than MagicActsOnMatter acts on nothing");
+		Expect(std::fabs(Only(EMagicType::Water, MagicActsOnMatter + 10.0).GetActing().Get(EMagicType::Water) - 10.0) < 1e-9, "and denser, only what it has over that acts");
+		Expect(Only(EMagicType::Neutral, 500.0).GetActing().GetTotal() == 0.0, "and neutral magic never does");
+		Expect(MagicDewPoint < MagicActsOnMatter, "magic shows before it pushes anything");
+		for (int Type = 0; Type < static_cast<int>(EMagicType::Neutral); ++Type)
+		{
+			Expect(MagicManifestDensity(static_cast<EMagicType>(Type)) > MagicDewPoint, "every aspect makes something only once it shows");
+		}
 
 		const double NoonSand = GetGroundTemperature(0.8, ESurface::Sand, 0.8);
 		std::printf("       sand in a warm place: %.0f degrees at night, %.0f at noon\n", GetGroundTemperature(0.8, ESurface::Sand, 0.0), NoonSand);
@@ -836,21 +881,21 @@ namespace
 		// A ball of fire magic squeezed hard is light. As it spreads, the pressure falls and it goes
 		// back through lightning to fire, in the gas just as in one cell.
 		MagicField Ball(WorldSeed, Closed);
-		Ball.SetDensity(EMagicType::Fire, [&Center](const Vec3& Position) { return Length(Position - Center) < 12.0 ? 9.0 : 0.05; });
+		Ball.SetDensity(EMagicType::Fire, [&Center](const Vec3& Position) { return Length(Position - Center) < 12.0 ? 50.0 : 0.05; });
 		const double BallAmount = Ball.GetTotalAmount();
 		bool bLight = false;
 		bool bLightning = false;
 		for (int Step = 0; Step < 200; ++Step)
 		{
 			Ball.Step(Center, {}, Step * 0.05, 0.05);
-			bLight = bLight || Ball.GetDensity(Center, EMagicType::Light) > 1.0;
-			bLightning = bLightning || Ball.GetDensity(Center, EMagicType::Lightning) > 1.0;
+			bLight = bLight || Ball.GetDensity(Center, EMagicType::Light) > 5.0;
+			bLightning = bLightning || Ball.GetDensity(Center, EMagicType::Lightning) > 5.0;
 		}
 		std::printf("       after 10 s of spreading: %.2f kg/m3 at the centre of the ball, fire %.2f, lightning %.2f, light %.2f, neutral %.2f\n", Ball.GetDensity(Center),
 			Ball.GetDensity(Center, EMagicType::Fire), Ball.GetDensity(Center, EMagicType::Lightning), Ball.GetDensity(Center, EMagicType::Light), Ball.GetDensity(Center, EMagicType::Neutral));
 		Expect(bLight, "fire magic squeezed hard enough is light");
 		Expect(bLightning, "and as it spreads it passes through lightning");
-		Expect(Ball.GetDensity(Center, EMagicType::Light) < 0.05, "and ends with no light left");
+		Expect(Ball.GetDensity(Center, EMagicType::Light) < 0.25, "and ends with no light left");
 		Expect(std::fabs(Ball.GetTotalAmount() - BallAmount) < 1e-3 * BallAmount, "all of which changes no amount of magic");
 
 		// Heat goes where fire magic goes: with none of it there is none.
@@ -863,7 +908,34 @@ namespace
 		const Vec3 Where{ 10.0, 10.0, 10.0 };
 		const double Before = Struck.GetVelocity(Where).X;
 		Struck.Push({ Where, { 2.0 * 4.0 * 4.0 * 4.0 * 3.0, 0.0, 0.0 } });
-		Expect(std::fabs(Struck.GetVelocity(Where).X - Before - 3.0) < 1e-5, "a push on magic is the impulse over the amount of it");
+		const double AirInertness = MagicInertness(EMagicType::Air);
+		Expect(std::fabs(Struck.GetVelocity(Where).X - Before - 3.0 / AirInertness) < 0.01 * 3.0 / AirInertness, "a push on magic is the impulse over the amount of it, as inert as its aspect");
+
+		// Each aspect is as inert as the order says, and evens itself out the faster the less inert it is.
+		const EMagicType ByInertness[] = { EMagicType::Earth, EMagicType::Water, EMagicType::Nature, EMagicType::Fire, EMagicType::Air, EMagicType::Light };
+		bool bOrdered = true;
+		for (std::size_t Index = 1; Index < std::size(ByInertness); ++Index)
+		{
+			bOrdered = bOrdered && MagicInertness(ByInertness[Index]) < MagicInertness(ByInertness[Index - 1]);
+		}
+		Expect(bOrdered, "earth is the most inert, then water, nature, fire, air, and light the least");
+		// A lump of one aspect in neutral magic as dense: nothing pushes, so it only soaks outwards.
+		const auto Spread = [&Center, &Closed](EMagicType Type)
+		{
+			MagicField Lump(WorldSeed, Closed);
+			const auto Inside = [&Center](const Vec3& Position) { return Length(Position - Center) < 8.0; };
+			Lump.SetDensity(Type, [&Inside](const Vec3& Position) { return Inside(Position) ? 4.0 : 0.0; });
+			Lump.SetDensity(EMagicType::Neutral, [&Inside](const Vec3& Position) { return Inside(Position) ? 0.0 : 4.0; });
+			for (int Step = 0; Step < 100; ++Step)
+			{
+				Lump.Step(Center, {}, Step * 0.05, 0.05);
+			}
+			return Lump.GetDensity(Center + Vec3{ 12.0, 0.0, 0.0 }, Type);
+		};
+		const double EarthOut = Spread(EMagicType::Earth);
+		const double FireOut = Spread(EMagicType::Fire);
+		std::printf("       a lump of 4 kg/m3 after 5 s, 12 m from its middle: earth %.4f, fire %.4f\n", EarthOut, FireOut);
+		Expect(FireOut > EarthOut * 1.5, "fire spreads out faster than earth");
 
 		// In the open: a baseline from the world, carried and stirred by moving air.
 		const std::vector<MagicWell> Wells = FindMagicWells(0.0, 0.0, WorldSeed);
@@ -879,14 +951,14 @@ namespace
 		const double Peak = MagicBaseline(Well.Position, Wells, UnderWell, WorldSeed).GetTotal();
 		std::printf("       %zu wells, one %.1f kg/m3 at %.0f %.0f, thin air %.2f kg/m3\n", Wells.size(), Peak, Well.Position.X, Well.Position.Y,
 			MagicBaseline(Well.Position + Vec3{ Well.Radius * 5.0, 0.0, 0.0 }, Wells, UnderWell, WorldSeed).GetTotal());
-		Expect(Peak > MagicVisibleDensity, "wells are dense enough to see");
+		Expect(Peak > MagicDewPoint, "wells are over the dew point, so they show");
 
 		double DensestWell = 0.0;
 		for (const MagicWell& Each : Wells)
 		{
 			DensestWell = std::fmax(DensestWell, Each.Peak);
 		}
-		Expect(DensestWell <= 10.0, "dense magic comes to 10 kg/m3");
+		Expect(DensestWell <= 55.0, "dense magic comes to 55 kg/m3");
 
 		double ThickestLayer = 0.0;
 		for (double Spot = 0.0; Spot < 6000.0; Spot += 37.0)
@@ -927,7 +999,7 @@ namespace
 		const Vec3 High = Above + Vec3{ -20.0, 13.0, 70.0 };
 		std::printf("       a well's grid after 6 s: %.1f kg/m3 at its centre, moving at %.1f m/s, spin up to %.2f 1/s\n",
 			Field.GetDensity(Well.Position), Length(Field.GetVelocity(High)), Field.GetPeakSpin());
-		Expect(Field.GetDensity(Well.Position) > 0.5 * MagicVisibleDensity, "a well holds its magic against the wind");
+		Expect(Field.GetDensity(Well.Position) > 0.5 * MagicDewPoint, "a well holds its magic against the wind");
 		Expect(Length(Field.GetVelocity(High)) > 0.5, "wind carries magic along");
 		Expect(Field.GetPeakSpin() > 0.1, "moving air sets magic swirling");
 		Expect(std::fabs(Volume.GetMix(High).GetTotal() - Field.GetDensity(High)) < 2.0, "a volume reads back what the grid holds");
@@ -946,7 +1018,7 @@ namespace
 
 		// Rubbing goes as the square of the speed, and takes both of them.
 		Expect(MagicRubPressure(0.0, 1.0, 30.0) == 0.0 && MagicRubPressure(1.0, 0.0, 30.0) == 0.0, "water magic or air magic alone rubs against nothing");
-		Expect(std::fabs(MagicRubPressure(1.0, 1.0, 20.0) - 100.0) < 1e-9, "rubbing presses as half the reduced density by the speed squared");
+		Expect(std::fabs(MagicRubPressure(1.0, 1.0, 20.0) - 100.0 * MagicDewPoint / 5.5) < 1e-9, "rubbing presses as half the reduced density by the speed squared, squeezed as the dew point says");
 		Expect(MagicRubImprint(0.0) == 0.0 && MagicRubImprint(200.0) > MagicRubImprint(100.0), "harder rubbing gives more of the aspect of fire");
 		Expect(CloudUpdraft(100.0) == 0.0 && CloudUpdraft(1200.0) > 30.0, "only tall clouds churn");
 
@@ -1006,7 +1078,7 @@ namespace
 		Expect(Dot(FireBlast({ 0.25, 0.0, 0.0 }, 1.0), Vec3{ 1.0, 0.0, 0.0 }) < 0.0, "swelling air pushes out of where the fire is");
 
 		// More fire than the wind brings air magic grows on it, using that up. Less is blown away.
-		const auto InWind = [](double Fire, double Air, double Wind)
+		const auto InWind = [](double Fire, double Air, double Wind, double Draft = 0.0)
 		{
 			MagicMix Mix;
 			Mix.Amounts[static_cast<int>(EMagicType::Fire)] = Fire;
@@ -1015,7 +1087,7 @@ namespace
 			const double Total = Mix.GetTotal();
 			for (int Step = 0; Step < 20; ++Step)
 			{
-				UpdateFireInWind(Mix, Wind, 0.05);
+				UpdateFireInWind(Mix, Wind, Draft, 0.05);
 			}
 			Expect(std::fabs(Mix.GetTotal() - Total) < 1e-9, "wind on fire changes no amount of magic");
 			return Mix;
@@ -1027,6 +1099,9 @@ namespace
 		Expect(Fed.Get(EMagicType::Fire) > Calm.Get(EMagicType::Fire) && Calm.Get(EMagicType::Fire) > 1.0, "wind feeds a fire bigger than itself, the more the harder it blows");
 		Expect(Fed.Get(EMagicType::Air) < 0.1, "and that fire burns up air magic");
 		Expect(Blown.Get(EMagicType::Fire) < 0.02 && Blown.Get(EMagicType::Fire) > 0.015, "wind slowly wears down a fire smaller than itself");
+		const MagicMix Drawing = InWind(1.0, 0.1, 0.0, FireUpdraft(1.0));
+		Expect(Drawing.Get(EMagicType::Fire) > 1.0 && Drawing.Get(EMagicType::Air) < 0.1, "in still air a fire's own draft draws air magic in and burns it");
+		Expect(InWind(0.02, 0.2, 0.0, FireUpdraft(0.02)).Get(EMagicType::Fire) >= 0.02, "but its draft blows nothing out");
 
 		// Only dense fire boils water, in whatever form it has, and that spends the fire.
 		const auto Boiled = [](EMagicType Form, double Amount)
@@ -1040,7 +1115,7 @@ namespace
 			return Spent;
 		};
 		Expect(Boiled(EMagicType::Fire, MagicFierceFire * 0.99) == 0.0, "fire short of fierce leaves water alone");
-		Expect(Boiled(EMagicType::Fire, MagicFierceFire) > 0.0 && Boiled(EMagicType::Light, 30.0) > Boiled(EMagicType::Lightning, 10.0), "fierce fire of any form boils it, the more the denser");
+		Expect(Boiled(EMagicType::Fire, MagicFierceFire) > 0.0 && Boiled(EMagicType::Light, 160.0) > Boiled(EMagicType::Lightning, 60.0), "fierce fire of any form boils it, the more the denser");
 
 		// On the ground the gas itself finds where that happens.
 		const auto FindGround = [](bool bWater)
@@ -1286,10 +1361,237 @@ namespace
 		std::printf("       with drag %.4f rad, without %.4f\n", Thick, Thin);
 		Expect(bDrag && Thick > Thin, "air drag calls for a higher throw");
 	}
+
+	void TestFireAround()
+	{
+		// The campfire by the spawn, in the gas as the game runs it.
+		const Vec3 Spawn = FindLandSpawn(WorldSeed);
+		HotSpot Camp;
+		double Nearest = 1e30;
+		for (const HotSpot& Spot : FindHotSpots(Spawn.X, Spawn.Y, WorldSeed))
+		{
+			const double Apart = Length(Spot.Position - Spawn);
+			if (!Spot.bLava && Apart < Nearest)
+			{
+				Nearest = Apart;
+				Camp = Spot;
+			}
+		}
+		Expect(Nearest < 100.0, "there is a campfire by the spawn");
+
+		MagicField::Options Open;
+		Open.Threads = 8;
+		MagicField Gas(WorldSeed, Open);
+		constexpr double Dt = 0.1;
+		double Time = 0.0;
+		const auto Run = [&](int Steps)
+		{
+			for (int Step = 0; Step < Steps; ++Step)
+			{
+				Gas.Step(Camp.Position, PrevailingWind(0.0, WorldSeed) * Time, Time, Dt);
+				Time += Dt;
+			}
+		};
+
+		// A cloud of water magic let go well away from the fire, where nothing heats it, to see whether it sinks.
+		Run(20);
+		const Vec3 Release = Camp.Position + Vec3{ 90.0, 0.0, 60.0 };
+		std::vector<double> Background;
+		for (double Z = -40.0; Z <= 40.0; Z += 4.0)
+		{
+			for (double Y = -40.0; Y <= 40.0; Y += 4.0)
+			{
+				for (double X = -40.0; X <= 40.0; X += 4.0)
+				{
+					Background.push_back(Gas.GetDensity(Release + Vec3{ X, Y, Z }, EMagicType::Water));
+				}
+			}
+		}
+		for (double Z = -8.0; Z <= 8.0; Z += 4.0)
+		{
+			for (double Y = -8.0; Y <= 8.0; Y += 4.0)
+			{
+				for (double X = -8.0; X <= 8.0; X += 4.0)
+				{
+					Gas.Deposit({ Release + Vec3{ X, Y, Z }, EMagicType::Water, 6.0 });
+				}
+			}
+		}
+		const auto Middle = [&]
+		{
+			// Only what is over the water magic that was there before, which lies thicker lower down.
+			double Mass = 0.0;
+			double Height = 0.0;
+			std::size_t Index = 0;
+			for (double Z = -40.0; Z <= 40.0; Z += 4.0)
+			{
+				for (double Y = -40.0; Y <= 40.0; Y += 4.0)
+				{
+					for (double X = -40.0; X <= 40.0; X += 4.0)
+					{
+						const double Water = std::max(Gas.GetDensity(Release + Vec3{ X, Y, Z }, EMagicType::Water) - Background[Index++], 0.0);
+						Mass += Water;
+						Height += Water * Z;
+					}
+				}
+			}
+			return Height / std::max(Mass, 1e-9);
+		};
+		const double MiddleBefore = Middle();
+		Run(150);
+		const double MiddleAfter = Middle();
+		std::printf("       water magic let go 60 m up has its middle %+.1f m from there, and %+.1f m 15 s later\n", MiddleBefore, MiddleAfter);
+		Expect(MiddleAfter > MiddleBefore - 1.0, "magic weighs nothing: a cloud of it does not sink");
+
+		// Fire magic at the fire, and on rings around it at the same height, the mean over each ring.
+		Run(150);
+		const auto Ring = [&](double Away, double Up)
+		{
+			if (Away == 0.0)
+			{
+				return Gas.GetDensity(Camp.Position + Vec3{ 0.0, 0.0, Up }, EMagicType::Fire);
+			}
+			double Sum = 0.0;
+			for (int Turn = 0; Turn < 16; ++Turn)
+			{
+				const double Angle = Turn * 3.14159265358979 / 8.0;
+				Sum += Gas.GetDensity(Camp.Position + Vec3{ std::cos(Angle) * Away, std::sin(Angle) * Away, Up }, EMagicType::Fire);
+			}
+			return Sum / 16.0;
+		};
+		const double Away[] = { 0.0, 4.0, 8.0, 12.0, 16.0, 24.0 };
+		for (const double Up : { 1.0, 6.0, 14.0 })
+		{
+			std::printf("       fire magic %2.0f m up, by distance from the campfire:", Up);
+			for (const double Each : Away)
+			{
+				std::printf(" %.0fm %.3f", Each, Ring(Each, Up));
+			}
+			std::printf("\n");
+		}
+		Expect(Ring(0.0, 1.0) > 2.0, "a campfire holds fire magic");
+		Expect(Ring(8.0, 1.0) > 0.1 && Ring(8.0, 1.0) < 0.5 * Ring(0.0, 1.0), "and there is less of it around, further from it");
+		Expect(Ring(16.0, 1.0) < Ring(8.0, 1.0) && Ring(0.0, 1.0) < MagicFierceFire, "less still further out, and never enough to set the grass alight");
+		const double AirAtFire = Gas.GetDensity(Camp.Position + Vec3{ 0.0, 0.0, 1.0 }, EMagicType::Air);
+		const double AirAway = Gas.GetDensity(Camp.Position + Vec3{ 40.0, 0.0, 1.0 }, EMagicType::Air);
+		std::printf("       air magic in the campfire %.3f kg/m3, 40 m from it %.3f\n", AirAtFire, AirAway);
+		Expect(AirAtFire < 0.5 * AirAway, "the fire burns the air magic around it");
+
+		// Drops of light magic from a sun overhead come to rest in the gas.
+		const double LightBefore = Gas.GetTotalAmount(EMagicType::Light) + Gas.GetTotalAmount(EMagicType::Nature);
+		Gas.SetLightDrops({ { { { 0.0, 0.0, 1.0 }, 20.0 }, {}, {} } });
+		Run(4);
+		const double LightAfter = Gas.GetTotalAmount(EMagicType::Light) + Gas.GetTotalAmount(EMagicType::Nature);
+		std::printf("       a sun 20 times as strong overhead adds %.0f kg of light and nature magic in 0.4 s\n", LightAfter - LightBefore);
+		Expect(LightAfter > LightBefore + 1000.0, "the suns pelt the world with drops of light magic");
+	}
 }
 
-int main()
+namespace
 {
+	void TestMagicShows()
+	{
+		// A small box of gas around a point on the ground, thin everywhere but in the cell with the surface in it.
+		const auto Around = [](const Vec3& Point, EMagicType Type, double Density, double Above = 0.0)
+		{
+			MagicVolume Box;
+			Box.SizeX = Box.SizeY = Box.SizeZ = 8;
+			Box.CellSize = 4.0;
+			Box.Corner = Vec3{ std::floor(Point.X / 4.0) * 4.0 - 16.0, std::floor(Point.Y / 4.0) * 4.0 - 16.0, std::floor((Point.Z + Above) / 4.0) * 4.0 - 16.0 };
+			for (std::vector<float>& Kind : Box.Amounts)
+			{
+				Kind.assign(512, 0.05f);
+			}
+			for (std::vector<float>& Axis : Box.Flow)
+			{
+				Axis.assign(512, 0.0f);
+			}
+			Box.Amounts[static_cast<int>(Type)][4 + 8 * (4 + 8 * 4)] = static_cast<float>(Density);
+			return Box;
+		};
+		const auto Ground = [](bool bWater)
+		{
+			for (double Spot = 0.0; Spot < 40000.0; Spot += 61.0)
+			{
+				const double X = Spot;
+				const double Y = Spot * 0.6;
+				const double Height = TerrainHeight(X, Y, WorldSeed);
+				const double Shore = GetShoreLevel(X, Y, WorldSeed);
+				if (bWater ? Shore > Height + 2.0 : (Height > Shore + 2.0 && TerrainNormal(X, Y, WorldSeed).Z > 0.95))
+				{
+					return Vec3{ X, Y, std::max(Height, Shore) };
+				}
+			}
+			return Vec3{};
+		};
+		const Vec3 Land = Ground(false);
+		const Vec3 Lake = Ground(true);
+
+		// Fireflies: 3 at the density that makes them, and one more for each 3 kg/m3 over.
+		MagicShows Light;
+		Light.Update(Around(Land, EMagicType::Light, 46.0, 20.0), 0.0, 0.05);
+		std::printf("       light magic at 46 kg/m3 calls up %zu fireflies\n", Light.GetFireflies().size());
+		Expect(Light.GetFireflies().size() == 5, "light magic over 40 makes fireflies, 3 and one more for each 3 kg/m3 over");
+		MagicShows Faint;
+		Faint.Update(Around(Land, EMagicType::Light, 39.0, 20.0), 0.0, 0.05);
+		Expect(Faint.GetFireflies().empty(), "and none short of that");
+
+		// Ten together make a big one, which sends out waves of light magic.
+		MagicShows Gathering;
+		const MagicVolume Dense = Around(Land, EMagicType::Light, 40.0 + 3.0 * 7.0, 20.0);
+		bool bBig = false;
+		std::vector<MagicDeposit> Sent;
+		for (int Step = 0; Step < 200 && !bBig; ++Step)
+		{
+			Gathering.Update(Dense, Step * 0.05, 0.05);
+			bBig = std::any_of(Gathering.GetFireflies().begin(), Gathering.GetFireflies().end(), [](const Firefly& Each) { return Each.bBig; });
+		}
+		for (int Step = 200; Step < 240; ++Step)
+		{
+			Gathering.Update(Dense, Step * 0.05, 0.05);
+		}
+		Gathering.TakeDeposits(Sent);
+		std::printf("       ten fireflies made a big one: %s, and it let out %zu cells of light magic\n", bBig ? "yes" : "no", Sent.size());
+		Expect(bBig, "ten fireflies together make a big one");
+		Expect(!Sent.empty() && Sent.front().Type == EMagicType::Light && Sent.front().Density == 1.0, "which sends out waves of light magic of density 1");
+
+		// Dense air magic over the ground spins a whirlwind.
+		MagicShows Air;
+		Air.Update(Around(Land, EMagicType::Air, 45.0), 0.0, 0.05);
+		const Vec3 Whirl = Air.GetWhirl(Land + Vec3{ 3.0, 0.0, 2.0 });
+		std::printf("       air magic at 45 kg/m3 spins a whirlwind of %zu, wind %.1f m/s 3 m out\n", Air.GetWhirlwinds().size(), Length(Whirl));
+		Expect(!Air.GetWhirlwinds().empty() && Length(Whirl) > 3.0, "dense air magic spins a whirlwind");
+
+		// Dense earth magic makes minerals, dense nature magic plants, and dense water magic a current.
+		std::vector<MagicGrowth> Made;
+		MagicShows Earth;
+		Earth.Update(Around(Land, EMagicType::Earth, 60.0), 0.0, 0.05);
+		Earth.TakeGrowths(Made);
+		Expect(Made.size() == 1 && Made.front().Kind == EMagicGrowth::Minerals, "dense earth magic makes minerals");
+		MagicShows Nature;
+		Made.clear();
+		Nature.Update(Around(Land, EMagicType::Nature, 45.0), 0.0, 0.05);
+		Nature.TakeGrowths(Made);
+		Expect(Made.size() == 1 && Made.front().Kind == EMagicGrowth::Plant, "dense nature magic makes plants");
+		MagicShows Water;
+		MagicVolume Pool = Around(Lake, EMagicType::Water, 50.0);
+		Pool.Flow[0].assign(512, 1.0f);
+		Water.Update(Pool, 0.0, 0.05);
+		const Vec3 Current = Water.GetCurrent(Lake + Vec3{ 1.0, 1.0, 0.0 });
+		std::printf("       water magic at 50 kg/m3 drives a current of %.2f m/s\n", Length(Current));
+		Expect(Current.X > 0.5, "dense water magic drives a current the way it goes");
+	}
+}
+
+int main(int Count, char** Args)
+{
+	if (Count > 1 && std::strcmp(Args[1], "fire-around") == 0)
+	{
+		TestFireAround();
+		std::printf("%d failure(s)\n", Failures);
+		return Failures == 0 ? 0 : 1;
+	}
+
 	TestTerrain();
 	TestSpawn();
 	TestSurfaces();
@@ -1305,6 +1607,8 @@ int main()
 	TestLiquid();
 	TestThrowHold();
 	TestMagic();
+	TestMagicShows();
+	TestFireAround();
 	TestStorms();
 	TestWaves();
 	TestGaze();
