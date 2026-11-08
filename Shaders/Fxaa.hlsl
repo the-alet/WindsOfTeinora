@@ -84,12 +84,33 @@ float4 PSMain(Varyings Input) : SV_Target
 
 	if (Final.FocusStrength > 0.0)
 	{
-		const float Distance = length((Uv - Final.FocusCenter) * float2(Final.Aspect, 1.0));
-		const float Blur = smoothstep(Final.FocusRadius, Final.FocusRadius * 2.6, Distance) * Final.FocusStrength;
-		Color = lerp(Color, SampleBlurred(Uv), Blur);
+		// How far a point lies from the edge of focus towards the edge of the screen, along the line from
+		// the point of gaze: 0 at the one and 1 at the other, whichever way the screen's edge is.
+		const float2 Away = Uv - Final.FocusCenter;
+		const float Distance = length(Away * float2(Final.Aspect, 1.0));
+		const float2 Room = float2(Away.x >= 0.0 ? 1.0 - Final.FocusCenter.x : Final.FocusCenter.x, Away.y >= 0.0 ? 1.0 - Final.FocusCenter.y : Final.FocusCenter.y);
+		const float2 Ratio = Room / max(abs(Away), 1e-5);
+		const float ToEdge = Distance * max(min(Ratio.x, Ratio.y), 1.0);
+		const float Toward = saturate((Distance - Final.FocusRadius) / max(ToEdge - Final.FocusRadius, 1e-3));
 
-		// The very edge of the blur also dims a little, by 5% at most.
-		Color *= 1.0 - 0.05 * smoothstep(Final.FocusRadius * 2.2, Final.FocusRadius * 3.4, Distance);
+		// It grows as the square of that: hardly there just past the edge of focus, strong at the screen's edge.
+		const float Blur = Toward * Toward * Final.FocusStrength;
+		if (Blur > 0.0)
+		{
+			// A light blur at full detail first, which the strong blur of the quarter-sized view takes over from.
+			const float Reach = Blur * 6.0; // pixels
+			float3 Light = Color;
+			for (int Tap = 0; Tap < 8; ++Tap)
+			{
+				const float Angle = Tap * 0.785398 + 0.39;
+				Light += Sample(Uv + float2(cos(Angle), sin(Angle)) * Reach * Final.SourceTexel);
+			}
+			Color = lerp(Color, Light / 9.0, saturate(Blur * 3.0));
+			Color = lerp(Color, SampleBlurred(Uv), smoothstep(0.3, 1.0, Blur));
+
+			// The very edge also dims a little, by 5% at most.
+			Color *= 1.0 - 0.05 * Blur;
+		}
 	}
 
 	return float4(Color, 1.0);

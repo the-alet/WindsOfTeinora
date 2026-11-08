@@ -115,6 +115,7 @@ namespace Teinora
 		Vec3 Color;
 		double Reach = 0.0;       // metres to where it has gone
 		double FlameHeight = 0.0; // none on what only glows
+		double FlameBreadth = 0.36; // how far its flames spread at the foot, as a share of their height
 	};
 
 	/** A puff of steam off boiling water, or of smoke over a fire. */
@@ -194,19 +195,14 @@ namespace Teinora
 	// Sizes as the sky draws them, in radians across the radius. The planet's are also in Shaders/Planet.hlsli.
 	inline constexpr double SunSize = 0.0173;
 	inline constexpr double SecondSunSize = 0.0126;
-	inline constexpr double PlanetSize = 0.06;
+	inline constexpr double PlanetSize = 0.04;  // half again as far off as it once stood, at 0.06
 	inline constexpr double RingInner = 1.38; // in radii of the planet
 	inline constexpr double RingOuter = 2.5;
 
-	// The second sun's orbit and the planet's lean a little off the circle. Each leans one way for
-	// half of its slant and the other way for the rest, and the place where it crosses the circle
-	// creeps round over many days, so that where bodies meet in the sky differs from day to day.
+	// The second sun's orbit leans a little off the circle, one way for half of its slant and the other
+	// way for the rest. No orbit moves: what changes from day to day is only where the bodies are on
+	// them, each going round in a time of its own.
 	inline constexpr double SecondSunTilt = 0.1;
-	inline constexpr double SecondSunNodeDays = 23.0;
-	inline constexpr double PlanetTilt = 0.14;
-	inline constexpr double PlanetOffset = 0.19;
-	inline constexpr double PlanetNodeDays = 37.0;
-	inline constexpr double PlanetOrbitDays = 25.0; // to go once round among the stars
 	inline constexpr double PlanetSpinDays = 9.0;
 	inline constexpr double PlanetWobble = 0.7;      // radians from the middle of its way round
 	inline constexpr double PlanetWobbleDays = 29.0;
@@ -219,6 +215,27 @@ namespace Teinora
 	}
 
 	inline Vec3 GetSkyPole() { return Cross(GetSkyAlong(), GetSkyTop()); }
+
+	// The sky is a sphere, very large, turning about an axis that runs SkyAxisDepth under the ground,
+	// below the world's origin. The stars lie on it and the suns just inside it, and the directions
+	// here are from its middle. From the ground, so far above that middle, they are seen lower, by
+	// SeenFrom: about 23 degrees near the horizon, so the suns rise later and set sooner than their
+	// circles say. The suns are drawn as wide as they always were, wherever they are seen.
+	inline constexpr double SkyRadius = 1.0e8;       // metres
+	inline constexpr double SunDistance = 9.9e7;     // from the sky's middle
+	inline constexpr double SkyAxisDepth = 4.0e7;
+
+	/** What the eye at Eye has to add to a direction from the sky's middle before normalising it, to see what lies Distance from that middle. */
+	inline Vec3 GetSkyShift(const Vec3& Eye, double Distance = SkyRadius)
+	{
+		return (Vec3{ 0.0, 0.0, -SkyAxisDepth } - Eye) * (1.0 / Distance);
+	}
+
+	/** Where something Distance from the sky's middle, in a direction from that middle, is seen from Eye. */
+	inline Vec3 SeenFrom(const Vec3& FromMiddle, const Vec3& Eye, double Distance = SkyRadius)
+	{
+		return Normalize(FromMiddle + GetSkyShift(Eye, Distance));
+	}
 
 	/**
 	 * How far round its circle something has come in the day: 0 as it rises at the hour of Rise,
@@ -238,6 +255,40 @@ namespace Teinora
 		return Normalize(GetSkyAlong() * std::cos(Angle) + GetSkyTop() * std::sin(Angle) + GetSkyPole() * Off);
 	}
 
+	// The world's own reckoning of time. A day lasts DaySeconds of the seconds its physics runs in, twenty
+	// minutes at the usual speed of time, and its clock cuts it into DayHours hours of HourMinutes minutes of
+	// MinuteSeconds seconds, every one of them whole. The clock's seconds are its own: one second of the
+	// physics is exactly one minute on the clock. Inside, the day is still counted in 24 parts, which the
+	// suns' timetables are written in.
+	inline constexpr double DaySeconds = 1200.0;
+	inline constexpr int DayHours = 20;
+	inline constexpr int HourMinutes = 60;
+	inline constexpr int MinuteSeconds = 60;
+	inline constexpr int DayClockSeconds = DayHours * HourMinutes * MinuteSeconds; // 72000, sixty to each second of the physics
+	static_assert(DayClockSeconds % static_cast<int>(DaySeconds) == 0, "the clock's seconds go a whole number of times into the physics' own");
+
+	/** The time of day as the world tells it. */
+	struct ClockReading
+	{
+		int Hours = 0;
+		int Minutes = 0;
+		int Seconds = 0;
+	};
+
+	/** Reads the clock at Hour, in 24ths of a day. */
+	inline ClockReading ReadClock(double Hour)
+	{
+		const int Total = std::clamp(static_cast<int>(std::floor(Hour / 24.0 * DayClockSeconds)), 0, DayClockSeconds - 1);
+		return { Total / (HourMinutes * MinuteSeconds), Total / MinuteSeconds % HourMinutes, Total % MinuteSeconds };
+	}
+
+	/** One of the world's hours on from Hour, in 24ths of a day, onto the start of that hour, round the clock. */
+	inline double StepClockHour(double Hour, int Step)
+	{
+		const double Hours = std::floor(Hour / 24.0 * DayHours + 0.001) + Step;
+		return std::fmod(Hours + DayHours, static_cast<double>(DayHours)) * 24.0 / DayHours;
+	}
+
 	// The world has two suns. The yellow-orange one rises first and the blue-green one joins it from
 	// the opposite side of the sky; the first then sets, the second after it, and night falls until
 	// the first rises again. Day is a count that goes up by one at each midnight.
@@ -248,34 +299,65 @@ namespace Teinora
 		return GetOrbitPoint(GetPathAngle(Hour, 5.0, 18.0));
 	}
 
-	/** Against the first sun's way round. They pass each other early in the afternoon, and on some days run together. */
+	// Once in EclipseCycleDays both suns hide behind the planet at the same moment, and at no other
+	// time, by their periods alone. All three orbits run through one point of the sky, where the first
+	// sun is at SunsMeetHour every day. The second sun and the planet come back to it in times that go
+	// a whole number of times into the cycle, 91 and 71 times, and as neither shares a factor with 90,
+	// the three are there together only once in a cycle.
+	inline constexpr double EclipseCycleDays = 90.0;
+	inline constexpr double FirstEclipseDay = 3.0;
+	inline constexpr double SunsMeetHour = 13.5;
+	inline constexpr double SecondSunTurnHours = EclipseCycleDays * 24.0 / 91.0; // 23.74: it rises about 16 minutes earlier each day
+	inline constexpr double PlanetTurnHours = EclipseCycleDays * 24.0 / 71.0;    // 30.42
+
+	inline double GetEclipseDays() { return FirstEclipseDay + SunsMeetHour / 24.0; }
+
+	/** Where on its circle the first sun is when the three meet: where the other two orbits cross it. */
+	inline double GetMeetingAngle() { return GetPathAngle(SunsMeetHour, 5.0, 18.0); }
+
+	/**
+	 * Against the first sun's way round, on an orbit leaning off its circle and crossing it at the
+	 * meeting point, once round in SecondSunTurnHours. So it keeps an hour of its own, which goes round
+	 * the clock once in a cycle: in some weeks it lights the night. The suns run together in the days
+	 * when they pass each other near the crossing.
+	 */
 	inline Vec3 GetSecondSunDirection(double Hour, double Day = 0.0)
 	{
-		const double Node = 2.0 * Pi * (Day + Hour / 24.0) / SecondSunNodeDays;
-		return GetOrbitPoint(Pi - GetPathAngle(Hour, 9.0, 22.0), SecondSunTilt, Node);
+		const double Hours = (Day + Hour / 24.0 - GetEclipseDays()) * 24.0;
+		return GetOrbitPoint(GetMeetingAngle() - 2.0 * Pi * Hours / SecondSunTurnHours, SecondSunTilt, GetMeetingAngle());
+	}
+
+	/** The suns as the ground sees them, from Eye or from the world's origin. */
+	inline Vec3 GetSeenSun(double Hour, double Day = 0.0, const Vec3& Eye = {})
+	{
+		return SeenFrom(GetSunDirection(Hour, Day), Eye, SunDistance);
+	}
+
+	inline Vec3 GetSeenSecondSun(double Hour, double Day = 0.0, const Vec3& Eye = {})
+	{
+		return SeenFrom(GetSecondSunDirection(Hour, Day), Eye, SunDistance);
 	}
 
 	/** How much the suns are heating the ground: nothing at night, about 1 with both of them high. */
 	inline double GetSunHeat(double Hour, double Day = 0.0)
 	{
 		const auto Height = [](const Vec3& Sun) { return std::max(Sun.Z, 0.0); };
-		return Height(GetSunDirection(Hour, Day)) + Height(GetSecondSunDirection(Hour, Day)) * 0.6;
+		return Height(GetSeenSun(Hour, Day)) + Height(GetSeenSecondSun(Hour, Day)) * 0.6;
 	}
 
 	/**
-	 * A ringed planet that shines by the suns' light. It has a way of its own: the sky turns it across
-	 * as it turns the stars, while it goes slowly round the other way, once in PlanetOrbitDays. So it
-	 * creeps back among the stars and rises about an hour later each day. On the first day it rises
-	 * at 13:00, which brings it past the second sun late in the afternoon; on later days it is up at
-	 * other hours, and some nights it is not up at all.
+	 * A ringed planet that shines by the suns' light. It goes its own way, owing nothing to the sky's
+	 * turning or to the clock: round a great circle of its own, once in PlanetTurnHours, so it rises
+	 * about 6 hours later each day, and some nights it is not up at all. Its circle runs through where
+	 * the suns' orbits are seen to cross.
 	 */
 	inline Vec3 GetPlanetDirection(double Hour, double Day = 0.0)
 	{
-		constexpr double FirstRise = 13.0 / 24.0; // of a day
-		const double Days = Day + Hour / 24.0;
-		const double Node = 2.0 * Pi * Days / PlanetNodeDays;
-		const double Turned = 2.0 * Pi * (Days - FirstRise) * (1.0 - 1.0 / PlanetOrbitDays); // the stars turn by 2 pi a day
-		return GetOrbitPoint(Turned, PlanetTilt, Node, PlanetOffset);
+		const Vec3 Meeting = GetSeenSun(SunsMeetHour);
+		const Vec3 Pole = Normalize(Cross(Meeting, Normalize(Vec3{ 0.25, 0.0, 1.0 }))); // its circle runs nearly overhead
+		const Vec3 Onward = Cross(Pole, Meeting);
+		const double Turned = 2.0 * Pi * (Day + Hour / 24.0 - GetEclipseDays()) * 24.0 / PlanetTurnHours;
+		return Meeting * std::cos(Turned) + Onward * std::sin(Turned);
 	}
 
 	/** How far round the planet has turned, in radians. It takes many days, so each night shows a new side of it. */

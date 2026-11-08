@@ -33,6 +33,7 @@ struct FTeinoraWorldStats
 	double Hour = 0.0;
 	double Day = 1.0;
 	double WindSpeed = 0.0;
+	double TimeRate = 1.0;   // how many times faster than usual the world goes by
 	int32 Bodies = 0;
 	int32 Awake = 0;
 	int32 Contacts = 0;

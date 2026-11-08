@@ -48,7 +48,7 @@ namespace Teinora
 		 */
 		StormField(std::uint32_t InSeed, std::vector<std::uint8_t> InNoise, int InNoiseSize, double InCloudBase, double InBaseFall);
 
-		/** Advances the storms up to Time, around Focus. CloudDrift is how far the clouds have moved so far. */
+		/** Advances the storms up to Time, around Focus. CloudDrift is how far the clouds have moved so far, and in Z how far they have changed. */
 		void Update(const Vec3& Focus, const Vec3& CloudDrift, const Vec3& Wind, double CloudCover, double Time);
 
 		/** Hands over where bolts have landed since the last call. */

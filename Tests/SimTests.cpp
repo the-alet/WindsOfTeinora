@@ -424,25 +424,40 @@ namespace
 		Expect(!Up(GetSunDirection(20.0)) && Up(GetSecondSunDirection(20.0)), "the first sun sets before the second");
 		Expect(!Up(GetSunDirection(23.5)) && !Up(GetSecondSunDirection(23.5)) && !Up(GetSunDirection(2.0)), "then night falls");
 
-		Expect(Up(GetPlanetDirection(15.0)), "the planet can be seen by day");
-		Expect(Up(GetPlanetDirection(23.5)), "and by night");
-		Expect(!Up(GetPlanetDirection(8.0)), "and at some hours not at all");
+		// From the ground, so far above the sky's middle, the suns are seen lower than their circles: up later, down sooner.
+		Expect(Up(GetSunDirection(6.0)) && !Up(GetSeenSun(6.0)) && Up(GetSeenSun(8.0)), "the first sun is seen to rise after its circle comes over the horizon");
+		Expect(Up(GetSunDirection(17.0)) && !Up(GetSeenSun(17.0)), "and to set before it goes under");
+		Expect(std::fabs(GetSkyShift({}, SunDistance).Z) > 0.39, "the sky's middle lies far under the ground");
 
-		// The sky carries the planet round as it does the stars, while it creeps back among them.
-		const auto Rise = [](double Day)
+		// The planet goes its own way, once round in PlanetTurnHours whatever the clock and the sky are doing.
+		std::vector<double> Rises;
+		for (double Hour = 0.0; Hour < 96.0 && Rises.size() < 3; Hour += 0.01)
 		{
-			for (double Hour = 0.0; Hour < 48.0; Hour += 0.01)
+			if (GetPlanetDirection(Hour).Z <= 0.0 && GetPlanetDirection(Hour + 0.01).Z > 0.0)
 			{
-				if (GetPlanetDirection(Hour, Day).Z <= 0.0 && GetPlanetDirection(Hour + 0.01, Day).Z > 0.0)
+				Rises.push_back(Hour);
+			}
+		}
+		std::printf("       the planet rises at %.1f h, then %.1f h and %.1f h later\n", Rises.empty() ? -1.0 : Rises[0],
+			Rises.size() > 1 ? Rises[1] - Rises[0] : -1.0, Rises.size() > 2 ? Rises[2] - Rises[1] : -1.0);
+		Expect(Rises.size() == 3 && std::fabs(Rises[1] - Rises[0] - PlanetTurnHours) < 0.05 && std::fabs(Rises[2] - Rises[1] - PlanetTurnHours) < 0.05,
+			"the planet keeps a turn of its own, rising about 6 hours later each day");
+
+		// The second sun keeps a time of its own too, a little shorter than the day.
+		const auto SecondRise = [](double Day)
+		{
+			for (double Hour = 0.0; Hour < 24.0; Hour += 0.005)
+			{
+				if (GetSecondSunDirection(Hour, Day).Z <= 0.0 && GetSecondSunDirection(Hour + 0.005, Day).Z > 0.0)
 				{
 					return Hour;
 				}
 			}
 			return -1.0;
 		};
-		const double Later = Rise(5.0) - Rise(0.0);
-		std::printf("       the planet rises at %.1f h on the first day and %.1f h later five days on\n", Rise(0.0), Later);
-		Expect(Later > 4.0 && Later < 6.5, "the planet keeps a way of its own, rising about an hour later each day");
+		const double Earlier = (SecondRise(3.0) - SecondRise(4.0)) * 60.0;
+		std::printf("       the second sun rises at %.2f h on day 3 and %.0f minutes earlier the next day\n", SecondRise(3.0), Earlier);
+		Expect(Earlier > 14.0 && Earlier < 18.0, "the second sun rises about 16 minutes earlier each day");
 
 		double Biggest = 0.0;
 		for (double Hour = 0.0; Hour < 24.0; Hour += 0.05)
@@ -465,49 +480,75 @@ namespace
 		int Merges = 0;
 		int Eclipses = 0;
 		int Partial = 0;
+		std::vector<int> TripleDays;
 		double Widest = 0.0;
 		bool bOrderHolds = true;
 
+		// As the ground sees them, which is what an eclipse is.
 		for (int Day = 0; Day < Days; ++Day)
 		{
 			double Closest = Pi;
 			double Darkest = 1.0;
+			bool bTriple = false;
 			for (double Hour = 0.0; Hour < 24.0; Hour += 1.0 / 120.0)
 			{
-				const Vec3 Sun = GetSunDirection(Hour, Day);
-				const Vec3 Second = GetSecondSunDirection(Hour, Day);
+				const Vec3 Sun = GetSeenSun(Hour, Day);
+				const Vec3 Second = GetSeenSecondSun(Hour, Day);
 				const Vec3 Planet = GetPlanetDirection(Hour, Day);
+				const Vec3 Axis = GetPlanetAxis(Day + Hour / 24.0);
 				if (Sun.Z > 0.0 && Second.Z > 0.0)
 				{
 					Closest = std::fmin(Closest, std::acos(std::fmin(Dot(Sun, Second), 1.0)));
 				}
-				if (Second.Z > 0.0)
-				{
-					Darkest = std::fmin(Darkest, GetLightPastPlanet(Second, Planet, GetPlanetAxis(Day + Hour / 24.0), SecondSunSize));
-				}
-				Widest = std::fmax(Widest, std::acos(std::fmin(Dot(Second, GetOrbitPoint(Pi - GetPathAngle(Hour, 9.0, 22.0))), 1.0)));
+				const double PastSecond = Second.Z > 0.0 ? GetLightPastPlanet(Second, Planet, Axis, SecondSunSize) : 1.0;
+				const double PastFirst = Sun.Z > 0.0 ? GetLightPastPlanet(Sun, Planet, Axis, SunSize) : 1.0;
+				Darkest = std::fmin(Darkest, std::fmin(PastFirst, PastSecond));
+				bTriple = bTriple || (PastFirst < 0.05 && PastSecond < 0.05);
+				Widest = std::fmax(Widest, std::asin(std::fabs(Dot(GetSecondSunDirection(Hour, Day), GetSkyPole())))); // how far off the first sun's circle
 			}
 			if (Day < 40 && (Closest < Merged || Darkest < 0.05))
 			{
-				std::printf("       day %d:%s%s\n", Day, Closest < Merged ? " suns merge" : "", Darkest < 0.05 ? " planet hides a sun" : "");
+				std::printf("       day %d:%s%s%s\n", Day, Closest < Merged ? " suns merge" : "", Darkest < 0.05 ? " planet hides a sun" : "", bTriple ? " and both" : "");
 			}
 			Merges += Closest < Merged ? 1 : 0;
 			Eclipses += Darkest < 0.05 ? 1 : 0;
 			Partial += Darkest < 0.95 ? 1 : 0;
+			if (bTriple)
+			{
+				TripleDays.push_back(Day);
+			}
 
-			bOrderHolds = bOrderHolds && GetSunDirection(7.0, Day).Z > 0.0 && GetSecondSunDirection(7.0, Day).Z < 0.0
-				&& GetSunDirection(20.0, Day).Z < 0.0 && GetSecondSunDirection(20.0, Day).Z > 0.0
-				&& GetSecondSunDirection(23.5, Day).Z < 0.0;
+			// The first sun keeps the clock's day whatever the date.
+			bOrderHolds = bOrderHolds && GetSunDirection(7.0, Day).Z > 0.0 && GetSunDirection(20.0, Day).Z < 0.0 && GetSunDirection(2.0, Day).Z < 0.0;
 		}
 
 		const double MergeShare = static_cast<double>(Merges) / Days;
 		const double EclipseShare = static_cast<double>(Eclipses) / Days;
-		std::printf("       suns merge on %.1f%% of days, the planet hides the second sun on %.1f%% and touches it on %.1f%%; orbit leans up to %.3f rad\n",
+		std::printf("       suns merge on %.1f%% of days, the planet hides a sun on %.1f%% and touches one on %.1f%%; orbit leans up to %.3f rad\n",
 			MergeShare * 100.0, EclipseShare * 100.0, Partial * 100.0 / Days, Widest);
+		std::printf("       both suns behind the planet on %zu days:", TripleDays.size());
+		for (std::size_t Index = 0; Index < std::min<std::size_t>(TripleDays.size(), 6); ++Index)
+		{
+			std::printf(" %d", TripleDays[Index]);
+		}
+		std::printf("\n");
 		Expect(MergeShare > 0.04 && MergeShare < 0.3, "the suns run together on some days, not all");
-		Expect(EclipseShare > 0.02 && EclipseShare < 0.25, "the planet eclipses a sun on some days, not all");
+		Expect(EclipseShare > 0.005 && EclipseShare < 0.25, "the planet eclipses a sun on some days, not all");
+		bool bEveryCycle = !TripleDays.empty() && TripleDays.front() == static_cast<int>(FirstEclipseDay);
+		for (const int Day : TripleDays)
+		{
+			bEveryCycle = bEveryCycle && std::fmod(Day - FirstEclipseDay, EclipseCycleDays) == 0.0;
+		}
+		Expect(bEveryCycle && TripleDays.size() == static_cast<std::size_t>((Days - FirstEclipseDay) / EclipseCycleDays) + 1,
+			"both suns hide behind the planet together once in each cycle of 90 days, and on no other day");
+		const double Eclipse = SunsMeetHour;
+		const Vec3 Covering = GetPlanetDirection(Eclipse, FirstEclipseDay + EclipseCycleDays * 3.0);
+		const Vec3 CoverAxis = GetPlanetAxis(FirstEclipseDay + EclipseCycleDays * 3.0 + Eclipse / 24.0);
+		Expect(GetLightPastPlanet(GetSeenSun(Eclipse, FirstEclipseDay + EclipseCycleDays * 3.0), Covering, CoverAxis, SunSize) < 0.01
+			&& GetLightPastPlanet(GetSeenSecondSun(Eclipse, FirstEclipseDay + EclipseCycleDays * 3.0), Covering, CoverAxis, SecondSunSize) < 0.01,
+			"at the height of it neither sun sends any light");
 		Expect(Widest > 0.05 && Widest < 0.2, "the orbits lie only slightly at an angle");
-		Expect(bOrderHolds, "the suns keep their order through the day whatever the date");
+		Expect(bOrderHolds, "the first sun keeps the clock's day whatever the date");
 
 		const Vec3 Planet = GetPlanetDirection(16.0, 3.0);
 		const Vec3 Axis = GetPlanetAxis(3.0);
@@ -517,24 +558,25 @@ namespace
 		const double DayTurn = GetPlanetSpin(11.0) - GetPlanetSpin(10.0);
 		Expect(DayTurn > 0.35 && DayTurn < 1.0, "the planet shows a new side each day, but only a part of a turn");
 
-		// How wide the rings stand open at the same hour on each day: 1 is face on, 0 edge on.
-		for (const double Hour : { 16.0, 20.0, 23.0 })
+		// How wide the rings stand open each time the planet comes back to the same point of its circle: 1 is face on, 0 edge on.
+		for (const double Share : { 0.1, 0.25, 0.4 })
 		{
 			double Narrowest = 1.0;
 			double Widest2 = 0.0;
-			double MostInADay = 0.0;
+			double MostInATurn = 0.0;
 			double Last = -1.0;
-			for (int Day = 0; Day < 120; ++Day)
+			for (int Turn = 0; Turn < 100; ++Turn)
 			{
-				const double Open = std::fabs(Dot(GetPlanetAxis(Day + Hour / 24.0), GetPlanetDirection(Hour, Day)));
+				const double Hours = (Turn + Share) * PlanetTurnHours;
+				const double Open = std::fabs(Dot(GetPlanetAxis(Hours / 24.0), GetPlanetDirection(Hours)));
 				Narrowest = std::fmin(Narrowest, Open);
 				Widest2 = std::fmax(Widest2, Open);
-				MostInADay = Last >= 0.0 ? std::fmax(MostInADay, std::fabs(Open - Last)) : 0.0;
+				MostInATurn = Last >= 0.0 ? std::fmax(MostInATurn, std::fabs(Open - Last)) : 0.0;
 				Last = Open;
 			}
-			std::printf("       rings at %02.0f:00 stand open from %.2f to %.2f, changing by up to %.2f a day\n", Hour, Narrowest, Widest2, MostInADay);
-			Expect(Widest2 - Narrowest > 0.3, "the rings open and close over the days");
-			Expect(MostInADay < 0.45, "but slowly, though at the same hour the planet stands a fourteenth of the sky further on each day");
+			std::printf("       rings %.0f%% of the way round stand open from %.2f to %.2f, changing by up to %.2f a turn\n", Share * 100.0, Narrowest, Widest2, MostInATurn);
+			Expect(Widest2 - Narrowest > 0.25, "the rings open and close over the days");
+			Expect(MostInATurn < 0.25, "but slowly");
 		}
 	}
 

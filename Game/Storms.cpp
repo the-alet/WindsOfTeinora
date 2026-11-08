@@ -173,7 +173,7 @@ namespace Teinora
 			const double Altitude = Sim::CloudBottom + (Layer + 0.5) * LayerStep;
 			const double Height = (Altitude - Sim::CloudBottom) / (Sim::CloudTop - Sim::CloudBottom);
 			const double Profile = SmoothStep(0.0, 0.08, Height) * (1.0 - SmoothStep(0.25, 1.0, Height));
-			const double Broad = SampleNoise(CarriedX / 4096.0, CarriedY / 4096.0, Altitude / 2048.0);
+			const double Broad = SampleNoise(CarriedX / 4096.0, CarriedY / 4096.0, Altitude / 2048.0 + Drift.Z); // Z: how far they have changed
 			Depth += Saturate((Broad - 0.74 + CloudCover * 0.2 - (1.0 - Profile) * 0.16) * 5.0) * LayerStep;
 		}
 		return Depth;

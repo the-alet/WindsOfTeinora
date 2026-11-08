@@ -32,7 +32,7 @@ namespace Teinora
 		constexpr std::uint32_t ShadowResolutions[] = { 0, 1024, 2048, 4096 };
 		constexpr int FontPixelHeight = 40;
 		constexpr std::uint32_t BlurDownscale = 4;
-		constexpr float FocusRadius = 0.23f;
+		constexpr float FocusRadius = 0.265f;
 		constexpr float FocusStrength = 0.75f;
 		constexpr std::size_t MaxPlantMoves = 8; // also in Shaders/Common.hlsli
 		constexpr std::size_t MaxHotLights = 8;  // and this
@@ -285,6 +285,8 @@ namespace Teinora
 			Vec3 PlanetDirection;
 			Float3 SunColor;
 			Float3 Sun2Color;
+			Float3 SunCorona;  // the light of each sun's corona, which the planet in front of the sun does not take away
+			Float3 Sun2Corona;
 			Float3 PlanetColor;
 			Float3 Zenith;
 			Float3 Horizon;
@@ -317,7 +319,7 @@ namespace Teinora
 			return SmoothStep(-0.02f, 0.03f, Height);
 		}
 
-		Environment ComputeEnvironment(double Hour, double DayCount)
+		Environment ComputeEnvironment(double Hour, double DayCount, const Vec3& Eye)
 		{
 			// The suns' light outside the air. These two are also in Shaders/Planet.hlsli.
 			constexpr Float3 SunInSpace{ 1.75f, 1.35f, 0.85f };   // yellow-orange
@@ -326,8 +328,8 @@ namespace Teinora
 			constexpr float PlanetAlbedo = 0.125f; // it gives back 10 to 15% of what the suns send it
 
 			Environment Result;
-			Result.SunDirection = GetSunDirection(Hour, DayCount);
-			Result.Sun2Direction = GetSecondSunDirection(Hour, DayCount);
+			Result.SunDirection = GetSeenSun(Hour, DayCount, Eye);
+			Result.Sun2Direction = GetSeenSecondSun(Hour, DayCount, Eye);
 			Result.PlanetDirection = GetPlanetDirection(Hour, DayCount);
 
 			// A sun gone behind the planet takes its part of the daylight with it, in the air too.
@@ -345,6 +347,8 @@ namespace Teinora
 			Result.SunColor = Scale(Lerp(Float3{ 1.6f, 0.66f, 0.24f }, SunInSpace, SmoothStep(0.03f, 0.45f, Height)), GetRisen(Height) * Past);
 			Result.Sun2Color = Scale(Lerp(Float3{ 0.3f, 0.95f, 0.85f }, Sun2InSpace, SmoothStep(0.03f, 0.45f, Height2)), GetRisen(Height2) * Past2);
 			Result.bSecondSunLeads = Height2 * Past2 > Height * Past;
+			Result.SunCorona = Scale(SunInSpace, GetRisen(Height));
+			Result.Sun2Corona = Scale(Sun2InSpace, GetRisen(Height2));
 
 			// The planet sends down a share of what falls on the side of it facing the ground.
 			const float Facing = 0.5f - 0.5f * static_cast<float>(Dot(Result.PlanetDirection, Result.SunDirection));
@@ -394,6 +398,10 @@ namespace Teinora
 		Float4 HotPoints[MaxHotLights];
 		Float4 HotLights[MaxHotLights];
 		Float4 BoltFlash;
+		Float4 HotShapes[MaxHotLights];
+		Float4 CloudDrift;
+		Float4 SkyShift;
+		Float4 Coronas[2];
 	};
 
 	Renderer::Renderer(Rhi::Device& InDevice, std::uint32_t InWindowWidth, std::uint32_t InWindowHeight, const RenderSettings& InSettings)
@@ -556,7 +564,12 @@ namespace Teinora
 		Flames.Blend = EBlend::Additive;
 		Flames.bDepthTest = true;
 		Flames.DepthCompare = ECompare::Greater;
-		FlamePipeline = Device.CreatePipeline(Flames);
+
+		// The flames' boxes from inside, with no depth test: the shader stops each ray at what the scene has drawn.
+		PipelineDesc Volumes = Flames;
+		Volumes.Cull = ECull::Front;
+		Volumes.bDepthTest = false;
+		FlamePipeline = Device.CreatePipeline(Volumes);
 
 		PipelineDesc Bolts = Flames;
 		Bolts.Vertex = GetShader("BoltVS", Backend);
@@ -1149,7 +1162,7 @@ namespace Teinora
 		if (View.HotLights != nullptr && !View.HotLights->empty())
 		{
 			Device.SetPipeline(FlamePipeline);
-			Device.Draw(6, static_cast<std::uint32_t>(std::min(View.HotLights->size(), MaxHotLights)));
+			Device.Draw(36, static_cast<std::uint32_t>(std::min(View.HotLights->size(), MaxHotLights)));
 		}
 		DrawPuffs(View);
 		DrawBolts(View);
@@ -1441,7 +1454,7 @@ namespace Teinora
 		TriangleCount = 0;
 		Device.BeginFrame();
 
-		const Environment Sky = ComputeEnvironment(View.HourOfDay, View.DayCount);
+		const Environment Sky = ComputeEnvironment(View.HourOfDay, View.DayCount, View.CameraPosition);
 		const Vec3 Forward = Normalize(View.CameraForward);
 		const Vec3 Right = Normalize(Cross(Forward, Vec3{ 0.0, 0.0, 1.0 }));
 		const Vec3 Up = Cross(Right, Forward);
@@ -1520,6 +1533,8 @@ namespace Teinora
 		Frame.SunColor = ToFloat4(Sky.SunColor);
 		Frame.Sun2Direction = ToFloat4(ToFloat(Sky.Sun2Direction));
 		Frame.Sun2Color = ToFloat4(Sky.Sun2Color);
+		Frame.Coronas[0] = ToFloat4(Sky.SunCorona);
+		Frame.Coronas[1] = ToFloat4(Sky.Sun2Corona);
 		Frame.PlanetDirection = ToFloat4(ToFloat(Sky.PlanetDirection));
 		Frame.PlanetColor = ToFloat4(Sky.PlanetColor);
 
@@ -1528,6 +1543,7 @@ namespace Teinora
 		Frame.PlanetAxis = { Axis.X, Axis.Y, Axis.Z, static_cast<float>(GetPlanetSpin(Days)) };
 		const Float3 Pole = ToFloat(GetSkyPole());
 		Frame.StarPole = { Pole.X, Pole.Y, Pole.Z, static_cast<float>(std::fmod(Days, 1.0) * 2.0 * Pi) };
+		Frame.SkyShift = ToFloat4(ToFloat(GetSkyShift(View.CameraPosition)), 0.0f);
 		Frame.SkyZenith = ToFloat4(Sky.Zenith);
 		Frame.SkyHorizon = ToFloat4(Sky.Horizon);
 		Frame.CameraPosition = {
@@ -1540,6 +1556,11 @@ namespace Teinora
 			static_cast<float>(View.WindVelocity.Y),
 			static_cast<float>(std::fmod(View.WindOffset.X, WaveWrap)),
 			static_cast<float>(std::fmod(View.WindOffset.Y, WaveWrap)) };
+		Frame.CloudDrift = {
+			static_cast<float>(std::fmod(View.CloudDrift.X, WaveWrap)),
+			static_cast<float>(std::fmod(View.CloudDrift.Y, WaveWrap)),
+			static_cast<float>(View.CloudDrift.Z - std::floor(View.CloudDrift.Z)),
+			0.0f };
 		Frame.ScreenSize = {
 			static_cast<float>(TargetWidth),
 			static_cast<float>(TargetHeight),
@@ -1574,6 +1595,7 @@ namespace Teinora
 				const HotLight& Hot = (*View.HotLights)[Index];
 				Frame.HotPoints[Index] = ToFloat4(ToFloat(Hot.Point - View.CameraPosition), static_cast<float>(Hot.FlameHeight));
 				Frame.HotLights[Index] = ToFloat4(ToFloat(Hot.Color), static_cast<float>(Hot.Reach));
+				Frame.HotShapes[Index] = { static_cast<float>(Hot.FlameBreadth), 0.0f, 0.0f, 0.0f };
 			}
 		}
 		Frame.BoltFlash = ToFloat4(ToFloat(View.FlashPoint - View.CameraPosition), static_cast<float>(View.FlashStrength));

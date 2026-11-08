@@ -137,8 +137,22 @@ void ATeinoraController::PlayerTick(float DeltaTime)
 		}
 	}
 
+	// Time goes faster or slower a step at a time, and stays so.
+	const int32 TimeStep = (WasInputKeyJustPressed(EKeys::Add) || WasInputKeyJustPressed(EKeys::Equals) ? 1 : 0)
+		- (WasInputKeyJustPressed(EKeys::Subtract) || WasInputKeyJustPressed(EKeys::Hyphen) ? 1 : 0);
+	const int32 WantedTime = FMath::Clamp(Settings.World.TimeSpeed + TimeStep, 0, FTeinoraWorldSettings::TimeRates - 1);
+	if (WantedTime != Settings.World.TimeSpeed)
+	{
+		Settings.World.TimeSpeed = WantedTime;
+		Settings.Save();
+		if (ATeinoraWorld* World = GetTeinoraWorld())
+		{
+			World->SetTimeRate(FTeinoraWorldSettings::GetTimeRate(WantedTime));
+		}
+	}
+
 	// What can be set down where the eye rests.
-	const FKey PlaceKeys[] = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four };
+	const FKey PlaceKeys[] ={ EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four };
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(PlaceKeys); ++Index)
 	{
 		const ATeinoraCamera* Eye = Cast<ATeinoraCamera>(GetPawn());
@@ -242,7 +256,10 @@ void ATeinoraController::ApplySettings()
 	if (ATeinoraWorld* World = GetTeinoraWorld())
 	{
 		World->SetView(Settings.GetViewRadius(), Settings.GeometryDetail, Settings.bClouds, Settings.World.CloudCover);
-		World->SetTimeRate(FTeinoraWorldSettings::GetTimeRate(Settings.World.TimeSpeed));
+		// An automated run may ask for a speed of time of its own, which is not saved.
+		int32 TimeStep = Settings.World.TimeSpeed;
+		FParse::Value(FCommandLine::Get(), TEXT("TeinoraTimeStep="), TimeStep);
+		World->SetTimeRate(FTeinoraWorldSettings::GetTimeRate(TimeStep));
 	}
 }
 

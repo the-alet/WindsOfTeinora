@@ -28,6 +28,10 @@ namespace Teinora
 		S = 'S',
 		W = 'W',
 		M = 'M',
+		Add = 0x6B,      // on the number pad
+		Subtract = 0x6D,
+		Plus = 0xBB,     // the key with = and +
+		Minus = 0xBD,
 		Slash = 0xBF // the key by the right shift, whatever the keyboard's layout puts on it
 	};
 

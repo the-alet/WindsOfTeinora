@@ -65,6 +65,7 @@ namespace Teinora
 		double DayCount = 0.0;    // whole days gone by, for what changes in the sky from day to day
 		Vec3 WindVelocity;
 		Vec3 WindOffset;          // how far the air has travelled so far
+		Vec3 CloudDrift;          // how far the wind aloft has carried the clouds, and in Z how far they have changed
 		double ViewDistance = 2500.0;
 		const std::vector<ChunkDraw>* Chunks = nullptr;
 		const std::vector<ObjectDraw>* Objects = nullptr;

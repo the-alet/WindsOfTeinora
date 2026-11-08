@@ -247,6 +247,16 @@ namespace Teinora::Sim
 	inline constexpr double CloudBottom = 1700.0;
 	inline constexpr double CloudTop = 3100.0;
 
+	/** How much faster the wind is up where the clouds are than near the ground, which holds it back. */
+	inline constexpr double CloudWindRatio = 2.5;
+
+	/**
+	 * How fast clouds change their shape, in turns of their noise per second: a little in still air,
+	 * and the faster the harder the wind blows up there, per m/s of it.
+	 */
+	inline constexpr double CloudChangeStill = 1.0 / 1500.0;
+	inline constexpr double CloudChangePerWind = 1.0 / 6000.0;
+
 	/** How much lightning a cloud holds, in kg/m3, before it breaks through the air. */
 	inline constexpr double MagicBreakdown = 0.08;
 

@@ -24,7 +24,7 @@ namespace
 	// Unreal reports mouse travel in raw counts times this, set in BaseInput.ini.
 	constexpr double AxisUnitsPerCount = 0.07;
 
-	constexpr float FocusRadius = 0.23f;
+	constexpr float FocusRadius = 0.265f;
 	constexpr float FocusStrength = 0.75f;
 
 	constexpr float DayExposureBias = -1.52f; // in stops, for the sun's intensity in TeinoraWorld.cpp

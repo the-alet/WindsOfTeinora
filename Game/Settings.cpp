@@ -43,7 +43,7 @@ namespace Teinora
 
 	double WorldSettings::GetTimeRate(int Index)
 	{
-		constexpr double Rates[TimeRates] = { 0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 15.0, 30.0, 60.0, 120.0 };
+		constexpr double Rates[TimeRates] = { 1.0 / 50.0, 1.0 / 20.0, 1.0 / 10.0, 1.0 / 5.0, 1.0 / 2.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0 };
 		return Rates[std::clamp(Index, 0, TimeRates - 1)];
 	}
 
@@ -176,7 +176,7 @@ namespace Teinora
 			{
 				World.WindDirection = std::clamp(Number, -1, WorldSettings::WindDirections - 1);
 			}
-			else if (std::strcmp(Key, "time_speed") == 0)
+			else if (std::strcmp(Key, "time_step") == 0) // not time_speed, which counted along another scale
 			{
 				World.TimeSpeed = std::clamp(Number, 0, WorldSettings::TimeRates - 1);
 			}
@@ -226,7 +226,7 @@ namespace Teinora
 		std::fprintf(File, "invert_mouse = %d\n", Controls.bInvertMouse ? 1 : 0);
 		std::fprintf(File, "wind_speed = %.2f\n", World.WindSpeed);
 		std::fprintf(File, "wind_direction = %d\n", World.WindDirection);
-		std::fprintf(File, "time_speed = %d\n", World.TimeSpeed);
+		std::fprintf(File, "time_step = %d\n", World.TimeSpeed);
 		std::fprintf(File, "wave_height = %.2f\n", World.WaveHeight);
 		std::fprintf(File, "cloud_cover = %.2f\n", World.CloudCover);
 		for (int Action = 0; Action < static_cast<int>(EAction::Count); ++Action)

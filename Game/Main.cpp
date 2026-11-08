@@ -34,8 +34,8 @@ namespace
 	constexpr int SurfaceTextureSize = 1024;
 	constexpr int CloudNoiseSize = 64;
 	constexpr double PhysicsStep = 1.0 / 120.0;
-	constexpr int MaxPhysicsSteps = 8;
-	constexpr double DayLength = 1200.0;
+	constexpr int MaxPhysicsSteps = 64; // enough to keep up at fifty times the usual speed, at about 60 frames a second
+	constexpr double DayLength = DaySeconds; // seconds of the world's time, see ReadClock in SceneTypes.h
 	constexpr std::size_t MaxDrawnLakes = 6;
 
 	struct Options
@@ -69,6 +69,7 @@ namespace
 		Menu::EPage Page = Menu::EPage::Closed;
 		int Throws = 0;             // balls thrown during an automated run
 		std::string Place;          // and the keys from 1 to 4 pressed in it, one a frame, to set things down
+		int TimeStep = -1;          // the speed of time for this run, as an index into WorldSettings::GetTimeRate, unsaved
 		double ThrowHold = 2.0;     // and how many seconds of holding each one stands for
 		bool bMagicView = false;    // starts in the magic view
 		double Strike = 0.0;        // an automated run ends with a bolt this far ahead
@@ -132,6 +133,10 @@ namespace
 			else if (StartsWith(Argument, "--place="))
 			{
 				Result.Place = Argument + 8;
+			}
+			else if (StartsWith(Argument, "--time-step="))
+			{
+				Result.TimeStep = std::atoi(Argument + 12);
 			}
 			else if (StartsWith(Argument, "--throw-hold="))
 			{
@@ -253,7 +258,16 @@ namespace
 		StormField::Reading Cloud; // over the camera
 		bool bMagicView = false;
 		double ThrowCharge = -1.0; // share of the strongest throw while the button is held, otherwise below zero
+		double TimeRate = 1.0;     // how many times faster than usual the world goes by
 	};
+
+	/** A speed of time as the HUD and the menu show it: x1/50 up to x50. */
+	std::string FormatTimeRate(double Rate)
+	{
+		char Text[32];
+		std::snprintf(Text, sizeof(Text), Rate < 1.0 ? "x1/%g" : "x%g", Rate < 1.0 ? 1.0 / Rate : Rate);
+		return Text;
+	}
 
 	void DrawHud(Renderer& Output, const Window& Input, const Rhi::Device& Device, const FreeCamera& Camera, const Physics::World& Physics,
 		const GameWorld& World, const ControlSettings& Controls, double Day, double Hour, const Vec3& Wind, double FramesPerSecond, const HudExtras& Extras)
@@ -282,9 +296,8 @@ namespace
 			std::snprintf(Lines[0] + Used, sizeof(Lines[0]) - Used, " | Ray traced");
 		}
 
-		const int Hours = static_cast<int>(Hour);
-		const int Minutes = static_cast<int>((Hour - Hours) * 60.0);
-		std::snprintf(Lines[1], sizeof(Lines[1]), "Day %.0f   Time %02d:%02d   Wind %.1f m/s", Day, Hours, Minutes, Length(Wind));
+		const ClockReading Clock = ReadClock(Hour); // the world's hours, minutes and seconds
+		std::snprintf(Lines[1], sizeof(Lines[1]), "Day %.0f   Time %02d:%02d:%02d %s   Wind %.1f m/s", Day, Clock.Hours, Clock.Minutes, Clock.Seconds, FormatTimeRate(Extras.TimeRate).c_str(), Length(Wind));
 
 		std::snprintf(Lines[2], sizeof(Lines[2]), "Position %.0f, %.0f   Altitude %.0f m   Bodies %zu, awake %zu, contacts %zu",
 			Camera.Position.X, Camera.Position.Y, Camera.Position.Z, World.GetPropCount(), Physics.GetAwakeCount(), Physics.GetContactCount());
@@ -321,7 +334,7 @@ namespace
 		const bool bWord = Forward.size() + Left.size() + Back.size() + Right.size() == 4;
 		const std::string Gap = bWord ? "" : " ";
 		const std::string Help = Forward + Gap + Left + Gap + Back + Gap + Right + " move   " + Name(EAction::Up) + " / " + Name(EAction::Down) + " up, down   "
-			+ Name(EAction::Fast) + " fast   Hold LMB throw ball   1 fire  2 crate  3 barrel  4 ball   " + (Extras.bMagic ? "M magic   " : "") + Name(EAction::WorldMenu) + " world   Esc menu";
+			+ Name(EAction::Fast) + " fast   Hold LMB throw ball   1 fire  2 crate  3 barrel  4 ball   + - time   " + (Extras.bMagic ? "M magic   " : "") + Name(EAction::WorldMenu) + " world   Esc menu";
 
 		const float HelpY = static_cast<float>(Input.GetHeight()) - Margin - Line - Padding * 2.0f;
 		Output.DrawRect(Margin, HelpY, Output.MeasureText(Size, Help.c_str()) + Padding * 2.0f, Line + Padding * 2.0f, Backdrop);
@@ -391,6 +404,10 @@ int main(int ArgumentCount, char** Arguments)
 	if (Launch.LowLatency >= 0)
 	{
 		Settings.Render.LowLatency = Launch.LowLatency;
+	}
+	if (Launch.TimeStep >= 0)
+	{
+		Settings.World.TimeSpeed = std::clamp(Launch.TimeStep, 0, WorldSettings::TimeRates - 1);
 	}
 	if (Launch.RayTracing >= 0)
 	{
@@ -483,9 +500,14 @@ int main(int ArgumentCount, char** Arguments)
 	double Accumulator = 0.0;
 	double FramesPerSecond = 0.0;
 	Vec3 WindOffset;
+	Vec3 CloudDrift; // how far the wind aloft has carried the clouds, and in Z how far they have changed
 	int SettledFrames = 0;
 	int ThrowsLeft = Launch.Throws;
 	std::size_t PlacedSoFar = 0;
+	double WorldDt = 0.0;        // the world's seconds that this frame got through
+	double CountedFromSim = 0.0; // where the world's time and the gas's stood when an automated run began to count frames
+	double CountedFromGas = 0.0;
+	double CountedReal = 0.0;    // and the seconds that have gone by since
 	double ThrowHeld = -1.0; // seconds the button has been down for, below zero while it is up
 	std::vector<ObjectDraw> Objects;
 	std::vector<WaterDraw> Waters;
@@ -564,6 +586,19 @@ int main(int ArgumentCount, char** Arguments)
 				bMagicView = !bMagicView;
 			}
 
+			// Time goes faster or slower a step at a time, and stays so.
+			if (bHandsFree)
+			{
+				const int Step = (AppWindow.WasKeyPressed(EKey::Plus) || AppWindow.WasKeyPressed(EKey::Add) ? 1 : 0)
+					- (AppWindow.WasKeyPressed(EKey::Minus) || AppWindow.WasKeyPressed(EKey::Subtract) ? 1 : 0);
+				const int Wanted = std::clamp(Settings.World.TimeSpeed + Step, 0, WorldSettings::TimeRates - 1);
+				if (Wanted != Settings.World.TimeSpeed)
+				{
+					Settings.World.TimeSpeed = Wanted;
+					Settings.Save(SettingsPath);
+				}
+			}
+
 			// What can be set down where the eye rests.
 			char Pressed = 0;
 			if (bHandsFree)
@@ -583,15 +618,19 @@ int main(int ArgumentCount, char** Arguments)
 			default: break;
 			}
 
-			Accumulator = std::min(Accumulator + Dt, PhysicsStep * MaxPhysicsSteps);
+			// The world runs at the speed of time that the menu sets, as far as the physics can keep up, and
+			// the suns and the wind go by the time it has got through, so that nothing runs ahead of the rest.
+			const double Before = SimTime;
+			Accumulator = std::min(Accumulator + Dt * WorldSettings::GetTimeRate(Settings.World.TimeSpeed), PhysicsStep * MaxPhysicsSteps);
 			while (Accumulator >= PhysicsStep)
 			{
 				World.Step(PhysicsStep);
 				SimTime += PhysicsStep;
 				Accumulator -= PhysicsStep;
 			}
+			WorldDt = SimTime - Before;
 
-			Clock.Hour += Dt / DayLength * 24.0 * WorldSettings::GetTimeRate(Settings.World.TimeSpeed);
+			Clock.Hour += WorldDt / DayLength * 24.0;
 			if (Clock.Hour >= 24.0)
 			{
 				Clock.Hour -= 24.0;
@@ -601,6 +640,7 @@ int main(int ArgumentCount, char** Arguments)
 		else
 		{
 			ThrowHeld = -1.0; // opening the menu lets go of the ball without throwing it
+			WorldDt = 0.0;
 		}
 
 		World.Update(Camera.Position, SimTime);
@@ -631,12 +671,16 @@ int main(int ArgumentCount, char** Arguments)
 		const Vec3 Wind = Sim::WindAt(Camera.Position, SimTime, Sim::WorldSeed);
 		if (!bPaused)
 		{
-			WindOffset += Wind * Dt;
+			WindOffset += Wind * WorldDt;
+
+			// The wind aloft carries the clouds along faster, and the harder it blows the sooner they change.
+			const Vec3 Aloft = Wind * Sim::CloudWindRatio;
+			CloudDrift += Vec3{ Aloft.X, Aloft.Y, Sim::CloudChangeStill + Sim::CloudChangePerWind * Length(Aloft) } * WorldDt;
 		}
 
 		if (Storms != nullptr)
 		{
-			Storms->Update(Camera.Position, WindOffset, Wind, Settings.Render.bClouds ? Settings.World.CloudCover : 0.0, SimTime);
+			Storms->Update(Camera.Position, CloudDrift, Wind, Settings.Render.bClouds ? Settings.World.CloudCover : 0.0, SimTime);
 			if (Launch.Strike > 0.0 && SettledFrames == (Launch.StrikeFrame >= 0 ? Launch.StrikeFrame : Launch.Frames - 3))
 			{
 				Storms->ForceStrike(Camera.Position + Camera.GetGaze() * Launch.Strike);
@@ -663,6 +707,7 @@ int main(int ArgumentCount, char** Arguments)
 		Extras.Magic = NearMagic.GetMix(Camera.Position);
 		Extras.bMagicView = bMagicView;
 		Extras.ThrowCharge = ThrowHeld >= 0.0 ? Sim::ThrowSpeedAfterHold(ThrowHeld) / Sim::MaxThrowSpeed : -1.0;
+		Extras.TimeRate = WorldSettings::GetTimeRate(Settings.World.TimeSpeed);
 		DrawHud(Output, AppWindow, *Device, Camera, Physics, World, Settings.Controls, Clock.Day, Clock.Hour, Wind, FramesPerSecond, Extras);
 
 		if (GameMenu.Update(AppWindow, Output, Settings, Context, Clock))
@@ -692,6 +737,12 @@ int main(int ArgumentCount, char** Arguments)
 
 		const bool bCounting = Launch.Frames > 0 && World.IsSettled() && (Magic == nullptr || Magic->IsReady());
 		SettledFrames += bCounting ? 1 : 0;
+		if (bCounting && SettledFrames == 1)
+		{
+			CountedFromSim = SimTime;
+			CountedFromGas = Magic != nullptr ? Magic->GetTime() : 0.0;
+		}
+		CountedReal += bCounting && SettledFrames > 1 ? Dt : 0.0;
 		const bool bLastFrame = Launch.Frames > 0 && SettledFrames >= Launch.Frames;
 		if (bLastFrame && !Launch.Screenshot.empty())
 		{
@@ -747,6 +798,7 @@ int main(int ArgumentCount, char** Arguments)
 		View.DayCount = Clock.Day;
 		View.WindVelocity = Wind;
 		View.WindOffset = WindOffset;
+		View.CloudDrift = CloudDrift;
 		View.ViewDistance = ViewDistance;
 		View.Chunks = &Terrain.GetDraws();
 		View.Objects = &Objects;
@@ -788,6 +840,9 @@ int main(int ArgumentCount, char** Arguments)
 	{
 		Log("Magic: %.3f kg/m3 at the camera, %.1f at most nearby", NearMagic.GetMix(Camera.Position).GetTotal(), NearMagic.PeakDensity);
 	}
+
+	Log("Time: %s, the world went %.1f s and its gas %.1f s while %.1f s went by", FormatTimeRate(WorldSettings::GetTimeRate(Settings.World.TimeSpeed)).c_str(),
+		SimTime - CountedFromSim, Magic != nullptr ? Magic->GetTime() - CountedFromGas : 0.0, CountedReal);
 
 	Device->WaitIdle();
 	return 0;

@@ -25,7 +25,8 @@ Varyings VSMain(float4 Star : TEXCOORD0, float4 Look : TEXCOORD1, uint Vertex : 
 	const float3 Pole = StarPole.xyz;
 	const float Cosine = cos(StarPole.w);
 	const float Sine = sin(StarPole.w);
-	const float3 Direction = Star.xyz * Cosine + cross(Pole, Star.xyz) * Sine + Pole * dot(Pole, Star.xyz) * (1.0 - Cosine);
+	const float3 FromMiddle = Star.xyz * Cosine + cross(Pole, Star.xyz) * Sine + Pole * dot(Pole, Star.xyz) * (1.0 - Cosine);
+	const float3 Direction = normalize(FromMiddle + SkyShift.xyz); // seen from the camera, not from the sky's middle
 
 	Varyings Output;
 	Output.Spot = Corner;

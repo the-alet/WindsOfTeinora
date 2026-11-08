@@ -12,6 +12,7 @@
 #include "TeinoraWorld.h"
 
 THIRD_PARTY_INCLUDES_START
+#include "Render/SceneTypes.h"
 #include "TeinoraSim.h"
 THIRD_PARTY_INCLUDES_END
 
@@ -34,13 +35,13 @@ void ATeinoraHud::DrawHUD()
 	SmoothedFps = SmoothedFps == 0.0 ? Fps : SmoothedFps * 0.95 + Fps * 0.05;
 
 	const FTeinoraWorldStats Stats = World->GetStats();
-	const int32 Hours = static_cast<int32>(Stats.Hour);
-	const int32 Minutes = static_cast<int32>((Stats.Hour - Hours) * 60.0);
+	const Teinora::ClockReading Reading = Teinora::ReadClock(Stats.Hour); // the world's hours, minutes and seconds
 	const Teinora::Vec3& Position = Eye->GetEye();
 
 	TArray<FString> Lines = {
 		FString::Printf(TEXT("Unreal Engine %d.%d | %s | %s | %.0f FPS"), ENGINE_MAJOR_VERSION, ENGINE_MINOR_VERSION, GDynamicRHI->GetName(), *GRHIAdapterName, SmoothedFps),
-		FString::Printf(TEXT("Day %.0f   Time %02d:%02d   Wind %.1f m/s"), Stats.Day, Hours, Minutes, Stats.WindSpeed),
+		FString::Printf(TEXT("Day %.0f   Time %02d:%02d:%02d %s   Wind %.1f m/s"), Stats.Day, Reading.Hours, Reading.Minutes, Reading.Seconds,
+			*(Stats.TimeRate < 1.0 ? FString::Printf(TEXT("x1/%g"), 1.0 / Stats.TimeRate) : FString::Printf(TEXT("x%g"), Stats.TimeRate)), Stats.WindSpeed),
 		FString::Printf(TEXT("Position %.0f, %.0f   Altitude %.0f m   Bodies %d, awake %d, contacts %d"), Position.X, Position.Y, Position.Z, Stats.Bodies, Stats.Awake, Stats.Contacts),
 	};
 	if (Stats.bMagic)
@@ -58,7 +59,7 @@ void ATeinoraHud::DrawHUD()
 		const FKey& Key = Controls.GetKey(Action);
 		return Key == EKeys::Slash ? FString(TEXT("/")) : Key.GetDisplayName().ToString();
 	};
-	const FString Hints = FString::Printf(TEXT("%s %s %s %s move   %s / %s up, down   %s fast   Hold LMB throw ball   1 fire  2 crate  3 barrel  4 ball   %s%s world   Esc menu"),
+	const FString Hints = FString::Printf(TEXT("%s %s %s %s move   %s / %s up, down   %s fast   Hold LMB throw ball   1 fire  2 crate  3 barrel  4 ball   + - time   %s%s world   Esc menu"),
 		*Name(ETeinoraAction::Forward), *Name(ETeinoraAction::Left), *Name(ETeinoraAction::Back), *Name(ETeinoraAction::Right),
 		*Name(ETeinoraAction::Up), *Name(ETeinoraAction::Down), *Name(ETeinoraAction::Fast), Stats.bMagic ? TEXT("M magic   ") : TEXT(""), *Name(ETeinoraAction::WorldMenu));
 	UFont* Font = GEngine->GetMediumFont();

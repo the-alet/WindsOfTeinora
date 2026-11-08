@@ -32,6 +32,7 @@ namespace Teinora
 		constexpr int LongestLine = std::max({ MagicField::GridX, MagicField::GridY, MagicField::GridZ });
 
 		constexpr double SimulationStep = 0.05; // seconds per step, on the simulation's thread
+		constexpr double LongestStep = 0.15;    // and when it falls behind: a pressure wave then crosses a fifth of a cell
 		constexpr int WarmUpSteps = 160;        // run before the first result, so that the gas is already moving
 
 		constexpr int FarX = 64;
@@ -1119,6 +1120,12 @@ namespace Teinora
 		return bReady;
 	}
 
+	double MagicSimulation::GetTime() const
+	{
+		std::lock_guard Lock(Mutex);
+		return ReachedTime;
+	}
+
 	bool MagicSimulation::TakeNear(MagicVolume& InOut)
 	{
 		std::lock_guard Lock(Mutex);
@@ -1254,8 +1261,14 @@ namespace Teinora
 			}
 			else
 			{
-				Clock += SimulationStep;
-				Field.Step(Around, Drift, Clock, SimulationStep);
+				// When time runs fast it takes longer steps, as long as the gas stays steady with them.
+				double Step;
+				{
+					std::lock_guard Lock(Mutex);
+					Step = std::clamp(TargetTime - Clock, SimulationStep, LongestStep);
+				}
+				Clock += Step;
+				Field.Step(Around, Drift, Clock, Step);
 
 				// A slow machine falls behind rather than falling further and further behind.
 				std::lock_guard Lock(Mutex);
@@ -1265,6 +1278,7 @@ namespace Teinora
 			Publish(Around);
 			std::lock_guard Lock(Mutex);
 			Field.TakeContacts(FinishedContacts);
+			ReachedTime = Clock;
 			bReady = true;
 		}
 	}

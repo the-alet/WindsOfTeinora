@@ -129,13 +129,13 @@ namespace Teinora
 			case ERow::TimeSpeed:
 			{
 				const double Rate = WorldSettings::GetTimeRate(Settings.World.TimeSpeed);
-				return Rate > 0.0 ? FormatNumber("x%g", Rate) : "Stopped";
+				return Rate < 1.0 ? FormatNumber("x1/%g", 1.0 / Rate) : FormatNumber("x%g", Rate);
 			}
 			case ERow::TimeOfDay:
 			{
 				char Text[16];
-				const int Minutes = static_cast<int>(Clock.Hour * 60.0);
-				std::snprintf(Text, sizeof(Text), "%02d:%02d", Minutes / 60, Minutes % 60);
+				const ClockReading Reading = ReadClock(Clock.Hour);
+				std::snprintf(Text, sizeof(Text), "%02d:%02d:%02d", Reading.Hours, Reading.Minutes, Reading.Seconds);
 				return Text;
 			}
 			case ERow::DayNumber:     return std::to_string(static_cast<int>(Clock.Day));
@@ -333,7 +333,7 @@ namespace Teinora
 				Settings.World.TimeSpeed = std::clamp(Settings.World.TimeSpeed + Step, 0, WorldSettings::TimeRates - 1);
 				return true;
 			case ERow::TimeOfDay:
-				Clock.Hour = std::fmod(std::floor(Clock.Hour * 2.0 + 0.001) / 2.0 + Step * 0.5 + 24.0, 24.0);
+				Clock.Hour = StepClockHour(Clock.Hour, Step); // a whole hour of the world's on or back
 				return true;
 			case ERow::DayNumber:
 				Clock.Day = std::max(Clock.Day + Step, 1.0);

@@ -72,12 +72,13 @@ float SampleCloud(float3 Relative, bool bFine)
 		return 0.0;
 	}
 
-	const float2 Carried = Relative.xy + CameraPosition.xy - Wind.zw;
-	const float Broad = CloudNoise.SampleLevel(LinearWrap, float3(Carried / 4096.0, Altitude / 2048.0), 0.0).r;
+	// Carried by the wind aloft, and slowly changing their shape as they go: Storms.cpp's MeasureCloud reads the same.
+	const float2 Carried = Relative.xy + CameraPosition.xy - CloudDrift.xy;
+	const float Broad = CloudNoise.SampleLevel(LinearWrap, float3(Carried / 4096.0, Altitude / 2048.0 + CloudDrift.z), 0.0).r;
 	float Density = saturate((Broad - 0.74 + Conditions.z * 0.2 - (1.0 - Profile) * 0.16) * 5.0);
 	if (bFine && Density > 0.0)
 	{
-		const float Fine = CloudNoise.SampleLevel(LinearWrap, float3(Carried / 512.0, Altitude / 512.0), 0.0).g;
+		const float Fine = CloudNoise.SampleLevel(LinearWrap, float3(Carried / 512.0, Altitude / 512.0 + CloudDrift.z * 4.0), 0.0).g;
 		Density = saturate(Density - (1.0 - Fine) * 0.45 * (1.0 - Density * 0.6));
 	}
 	return Density;

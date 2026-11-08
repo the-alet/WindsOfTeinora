@@ -231,6 +231,9 @@ namespace Teinora
 		/** True once the gas has had time to get moving. */
 		bool IsReady() const;
 
+		/** How far the gas has got, in the world's seconds. It falls behind when time runs faster than it can keep up with. */
+		double GetTime() const;
+
 		/** Swaps in the newest grid, if there is one. Returns false otherwise. */
 		bool TakeNear(MagicVolume& InOut);
 		bool TakeFar(MagicVolume& InOut);
@@ -247,6 +250,7 @@ namespace Teinora
 		Vec3 Focus;
 		Vec3 AirDrift;
 		double TargetTime = 0.0;
+		double ReachedTime = 0.0;
 		double SunHeat = 0.0;
 		std::vector<MagicPush> Pending;
 		std::vector<MagicDeposit> PendingDeposits;

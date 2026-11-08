@@ -216,33 +216,106 @@ Color = lerp(Color, float3(1.0, 0.72, 0.28), smoothstep(0.65, 1.0, Lit));
 return Color * Lit * Lit * 3.0;
 '''
 
-# The standalone game's Shaders/Flame.hlsli. A sheet comes with its across in U and its height in V.
+# The standalone game's Shaders/Flame.hlsli, line for line: a flame as a volume, the eye's ray traced through
+# it. Each flame is a box around its cylinder; World is the point of the box drawn, Eye the camera, Foot the
+# flame's foot, all in Unreal's units and axes, turned here into the world's metres with z up.
 FLAME_BODY = '''
-float Rise = frac(WorldTime * 0.004) * 400.0;
-float2 Climbing = float2(Place.x * 1.5 + Seed, Place.y * 1.9 - Rise);
-float2 Spots[3] = { Climbing, Climbing * 2.7 + 11.0, Climbing * 5.3 + 5.0 };
-float Noise[3];
-for (int Index = 0; Index < 3; ++Index)
+struct FFlame
 {
-    float2 Cell = floor(Spots[Index]);
-    float2 Part = Spots[Index] - Cell;
-    float2 Blend = Part * Part * (3.0 - 2.0 * Part);
-    int2 Whole = int2(Cell);
-    uint4 Keys = uint4(Whole.x, Whole.x + 1, Whole.x, Whole.x + 1) * 1597334677u + uint4(Whole.y, Whole.y, Whole.y + 1, Whole.y + 1) * 3812015801u;
-    Keys = (Keys ^ (Keys >> 16)) * 2654435769u;
-    float4 Corners = float4(Keys >> 8) / 16777216.0;
-    Noise[Index] = lerp(lerp(Corners.x, Corners.y, Blend.x), lerp(Corners.z, Corners.w, Blend.x), Blend.y);
-}
+    float Speck(int3 Cell)
+    {
+        uint Mixed = uint(Cell.x) * 1597334677u ^ uint(Cell.y) * 3812015801u ^ uint(Cell.z) * 2798796415u;
+        Mixed = (Mixed ^ (Mixed >> 16)) * 2654435769u;
+        Mixed ^= Mixed >> 15;
+        return float(Mixed >> 8) / 16777216.0;
+    }
 
-float Lean = Noise[0] - 0.5;
-float Tongues = Noise[1] * 0.6 + Noise[2] * 0.4;
-float Width = 0.8 * sqrt(max(1.0 - Place.y, 0.0)) * smoothstep(-0.05, 0.1, Place.y);
-float Inside = saturate(1.0 - abs(Place.x + Lean * Place.y * 1.3) / max(Width, 0.001));
-float Heat = saturate((Inside * (1.3 - Place.y * 0.7) - (1.0 - Tongues) * (0.25 + 0.8 * Place.y)) * 1.5);
+    float Noise(float3 Place)
+    {
+        float3 Low = floor(Place);
+        int3 Cell = int3(Low);
+        float3 Part = Place - Low;
+        float3 Blend = Part * Part * (3.0 - 2.0 * Part);
+        float Near = lerp(lerp(Speck(Cell), Speck(Cell + int3(1, 0, 0)), Blend.x), lerp(Speck(Cell + int3(0, 1, 0)), Speck(Cell + int3(1, 1, 0)), Blend.x), Blend.y);
+        float Far = lerp(lerp(Speck(Cell + int3(0, 0, 1)), Speck(Cell + int3(1, 0, 1)), Blend.x), lerp(Speck(Cell + int3(0, 1, 1)), Speck(Cell + int3(1, 1, 1)), Blend.x), Blend.y);
+        return lerp(Near, Far, Blend.z);
+    }
 
-float3 Color = lerp(float3(1.0, 0.13, 0.015), float3(1.0, 0.46, 0.07), smoothstep(0.08, 0.45, Heat));
-Color = lerp(Color, float3(1.0, 0.84, 0.45), smoothstep(0.5, 0.95, Heat));
-float Cover = saturate(Heat * 1.6);
+    float3 Color(float Heat)
+    {
+        float3 Shade = lerp(float3(0.9, 0.08, 0.01), float3(1.0, 0.36, 0.05), smoothstep(0.05, 0.35, Heat));
+        Shade = lerp(Shade, float3(1.0, 0.72, 0.28), smoothstep(0.35, 0.7, Heat));
+        return lerp(Shade, float3(1.0, 0.93, 0.78), smoothstep(0.7, 1.0, Heat));
+    }
+
+    float4 March(float3 Origin, float3 Direction, float Height, float Breadth, float Seed, float Time, float Jitter)
+    {
+        float Radius = Height * Breadth * 1.4;
+        float Top = Height * 1.15;
+        float Enter = 0.0;
+        float Leave = 1e9;
+        float Level = dot(Direction.xy, Direction.xy);
+        float Toward = dot(Origin.xy, Direction.xy);
+        float Outside = dot(Origin.xy, Origin.xy) - Radius * Radius;
+        if (Level > 1e-6)
+        {
+            float Square = Toward * Toward - Level * Outside;
+            if (Square <= 0.0)
+            {
+                return float4(0.0, 0.0, 0.0, 0.0);
+            }
+            float Root = sqrt(Square);
+            Enter = max(Enter, (-Toward - Root) / Level);
+            Leave = min(Leave, (-Toward + Root) / Level);
+        }
+        else if (Outside > 0.0)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        if (abs(Direction.z) > 1e-6)
+        {
+            float Floor = -Origin.z / Direction.z;
+            float Ceiling = (Top - Origin.z) / Direction.z;
+            Enter = max(Enter, min(Floor, Ceiling));
+            Leave = min(Leave, max(Floor, Ceiling));
+        }
+        else if (Origin.z < 0.0 || Origin.z > Top)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        if (Leave <= Enter)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+
+        float Clock = fmod(Time, 600.0);
+        float Stride = (Leave - Enter) / 20.0;
+        float3 Light = float3(0.0, 0.0, 0.0);
+        float Thick = 0.0;
+        for (int Step = 0; Step < 20; ++Step)
+        {
+            float3 Here = (Origin + Direction * (Enter + (Step + Jitter) * Stride)) / Height;
+            float Up = Here.z;
+            float3 Flowing = float3(Here.xy * 3.0, Up * 2.2 - Clock * 2.4) + Seed;
+            float2 Sway = (float2(Noise(Flowing * 0.45 + 17.0), Noise(Flowing * 0.45 + 31.0)) - 0.5) * Up * 0.55;
+            float Churn = Noise(Flowing) * 0.5 + Noise(Flowing * 2.3 + 5.0) * 0.3 + Noise(Flowing * 5.1 + 9.0) * 0.2;
+            float Width = Breadth * pow(saturate(1.0 - Up / 1.15), 0.75) * smoothstep(-0.02, 0.06, Up);
+            float Inside = 1.0 - length(Here.xy - Sway) / max(Width, 1e-3);
+            float Body = saturate(Inside * 1.4 + (Churn - 0.5) * (0.9 + 1.6 * Up));
+            float Heat = saturate(Body * (1.25 - 0.8 * Up) * (0.65 + 0.7 * Churn));
+            float Span = Stride / Height;
+            Light += Color(Heat) * (Heat * Heat * Span * 4.0);
+            Thick += Body * Span;
+        }
+        return float4(Light * 1.8, 1.0 - exp(-Thick * 4.0)); // 1.8 where the standalone game has 6: Unreal's camera takes more light
+    }
+};
+FFlame Flames;
+float3 Here = float3(World.x, -World.y, World.z) * 0.01;
+float3 From = float3(Eye.x, -Eye.y, Eye.z) * 0.01;
+float3 Base = float3(Foot.x, -Foot.y, Foot.z) * 0.01;
+float Jitter = frac(52.9829189 * frac(dot(Pixel.xy, float2(0.06711056, 0.00583715))));
+float4 Flame = Flames.March(From - Base, normalize(Here - From), Height, Breadth, Seed, WorldTime, Jitter);
 '''
 
 # The standalone game's Shaders/Puffs.hlsl. A sheet comes with its place in UV0, from -1 to 1, in UV1
@@ -421,17 +494,23 @@ def make_flame():
     material.set_editor_property('two_sided', True)
     material.set_editor_property('cast_ray_traced_shadows', False)
 
-    names = ('Place', 'Seed', 'WorldTime')
-    color = custom_node(material, FLAME_BODY + 'return Color * Heat * Heat * 2.6 / max(Cover, 0.05);', names, -300, 0)
-    cover = custom_node(material, FLAME_BODY + 'return Cover;', names, -300, 300)
+    names = ('World', 'Eye', 'Pixel', 'Foot', 'Height', 'Breadth', 'Seed', 'WorldTime')
+    color = custom_node(material, FLAME_BODY + 'return Flame.rgb / max(Flame.a, 0.05);', names, -300, 0)
+    cover = custom_node(material, FLAME_BODY + 'return Flame.a;', names, -300, 300)
     cover.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT1)
-    place = materials.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -800, 0)
-    seed = scalar_parameter(material, 'Seed', 0.0, -800, 100)
-    time = scalar_parameter(material, 'WorldTime', 0.0, -800, 200)
+    inputs = {
+        'World': materials.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -800, 0),
+        'Eye': materials.create_material_expression(material, unreal.MaterialExpressionCameraPositionWS, -800, 100),
+        'Pixel': materials.create_material_expression(material, unreal.MaterialExpressionScreenPosition, -800, 200),
+        'Foot': vector_parameter(material, 'Foot', -800, 300),
+        'Height': scalar_parameter(material, 'Height', 1.0, -800, 400),
+        'Breadth': scalar_parameter(material, 'Breadth', 0.36, -800, 500),
+        'Seed': scalar_parameter(material, 'Seed', 0.0, -800, 600),
+        'WorldTime': scalar_parameter(material, 'WorldTime', 0.0, -800, 700),
+    }
     for node in (color, cover):
-        link(place, '', node, 'Place')
-        link(seed, '', node, 'Seed')
-        link(time, '', node, 'WorldTime')
+        for name, source in inputs.items():
+            link(source, 'PixelPosition' if name == 'Pixel' else '', node, name)
     connect(color, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     connect(cover, '', unreal.MaterialProperty.MP_OPACITY_MASK)
     finish(material)
@@ -725,10 +804,18 @@ def make_underwater():
 FOCUS_CODE = '''
 float2 ViewUv = GetViewportUV(Parameters);
 float Aspect = View.ViewSizeAndInvSize.x * View.ViewSizeAndInvSize.w;
-float Distance = length((ViewUv - Center.xy) * float2(Aspect, 1.0));
-float Amount = smoothstep(Radius, Radius * 2.6, Distance) * Strength;
 float3 Sharp = SceneTextureLookup(ViewportUVToSceneTextureUV(ViewUv, 14), 14, false).rgb;
-if (Amount <= 0.0)
+
+// How far a point lies from the edge of focus towards the edge of the screen, along the line from the
+// point of gaze, and a blur that grows as the square of that: hardly there at first, strong at the edge.
+float2 Away = ViewUv - Center.xy;
+float Distance = length(Away * float2(Aspect, 1.0));
+float2 Room = float2(Away.x >= 0.0 ? 1.0 - Center.x : Center.x, Away.y >= 0.0 ? 1.0 - Center.y : Center.y);
+float2 Ratio = Room / max(abs(Away), 1e-5);
+float ToEdge = Distance * max(min(Ratio.x, Ratio.y), 1.0);
+float Toward = saturate((Distance - Radius) / max(ToEdge - Radius, 1e-3));
+float Blur = Toward * Toward * Strength;
+if (Blur <= 0.0)
 {
     return Sharp;
 }
@@ -739,12 +826,11 @@ for (int Index = 1; Index <= 32; ++Index)
     float Share = Index / 32.0;
     float Weight = exp(-2.5 * Share);
     float Angle = Index * 2.39996;
-    float2 Offset = float2(cos(Angle) / Aspect, sin(Angle)) * sqrt(Share) * 0.016;
+    float2 Offset = float2(cos(Angle) / Aspect, sin(Angle)) * sqrt(Share) * 0.02 * Blur;
     Sum += SceneTextureLookup(ViewportUVToSceneTextureUV(saturate(ViewUv + Offset), 14), 14, true).rgb * Weight;
     Total += Weight;
 }
-float Dimmed = 1.0 - 0.05 * smoothstep(Radius * 2.2, Radius * 3.4, Distance);
-return lerp(Sharp, Sum / Total, Amount) * Dimmed;
+return lerp(Sharp, Sum / Total, saturate(Blur * 3.0)) * (1.0 - 0.05 * Blur);
 '''
 
 
@@ -922,6 +1008,35 @@ struct Shapes
         float Rise = -dot(Surface, Axis) / (abs(Across) > 1e-3 ? Across : 1e-3);
         return Rise > 0.0 ? 1.0 - 0.6 * RingDensity(length(Surface + Sun * Rise)) : 1.0;
     }
+
+    // A sun's corona, as GetCorona in the standalone game's Sky.hlsl: faint, so only seen once the
+    // planet covers the disc, with smooth streamers along the sun's equator and a red rim.
+    float3 Corona(float3 Way, float3 Sun, float Radius, float3 Light, float Seed, float3 Pole)
+    {
+        float Strength = max(max(Light.r, Light.g), Light.b);
+        float Cosine = dot(Way, Sun);
+        if (Strength <= 0.0 || Cosine < cos(Radius * 20.0))
+        {
+            return float3(0.0, 0.0, 0.0);
+        }
+        float Out = acos(saturate(Cosine)) / Radius;
+        if (Out < 1.0)
+        {
+            return float3(0.0, 0.0, 0.0);
+        }
+        float3 Across = normalize(cross(Pole, Sun));
+        float3 Up = cross(Sun, Across);
+        float3 Off = Way - Sun * Cosine;
+        float Angle = atan2(dot(Off, Up), dot(Off, Across));
+        float Equator = cos(Angle) * cos(Angle);
+        float Falloff = lerp(3.0, 1.8, Equator);
+        float Streamers = 0.55 + 0.9 * Equator * (0.6 + 0.4 * sin(Angle * 3.0 + Seed));
+        float3 Pearl = lerp(float3(1.0, 1.0, 1.0), Light / Strength, 0.3);
+        float3 Glow = Pearl * (Strength * 0.3 * pow(Out, -Falloff) * Streamers);
+        float Rim = 1.0 - smoothstep(1.0, 1.035, Out);
+        float Prominence = saturate(sin(Angle * 5.0 + Seed * 3.1) * sin(Angle * 11.0 - Seed * 1.7) * 2.5 - 0.9) * (1.0 - smoothstep(1.0, 1.12, Out));
+        return Glow + float3(1.0, 0.16, 0.24) * (Strength * 0.3 * 2.5 * max(Rim, Prominence));
+    }
 };
 Shapes Library;
 
@@ -939,7 +1054,8 @@ if (Night > 0.0 && Above > 0.0)
 {
     float Cosine = cos(StarTurn);
     float Sine = sin(StarTurn);
-    float3 Local = Way * Cosine - cross(StarPole, Way) * Sine + StarPole * dot(StarPole, Way) * (1.0 - Cosine);
+    float3 FromMiddle = normalize(Way - SkyShift); // the stars lie on the sky's sphere, seen from the eye, see SeenFrom in SceneTypes.h
+    float3 Local = FromMiddle * Cosine - cross(StarPole, FromMiddle) * Sine + StarPole * dot(StarPole, FromMiddle) * (1.0 - Cosine);
     int2 Home = int2(floor(Library.Fold(Local) * CellSide));
 
     float PixelAngle = 2.0 / (View.ViewToClip[1][1] * View.ViewSizeAndInvSize.y);
@@ -979,12 +1095,16 @@ if (Night > 0.0 && Above > 0.0)
     }
 }
 
+// The coronas, under the planet, which hides them as it does the discs. 0.0173 and 0.0126 are the discs'
+// radii, SunSize and SecondSunSize in Engine/Render/SceneTypes.h.
+Space += Library.Corona(Way, SunWay, 0.0173, SunCorona, 0.0, StarPole) + Library.Corona(Way, SecondWay, 0.0126, SecondCorona, 2.7, StarPole);
+
 float Block = 0.0; // how much of a sun's disc the planet and its rings hide along this ray
 if (dot(Way, PlanetWay) > 0.85 && PlanetWay.z > -0.25)
 {
     float3 Across = normalize(cross(PlanetAxis, PlanetWay));
     float3 Up = cross(PlanetWay, Across);
-    float2 Spot = float2(dot(Way, Across), dot(Way, Up)) / 0.06;
+    float2 Spot = float2(dot(Way, Across), dot(Way, Up)) / 0.04; // PlanetSize in Engine/Render/SceneTypes.h
     float Reach = dot(Spot, Spot);
     if (Reach <= 25.0)
     {
@@ -1050,7 +1170,7 @@ def make_sky():
     material.set_editor_property('two_sided', True)
 
     scalars = ('Night', 'SkyTime', 'StarTurn', 'PlanetSpin')
-    vectors = ('SunWay', 'SecondWay', 'PlanetWay', 'PlanetAxis', 'StarPole', 'SunLight', 'SecondLight', 'NightAir')
+    vectors = ('SunWay', 'SecondWay', 'PlanetWay', 'PlanetAxis', 'StarPole', 'SunLight', 'SecondLight', 'NightAir', 'SkyShift', 'SunCorona', 'SecondCorona')
     node = custom_node(material, SKY_CODE, ('Ray', 'Air', 'FirstDisc', 'SecondDisc') + scalars + vectors + ('StarCells',), -300, 0)
 
     ray = materials.create_material_expression(material, unreal.MaterialExpressionCameraVectorWS, -700, -500)

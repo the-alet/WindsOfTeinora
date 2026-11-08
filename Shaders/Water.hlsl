@@ -106,39 +106,17 @@ struct Varyings
 	float Edge : TEXCOORD2;      // how far inside the shape that holds the water
 };
 
-/**
- * The flames that a ray off the water meets before Reach. Each stands on a sheet turned across the ray,
- * as on screen it stands turned to the eye, and shows the same flame from the same place on it.
- */
+/** The flames that a ray off the water meets before Reach: the same volumes the eye sees, traced from the water. */
 float3 ReflectFlames(float3 Origin, float3 Direction, float Reach)
 {
 	float3 Light = float3(0.0, 0.0, 0.0);
-	const float2 Level = Direction.xy;
-	const float LevelSquare = dot(Level, Level);
-	if (LevelSquare < 1e-6)
-	{
-		return Light;
-	}
-	const float2 Side = float2(-Level.y, Level.x) * rsqrt(LevelSquare);
-
 	for (int Index = 0; Index < 8 && HotLights[Index].w > 0.0; ++Index)
 	{
 		const float Height = HotPoints[Index].w;
-		if (Height <= 0.0)
+		if (Height > 0.0)
 		{
-			continue;
-		}
-		const float3 Foot = HotPoints[Index].xyz - float3(0.0, 0.0, Height * 0.33);
-		const float Along = dot(Foot.xy - Origin.xy, Level) / LevelSquare;
-		if (Along <= 0.0 || Along > Reach)
-		{
-			continue;
-		}
-		const float3 Hit = Origin + Direction * Along;
-		const float2 Place = float2(dot(Hit.xy - Foot.xy, Side) / (Height * 0.6), (Hit.z - Foot.z) / Height);
-		if (abs(Place.x) < 1.0 && Place.y > 0.0 && Place.y < 1.0)
-		{
-			Light += GetFlameColor(GetFlameHeat(Place, Index * 37.0, CameraPosition.w));
+			const float3 Foot = HotPoints[Index].xyz - float3(0.0, 0.0, Height * 0.33);
+			Light += MarchFlame(Origin - Foot, Direction, Reach, Height, HotShapes[Index].x, Index * 37.0, CameraPosition.w, 0.5).rgb;
 		}
 	}
 	return Light;

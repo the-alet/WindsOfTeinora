@@ -825,7 +825,10 @@ namespace Teinora
 			Light.Point = Spot.Position + Vec3{ 0.0, 0.0, Spot.bLava ? 1.0 + Spot.Radius * 0.3 : 0.5 };
 			Light.Color = Spot.bLava ? Vec3{ 3.0, 0.9, 0.16 } : Vec3{ FlameLightRed, FlameLightGreen, FlameLightBlue };
 			Light.Reach = Spot.bLava ? 24.0 + Spot.Radius * 4.0 : FlameReach;
-			Light.FlameHeight = Spot.bLava ? 0.0 : 2.3 * Spot.Radius; // what has caught fire stands taller than a campfire
+			// A campfire burns in one tall flame, a patch of grass in a broad low one torn into many tongues.
+			const bool bGrass = Spot.Radius >= 1.0;
+			Light.FlameHeight = Spot.bLava ? 0.0 : (bGrass ? 1.2 : 2.3) * Spot.Radius;
+			Light.FlameBreadth = bGrass ? 0.9 : 0.36;
 
 			const double Strength = GetFlameStrength(Spot, Light.Point);
 			Light.FlameHeight *= Strength;

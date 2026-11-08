@@ -10,6 +10,10 @@
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 
+THIRD_PARTY_INCLUDES_START
+#include "Render/SceneTypes.h"
+THIRD_PARTY_INCLUDES_END
+
 namespace
 {
 	const FLinearColor Dim(0.0f, 0.02f, 0.05f, 0.55f);
@@ -235,7 +239,7 @@ void STeinoraMenu::ShowWorld()
 		[World]()
 		{
 			const double Rate = FTeinoraWorldSettings::GetTimeRate(World->TimeSpeed);
-			return Rate > 0.0 ? FText::FromString(FString::Printf(TEXT("x%g"), Rate)) : ToText(TEXT("Stopped"));
+			return FText::FromString(Rate < 1.0 ? FString::Printf(TEXT("x1/%g"), 1.0 / Rate) : FString::Printf(TEXT("x%g"), Rate));
 		},
 		[World]() { World->TimeSpeed = Cycle(World->TimeSpeed, FTeinoraWorldSettings::TimeRates); });
 
@@ -243,15 +247,15 @@ void STeinoraMenu::ShowWorld()
 		[Player]()
 		{
 			const ATeinoraWorld* Place = Player->GetTeinoraWorld();
-			const int32 Minutes = Place != nullptr ? static_cast<int32>(Place->GetStats().Hour * 60.0) : 0;
-			return FText::FromString(FString::Printf(TEXT("%02d:%02d"), Minutes / 60, Minutes % 60));
+			const Teinora::ClockReading Reading = Teinora::ReadClock(Place != nullptr ? Place->GetStats().Hour : 0.0);
+			return FText::FromString(FString::Printf(TEXT("%02d:%02d:%02d"), Reading.Hours, Reading.Minutes, Reading.Seconds));
 		},
 		[Player]()
 		{
 			if (ATeinoraWorld* Place = Player->GetTeinoraWorld())
 			{
 				const FTeinoraWorldStats Stats = Place->GetStats();
-				Place->SetClock(FMath::Fmod(FMath::FloorToDouble(Stats.Hour * 2.0 + 0.001) / 2.0 + 0.5, 24.0), Stats.Day);
+				Place->SetClock(Teinora::StepClockHour(Stats.Hour, 1), Stats.Day); // a whole hour of the world's on
 			}
 		});
 

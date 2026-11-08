@@ -49,17 +49,19 @@ float4 PSMain(Varyings Input) : SV_Target
 		Shimmer = clamp(Here.r * 1.5, -0.14, 0.14) + 0.06 * saturate(Here.g);
 	}
 
-	float3 Color = Texture0.SampleLevel(LinearClamp, Uv, 0.0).rgb * Options.x * (1.0 + Shimmer);
+	const float3 Color = Texture0.SampleLevel(LinearClamp, Uv, 0.0).rgb * Options.x * (1.0 + Shimmer);
+	float3 Shown = Aces(Color);
 
 	const float View = Push.Magic.x;
 	if (View > 0.0)
 	{
-		// The world goes dim and pale, and the haze shows in front of it.
+		// The world goes dim and pale, and the haze shows in front of it. This comes after the curve: before
+		// it, fire and all it lights are so bright that dimming them only takes them down to white.
 		const float4 Haze = Texture1.SampleLevel(LinearClamp, Input.Uv, 0.0);
-		const float Grey = dot(Color, float3(0.2126, 0.7152, 0.0722));
-		const float3 Dimmed = lerp(Color, Grey.xxx, 0.45) * 0.22;
-		Color = lerp(Color, Dimmed * (1.0 - Haze.a) + Haze.rgb * 0.9, View);
+		const float Grey = dot(Shown, float3(0.2126, 0.7152, 0.0722));
+		const float3 Dimmed = lerp(Shown, Grey.xxx, 0.45) * 0.2;
+		Shown = lerp(Shown, saturate(Dimmed * (1.0 - Haze.a) + Aces(Haze.rgb * 0.9)), View);
 	}
 
-	return float4(pow(Aces(Color), 1.0 / 2.2), 1.0);
+	return float4(pow(Shown, 1.0 / 2.2), 1.0);
 }

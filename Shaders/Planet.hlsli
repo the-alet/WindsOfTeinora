@@ -7,7 +7,7 @@
 #include "Common.hlsli"
 
 // These three are also in Engine/Render/SceneTypes.h, which works out its eclipses.
-static const float PlanetSize = 0.06;   // radians across its radius
+static const float PlanetSize = 0.04;   // radians across its radius, PlanetSize in Engine/Render/SceneTypes.h
 static const float RingInner = 1.38;    // in radii of the planet
 static const float RingOuter = 2.5;
 

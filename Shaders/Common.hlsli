@@ -31,6 +31,10 @@
 	float4 HotPoints[8];   // what burns near the camera, relative to it; w how tall its flames are
 	float4 HotLights[8];   // the light that gives; w how far it reaches, 0 past the last of them
 	float4 BoltFlash;      // where lightning is lighting up the clouds, relative to the camera; w how brightly
+	float4 HotShapes[8];   // x how broad the flames of each are, as a share of their height
+	float4 CloudDrift;     // xy how far the wind aloft has carried the clouds, wrapped to 4096 m; z how far they have changed, from 0 to 1
+	float4 SkyShift;       // what to add to a direction from the sky's middle to see it from the camera, see SeenFrom in SceneTypes.h
+	float4 Coronas[2];     // the light of each sun's corona, which the planet in front of a sun does not take away
 };
 
 [[vk::binding(1, 0)]] cbuffer PassData : register(b1)

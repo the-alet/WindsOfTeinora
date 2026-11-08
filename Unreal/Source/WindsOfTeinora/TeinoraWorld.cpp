@@ -43,8 +43,8 @@ namespace Sim = Teinora::Sim;
 namespace
 {
 	constexpr double PhysicsStep = 1.0 / 120.0;
-	constexpr int32 MaxPhysicsSteps = 8;
-	constexpr double DayLength = 1200.0;
+	constexpr int32 MaxPhysicsSteps = 64; // enough to keep up at fifty times the usual speed, at about 60 frames a second
+	constexpr double DayLength = Teinora::DaySeconds; // seconds of the world's time, see ReadClock in SceneTypes.h
 
 	constexpr int32 WaterCells = 128;
 	constexpr double WaterReach = 4000.0; // metres from the camera to the edge of the sea
@@ -59,6 +59,7 @@ namespace
 
 	constexpr float PlanetAlbedo = 0.125f; // it gives back 10 to 15% of what the suns send it
 	constexpr float PlanetShine = 0.55f;
+	constexpr float CoronaShine = 1.1f; // twice PlanetShine: the coronas look as bright as in the standalone game
 	constexpr float ExposureKey = 9.0f;     // what the camera takes for a bright day, in the green of the suns' light
 	constexpr float DarkAdaptation = 1.96f; // and how far it opens up in the dark: the key over this, 4.6 times
 	constexpr float NightColor = 0.7f;      // how much colour the eye still sees in the dark
@@ -77,6 +78,7 @@ namespace
 	constexpr int32 MaxPlantMoves = 8;      // as in the standalone renderer
 	constexpr int32 MaxHotLights = 8;       // and this
 	constexpr int32 MaxPuffs = 160;         // the same as the standalone game
+	constexpr double CloudPatternKilometres = 256.0; // m_SimpleVolumetricCloud's Layout_CloudGlobalScale
 	constexpr double UnrealCloudBase = 5000.0; // metres, where the engine's cloud layer starts
 	constexpr double BoltPixel = 0.0024;    // how wide a bolt is at least, as a share of how far off it is
 	constexpr double FireLightPower = 1.6;  // how much brighter a unit of light is here
@@ -276,6 +278,7 @@ struct FTeinoraSimulation
 	bool bFlashing = false;
 	bool bLiquidShown = false;
 	Vec3 WindDrift;              // how far the wind has carried the ripples
+	Vec3 CloudDrift;             // and the clouds, up where it blows faster, with in Z how far they have changed
 	FLinearColor WaterLight;     // what lights the water from within
 	FLinearColor PuffLight;      // and steam and smoke
 	float HazeShown = -1.0f;     // what the height fog was last told, since telling it rebuilds its state
@@ -400,6 +403,7 @@ FTeinoraWorldStats ATeinoraWorld::GetStats() const
 	{
 		Stats.Hour = Sim->Hour;
 		Stats.Day = Sim->Day;
+		Stats.TimeRate = TimeRate;
 		Stats.Bodies = static_cast<int32>(Sim->World.GetPropCount());
 		Stats.Awake = static_cast<int32>(Sim->Physics.GetAwakeCount());
 		Stats.Contacts = static_cast<int32>(Sim->Physics.GetContactCount());
@@ -837,11 +841,16 @@ void ATeinoraWorld::CreateFires()
 {
 	UMaterialInterface* FlameBase = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Flame.M_Flame"));
 
-	// A sheet a metre high and scaled to each flame, standing on its foot and facing along X.
-	const TArray<FVector> Corners = { FVector(0.0, -60.0, 0.0), FVector(0.0, 60.0, 0.0), FVector(0.0, 60.0, 100.0), FVector(0.0, -60.0, 100.0) };
-	const TArray<FVector> Facing = { FVector::ForwardVector, FVector::ForwardVector, FVector::ForwardVector, FVector::ForwardVector };
-	const TArray<FVector2D> Places = { FVector2D(-1.0, 0.0), FVector2D(1.0, 0.0), FVector2D(1.0, 1.0), FVector2D(-1.0, 1.0) };
-	const TArray<int32> Triangles = { 0, 2, 1, 0, 3, 2 };
+	// A box a metre across and high, standing on its foot, to be scaled to the cylinder around each flame.
+	// M_Flame traces the eye's ray through the flame inside it, so all it needs is to cover that.
+	TArray<FVector> Corners;
+	for (int32 Corner = 0; Corner < 8; ++Corner)
+	{
+		Corners.Add(FVector((Corner & 1) ? 50.0 : -50.0, (Corner & 2) ? 50.0 : -50.0, (Corner & 4) ? 100.0 : 0.0));
+	}
+	const TArray<int32> Triangles = { 0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5 };
+	const TArray<FVector> Facing;
+	const TArray<FVector2D> Places;
 
 	for (int32 Index = 0; Index < MaxHotLights; ++Index)
 	{
@@ -879,7 +888,13 @@ void ATeinoraWorld::CreateFires()
 void ATeinoraWorld::UpdateStorms(const ATeinoraCamera& Eye)
 {
 	const Vec3 Here = Eye.GetEye();
-	Sim->Storms->Update(Here, Sim->WindDrift, Sim::WindAt(Here, Sim->Time, Sim::WorldSeed), StormCover, Sim->Time);
+	Sim->Storms->Update(Here, Sim->CloudDrift, Sim::WindAt(Here, Sim->Time, Sim::WorldSeed), StormCover, Sim->Time);
+
+	// The engine's clouds go with the same wind: their pattern is moved under them by as far as it has carried them.
+	// The pattern covers Layout_CloudGlobalScale kilometres, and its placement is in shares of that.
+	const double PatternSpan = CloudPatternKilometres * 1000.0;
+	CloudMaterial->SetVectorParameterValue(TEXT("Layout_GlobalTexturePlacement"),
+		FLinearColor(static_cast<float>(-FMath::Fmod(Sim->CloudDrift.X / PatternSpan, 1.0)), static_cast<float>(FMath::Fmod(Sim->CloudDrift.Y / PatternSpan, 1.0)), 0.0f, 0.0f));
 	const bool bAtFrame = StrikeFrame >= 0 && SettledFrames == StrikeFrame;
 	const bool bAtShot = StrikeFrame < 0 && SettledFrames >= AutoFrames - 3 && (Sim->Bolts.empty() || Sim->Bolts.back().Stroke < 0.5); // the shot takes a while to happen
 	if (StrikeAhead > 0.0 && (bAtFrame || bAtShot))
@@ -993,14 +1008,20 @@ void ATeinoraWorld::UpdateFires(const Vec3& Eye)
 		Light->SetIntensity(static_cast<float>(Peak * Flicker * FireLightPower * Near));
 		Light->SetAttenuationRadius(static_cast<float>(Hot.Reach * TeinoraConvert::UnitsPerMetre));
 
-		UProceduralMeshComponent* Sheet = Flames[Index];
-		Sheet->SetVisibility(Hot.FlameHeight > 0.0);
+		// The box around the flame's cylinder, as wide as Flame.hlsli's GetFlameWidth says and a little taller than the flame.
+		UProceduralMeshComponent* Box = Flames[Index];
+		Box->SetVisibility(Hot.FlameHeight > 0.0);
 		if (Hot.FlameHeight > 0.0)
 		{
 			const FVector Foot = TeinoraConvert::ToUnreal(Hot.Point - Vec3{ 0.0, 0.0, Hot.FlameHeight * 0.33 });
-			Sheet->SetWorldLocationAndRotation(Foot, FRotator(0.0, FMath::RadiansToDegrees(FMath::Atan2(EyeAt.Y - Foot.Y, EyeAt.X - Foot.X)), 0.0));
-			Sheet->SetWorldScale3D(FVector(Hot.FlameHeight));
-			FlameMaterials[Index]->SetScalarParameterValue(TEXT("WorldTime"), Time);
+			const double Across = 2.0 * Hot.FlameHeight * Hot.FlameBreadth * 1.4;
+			Box->SetWorldLocationAndRotation(Foot, FRotator::ZeroRotator);
+			Box->SetWorldScale3D(FVector(Across, Across, Hot.FlameHeight * 1.15));
+			UMaterialInstanceDynamic* Look = FlameMaterials[Index];
+			Look->SetVectorParameterValue(TEXT("Foot"), FLinearColor(Foot));
+			Look->SetScalarParameterValue(TEXT("Height"), static_cast<float>(Hot.FlameHeight));
+			Look->SetScalarParameterValue(TEXT("Breadth"), static_cast<float>(Hot.FlameBreadth));
+			Look->SetScalarParameterValue(TEXT("WorldTime"), Time);
 		}
 	}
 
@@ -1100,8 +1121,11 @@ void ATeinoraWorld::UpdateEyeInWater(ATeinoraCamera& Eye)
 
 void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
 {
-	const Vec3 Towards = Teinora::GetSunDirection(Sim->Hour, Sim->Day);
-	const Vec3 TowardsSecond = Teinora::GetSecondSunDirection(Sim->Hour, Sim->Day);
+	// The suns lie on a sky far down under the ground, and are seen from the eye, see SeenFrom in SceneTypes.h.
+	const Vec3 Seer = Eye != nullptr ? Eye->GetEye() : Vec3{};
+	const Vec3 Towards = Teinora::GetSeenSun(Sim->Hour, Sim->Day, Seer);
+	const Vec3 TowardsSecond = Teinora::GetSeenSecondSun(Sim->Hour, Sim->Day, Seer);
+	SkyMaterial->SetVectorParameterValue(TEXT("SkyShift"), ToSkyVector(Teinora::GetSkyShift(Seer)));
 	const Vec3 Planet = Teinora::GetPlanetDirection(Sim->Hour, Sim->Day);
 
 	const float Height = static_cast<float>(Towards.Z);
@@ -1181,6 +1205,9 @@ void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
 	SkyMaterial->SetVectorParameterValue(TEXT("SecondWay"), ToSkyVector(TowardsSecond));
 	SkyMaterial->SetVectorParameterValue(TEXT("PlanetWay"), ToSkyVector(Planet));
 	SkyMaterial->SetVectorParameterValue(TEXT("PlanetAxis"), ToSkyVector(PlanetAxis));
+	// The coronas shine on while the planet covers their suns; only setting puts them out.
+	SkyMaterial->SetVectorParameterValue(TEXT("SunCorona"), SunTint * (SunIntensity / UE_PI * CoronaShine * FMath::SmoothStep(-0.02f, 0.03f, Height)));
+	SkyMaterial->SetVectorParameterValue(TEXT("SecondCorona"), SecondSunTint * (SecondSunIntensity / UE_PI * CoronaShine * FMath::SmoothStep(-0.02f, 0.03f, SecondHeight)));
 	SkyMaterial->SetScalarParameterValue(TEXT("Night"), GetNight(Height, SecondHeight, Past, SecondPast));
 	SkyMaterial->SetScalarParameterValue(TEXT("SkyTime"), static_cast<float>(Sim->Time));
 	SkyMaterial->SetScalarParameterValue(TEXT("StarTurn"), static_cast<float>(FMath::Fmod(Days, 1.0) * 2.0 * UE_DOUBLE_PI));
@@ -1342,16 +1369,21 @@ void ATeinoraWorld::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	double WorldDt = 0.0; // the world's seconds that this frame gets through
 	if (!bPaused)
 	{
-		Sim->Accumulator = FMath::Min(Sim->Accumulator + DeltaSeconds, PhysicsStep * MaxPhysicsSteps);
+		// The world runs at the speed of time that the menu sets, as far as the physics can keep up, and
+		// the suns and the wind go by the time it has got through, so that nothing runs ahead of the rest.
+		const double Before = Sim->Time;
+		Sim->Accumulator = FMath::Min(Sim->Accumulator + DeltaSeconds * TimeRate, PhysicsStep * MaxPhysicsSteps);
 		while (Sim->Accumulator >= PhysicsStep)
 		{
 			Sim->World.Step(PhysicsStep);
 			Sim->Time += PhysicsStep;
 			Sim->Accumulator -= PhysicsStep;
 		}
-		Sim->Hour += DeltaSeconds / DayLength * 24.0 * TimeRate;
+		WorldDt = Sim->Time - Before;
+		Sim->Hour += WorldDt / DayLength * 24.0;
 		if (Sim->Hour >= 24.0)
 		{
 			Sim->Hour -= 24.0;
@@ -1366,7 +1398,12 @@ void ATeinoraWorld::Tick(float DeltaSeconds)
 		const Vec3 Here = Eye->GetEye();
 		if (!bPaused)
 		{
-			Sim->WindDrift += Sim::WindAt(Here, Sim->Time, Sim::WorldSeed) * static_cast<double>(DeltaSeconds);
+			const Vec3 Wind = Sim::WindAt(Here, Sim->Time, Sim::WorldSeed);
+			Sim->WindDrift += Wind * WorldDt;
+
+			// The wind aloft carries the clouds along faster, and the harder it blows the sooner they change, as in the standalone game.
+			const Vec3 Aloft = Wind * Sim::CloudWindRatio;
+			Sim->CloudDrift += Vec3{ Aloft.X, Aloft.Y, Sim::CloudChangeStill + Sim::CloudChangePerWind * Teinora::Length(Aloft) } * WorldDt;
 		}
 
 		Sim->World.Update(Here, Sim->Time);

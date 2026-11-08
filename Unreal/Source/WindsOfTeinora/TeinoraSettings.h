@@ -32,11 +32,11 @@ struct FTeinoraWorldSettings
 
 	double WindSpeed = 3.0;   // m/s
 	int32 WindDirection = -1; // eighths of a turn from east, or below zero when it wanders by itself
-	int32 TimeSpeed = 3;      // an index into GetTimeRate
+	int32 TimeSpeed = 5;      // an index into GetTimeRate, where 5 is the usual speed
 	double WaveHeight = 1.0;  // share of the usual
 	double CloudCover = 1.0;  // likewise
 
-	/** How many times faster than usual the day goes by at each setting. Zero stops it. */
+	/** How many times faster than usual the world goes by at each setting, from a fiftieth to fifty times. */
 	static double GetTimeRate(int32 Index);
 
 	/** Hands the wind and the waves to the simulation. */

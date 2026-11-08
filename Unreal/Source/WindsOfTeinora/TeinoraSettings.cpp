@@ -26,7 +26,7 @@ namespace
 
 double FTeinoraWorldSettings::GetTimeRate(int32 Index)
 {
-	static const double Rates[TimeRates] = { 0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 15.0, 30.0, 60.0, 120.0 };
+	static const double Rates[TimeRates] = { 1.0 / 50.0, 1.0 / 20.0, 1.0 / 10.0, 1.0 / 5.0, 1.0 / 2.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0 };
 	return Rates[FMath::Clamp(Index, 0, TimeRates - 1)];
 }
 
@@ -78,7 +78,7 @@ void FTeinoraSettings::Load()
 	GConfig->GetBool(Section, TEXT("InvertMouse"), bInvertMouse, GGameUserSettingsIni);
 	ReadDouble(TEXT("WindSpeed"), World.WindSpeed, 0.0, FTeinoraWorldSettings::MaxWindSpeed);
 	ReadInt(TEXT("WindDirection"), World.WindDirection, -1, FTeinoraWorldSettings::WindDirections - 1);
-	ReadInt(TEXT("TimeSpeed"), World.TimeSpeed, 0, FTeinoraWorldSettings::TimeRates - 1);
+	ReadInt(TEXT("TimeStep"), World.TimeSpeed, 0, FTeinoraWorldSettings::TimeRates - 1); // not TimeSpeed, which counted along another scale
 	ReadDouble(TEXT("WaveHeight"), World.WaveHeight, 0.0, FTeinoraWorldSettings::MaxWaveHeight);
 	ReadDouble(TEXT("CloudCover"), World.CloudCover, 0.0, FTeinoraWorldSettings::MaxCloudCover);
 	for (int32 Action = 0; Action < static_cast<int32>(ETeinoraAction::Count); ++Action)
@@ -105,7 +105,7 @@ void FTeinoraSettings::Save() const
 	GConfig->SetBool(Section, TEXT("InvertMouse"), bInvertMouse, GGameUserSettingsIni);
 	GConfig->SetDouble(Section, TEXT("WindSpeed"), World.WindSpeed, GGameUserSettingsIni);
 	GConfig->SetInt(Section, TEXT("WindDirection"), World.WindDirection, GGameUserSettingsIni);
-	GConfig->SetInt(Section, TEXT("TimeSpeed"), World.TimeSpeed, GGameUserSettingsIni);
+	GConfig->SetInt(Section, TEXT("TimeStep"), World.TimeSpeed, GGameUserSettingsIni);
 	GConfig->SetDouble(Section, TEXT("WaveHeight"), World.WaveHeight, GGameUserSettingsIni);
 	GConfig->SetDouble(Section, TEXT("CloudCover"), World.CloudCover, GGameUserSettingsIni);
 	for (int32 Action = 0; Action < static_cast<int32>(ETeinoraAction::Count); ++Action)
