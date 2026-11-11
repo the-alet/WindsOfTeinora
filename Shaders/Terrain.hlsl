@@ -81,11 +81,15 @@ float4 PSMain(Varyings Input) : SV_Target
 	Pixel.Card = 0.0;
 
 #ifdef FOLIAGE
-	const float Layer = Input.Material > 0.095 ? NeedleLayer : LeafLayer;
+	const float Layer = GetCardLayer(Input.Material);
 	Pixel.Card = SurfaceColors.CalculateLevelOfDetail(LinearWrap, Input.Albedo.rg) - 0.5;
 
 	// Sampled finer than the pixel asks for, or at a distance a card's holes average away and it turns solid.
-	clip(SurfaceColors.SampleLevel(LinearWrap, float3(Input.Albedo.rg, Layer), max(Pixel.Card - 1.5, 0.0)).a - 0.42);
+	// Reeds come along with the grass, and are whole.
+	if (Input.Material > 0.03)
+	{
+		clip(SurfaceColors.SampleLevel(LinearWrap, float3(Input.Albedo.rg, Layer), max(Pixel.Card - 1.5, 0.0)).a - 0.42);
+	}
 
 	// What faces away from the eye shows its other side.
 	if (dot(Normal, Input.Relative) > 0.0)
@@ -112,7 +116,7 @@ float4 PSMain(Varyings Input) : SV_Target
 /** A leaf card casting a shadow into the cascades: only where it has leaves. */
 void ShadowMain(Varyings Input)
 {
-	const float Layer = Input.Material > 0.095 ? NeedleLayer : LeafLayer;
+	const float Layer = GetCardLayer(Input.Material);
 	const float Level = SurfaceColors.CalculateLevelOfDetail(LinearWrap, Input.Albedo.rg);
 	clip(SurfaceColors.SampleLevel(LinearWrap, float3(Input.Albedo.rg, Layer), Level).a - 0.42);
 }

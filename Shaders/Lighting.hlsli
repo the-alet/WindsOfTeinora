@@ -46,13 +46,23 @@ float GetSunShadow(float3 Relative, float3 Normal, float ViewDepth, float Lift, 
 #ifdef RAY_TRACED
 #ifdef FOLIAGE
 	// A card must not shade itself, whichever way it happens to lie against the light.
-	return TraceLight(Relative + Sun * (0.5 + Lift + ViewDepth * 0.0006), Sun, RayReach) * GetCloudShade(Relative, Sun);
+	return TraceLight(Relative + Sun * (0.5 + Lift + ViewDepth * 0.0006), Sun, RayReach);
 #else
-	return TraceLight(Relative + Normal * (0.03 + Lift + ViewDepth * 0.0006), Sun, RayReach) * GetCloudShade(Relative, Sun);
+	return TraceLight(Relative + Normal * (0.03 + Lift + ViewDepth * 0.0006), Sun, RayReach);
 #endif
 #else
-	return (Which == Detail.y ? SampleShadow(Relative, Normal, ViewDepth) : 1.0) * GetCloudShade(Relative, Sun);
+	return Which == Detail.y ? SampleShadow(Relative, Normal, ViewDepth) : 1.0;
 #endif
+}
+
+// Of a sun's light that cloud keeps from coming straight down, the share that still reaches the ground,
+// scattered: an overcast day is a quarter or so as bright as a clear one, and has no shadows.
+static const float CloudPassing = 0.25;
+
+/** A colour with some of its hue taken out, as light is that has been scattered about in cloud. */
+float3 Greyed(float3 Color, float Amount)
+{
+	return lerp(Color, dot(Color, float3(0.2126, 0.7152, 0.0722)).xxx, Amount);
 }
 
 /** How much of the sky a point can see, which is what darkens the ground under trees and beside rocks. */
@@ -112,26 +122,36 @@ float3 ShadeSurface(float3 Albedo, float3 Normal, float3 Relative, float ViewDep
 	float3 Light = PlanetColor.rgb * (saturate(dot(Normal, PlanetDirection.xyz)) * 0.25 + (Normal.z * 0.5 + 0.5) * 0.35);
 	float3 Highlight = float3(0.0, 0.0, 0.0);
 
+	// What cloud lets straight through of each sun, and what it scatters on down instead, greyer and from all over the sky.
+	const bool bFirstUp = dot(SunColor.rgb, SunColor.rgb) > 1e-4;
+	const bool bSecondUp = dot(Sun2Color.rgb, Sun2Color.rgb) > 1e-4;
+	const float Through = bFirstUp ? GetCloudShade(Relative, SunDirection.xyz) : 1.0;
+	const float Through2 = bSecondUp ? GetCloudShade(Relative, Sun2Direction.xyz) : 1.0;
+	const float3 Diffused = Greyed(SunColor.rgb * (max(SunDirection.z, 0.0) * (1.0 - Through)) + Sun2Color.rgb * (max(Sun2Direction.z, 0.0) * (1.0 - Through2)), 0.6) * CloudPassing;
+
 	// A soft highlight is what makes surface detail catch the light.
 	const float SunLight = saturate(dot(Normal, SunDirection.xyz));
-	if (SunLight > 0.0 && dot(SunColor.rgb, SunColor.rgb) > 1e-4)
+	if (SunLight > 0.0 && bFirstUp)
 	{
-		const float3 Arriving = SunColor.rgb * SunLight * GetSunShadow(Relative, Normal, ViewDepth, Lift, SunDirection.xyz, 0.0);
+		const float3 Arriving = SunColor.rgb * SunLight * Through * GetSunShadow(Relative, Normal, ViewDepth, Lift, SunDirection.xyz, 0.0);
 		Light += Arriving;
 		Highlight += Arriving * pow(saturate(dot(Normal, normalize(SunDirection.xyz + View))), 24.0) * Gloss;
 	}
 
 	const float Sun2Light = saturate(dot(Normal, Sun2Direction.xyz));
-	if (Sun2Light > 0.0 && dot(Sun2Color.rgb, Sun2Color.rgb) > 1e-4)
+	if (Sun2Light > 0.0 && bSecondUp)
 	{
-		const float3 Arriving = Sun2Color.rgb * Sun2Light * GetSunShadow(Relative, Normal, ViewDepth, Lift, Sun2Direction.xyz, 1.0);
+		const float3 Arriving = Sun2Color.rgb * Sun2Light * Through2 * GetSunShadow(Relative, Normal, ViewDepth, Lift, Sun2Direction.xyz, 1.0);
 		Light += Arriving;
 		Highlight += Arriving * pow(saturate(dot(Normal, normalize(Sun2Direction.xyz + View))), 24.0) * Gloss;
 	}
 
-	// Sky from above, warm bounce from the lit ground below.
-	const float3 Bounce = SkyHorizon.rgb * 0.12 + (SunColor.rgb + Sun2Color.rgb) * 0.05;
-	Light += lerp(Bounce, SkyZenith.rgb * 0.6 + SkyHorizon.rgb * 0.22, Normal.z * 0.5 + 0.5) * GetOpenness(Relative, Normal, ViewDepth, Lift);
+	// Sky from above, warm bounce from the lit ground below. Under an overcast sky the light from above is the
+	// cloud's, grey, and the ground gives back less for having less direct light on it.
+	const float Overcast = Shade.x;
+	const float3 Sky = Greyed(SkyZenith.rgb * 0.6 + SkyHorizon.rgb * 0.22, 0.7 * Overcast) * (1.0 - 0.35 * Overcast) + Diffused;
+	const float3 Bounce = SkyHorizon.rgb * 0.12 * (1.0 - 0.5 * Overcast) + (SunColor.rgb * Through + Sun2Color.rgb * Through2) * 0.05 + Diffused * 0.3;
+	Light += lerp(Bounce, Sky, Normal.z * 0.5 + 0.5) * GetOpenness(Relative, Normal, ViewDepth, Lift);
 	Light += GetFirelight(Normal, Relative);
 
 	return ApplyFog(Albedo * Light + Highlight + Glow, Relative);

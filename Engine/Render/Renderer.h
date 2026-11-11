@@ -54,6 +54,13 @@ namespace Teinora
 		double Angle = 0.0;
 	};
 
+	/** The map of clouds the renderer takes: cells to a side, the same as StormField::Side, and what its values go up to. Also in Shaders/Clouds.hlsli. */
+	inline constexpr int CloudMapSide = 48;
+	inline constexpr float CloudMapTop = 1.3f;
+
+	/** How many things' held magic the magic view shows. Also in Shaders/Common.hlsli. */
+	inline constexpr std::size_t MaxMagicGlows = 8;
+
 	struct SceneView
 	{
 		Vec3 CameraPosition;
@@ -82,11 +89,17 @@ namespace Teinora
 		double Rain = 0.0;         // how hard it rains, from 0 to 1
 		double Storm = 0.0;        // how stormy the weather is, from 0 to 1
 		double RainSlant = 0.0;    // how far the wind blows the rain across the view, as the wind across it over the rain's fall
+		double Overcast = 0.0;     // how closed the sky around the camera is with cloud, from 0 to 1: it greys the light and the haze
+		const std::vector<float>* CloudMap = nullptr; // how much cloud there is over each cell, CloudMapSide by CloudMapSide, X fastest; none for the usual cover everywhere
+		double CloudMapCornerX = 0.0; // where the map's first cell's low corner is in the world
+		double CloudMapCornerY = 0.0;
+		double CloudMapCell = 0.0;    // metres across each cell
 		double LiquidCornerX = 0.0; // the patch of moving water, see SetLiquid
 		double LiquidCornerY = 0.0;
 		double LiquidSpan = 0.0;
 		float MagicView = 0.0f;   // from 0, plain sight, to 1: the world dimmed and magic showing as haze
 		bool bMagicBends = false; // some magic nearby is dense enough to bend light
+		const std::vector<MagicGlow>* MagicGlows = nullptr; // magic held inside things, which the magic view sees through them, nearest first
 	};
 
 	class Renderer

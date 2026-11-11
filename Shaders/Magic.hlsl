@@ -115,9 +115,11 @@ float3 GetRay(Varyings Input, out float Distance)
 
 float4 PSMain(Varyings Input) : SV_Target
 {
+	// Magic glows through whatever is in the way, and so does what is inside it: the view looks right through
+	// to the edge of its sight.
 	float Distance;
 	const float3 Direction = GetRay(Input, Distance);
-	Distance = min(Distance, SightRadius);
+	Distance = SightRadius;
 
 	float Near = FirstStep;
 	float Clear = 1.0;           // how much of what lies behind still gets through
@@ -151,6 +153,20 @@ float4 PSMain(Varyings Input) : SV_Target
 			Clear *= 1.0 - Taken;
 		}
 		Near = Far;
+	}
+
+	// The magic held inside things glows through them as well, as balls of their aspect's colour, brightest
+	// where the ray goes through most of one.
+	for (int Index = 0; Index < 8; ++Index)
+	{
+		const float Radius = GlowPoints[Index].w;
+		const float Along = dot(GlowPoints[Index].xyz, Direction);
+		const float Off = dot(GlowPoints[Index].xyz, GlowPoints[Index].xyz) - Along * Along;
+		if (Radius > 0.0 && Along > 0.0 && Along < SightRadius && Off < Radius * Radius)
+		{
+			const float Through = sqrt(1.0 - Off / (Radius * Radius));
+			Glow += GlowColors[Index].rgb * (Through * Through) * 2.5;
+		}
 	}
 
 	return float4(Glow, 1.0 - Clear);

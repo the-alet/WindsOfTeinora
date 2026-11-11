@@ -12,6 +12,7 @@ namespace Teinora
 	inline constexpr int BarkLayer = 4;
 	inline constexpr int LeafLayer = 5;
 	inline constexpr int NeedleLayer = 6;
+	inline constexpr int GrassBladeLayer = 7; // a clump of blades for the grass cards
 
 	struct SurfaceTextures
 	{

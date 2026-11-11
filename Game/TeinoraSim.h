@@ -140,6 +140,13 @@ namespace Teinora::Sim
 	/** Air velocity without eddies: a drifting prevailing wind plus travelling gust fronts. */
 	Vec3 WindAt(const Vec3& Position, double Time, std::uint32_t Seed);
 
+	/**
+	 * The wind without its gusts: the prevailing wind, turned this way and that by great slow eddies some
+	 * kilometres across, and running together along lines between them. It blows differently from place to
+	 * place, so that what it carries, clouds above all, runs into each other.
+	 */
+	Vec3 LargeWindAt(double X, double Y, double Time, std::uint32_t Seed);
+
 	/** How air moves at a point. */
 	struct AirFlow
 	{
@@ -233,6 +240,10 @@ namespace Teinora::Sim
 	//     way, slows, and stirs it into eddies as it does, and comes to rest where it has slowed or on
 	//     the ground. Nature magic is the exception: it takes the drop up and grows by it. It takes up
 	//     water magic too, more slowly and growing by less. These are the only ways one aspect becomes another.
+	// 16. Air magic that moves takes the air with it: where there is much of it, its stream is a wind. Fire
+	//     magic rises a little of itself, enough to draw air magic in after it, so a fire sets up streams of it.
+	// 17. Everything holds magic of its own aspect inside itself, kept up by the magic around it. Where there
+	//     is none to keep it up, or fierce fire burns it out, it runs out, and the thing falls apart.
 
 	inline constexpr bool bMagicEnabled = true;
 
@@ -271,11 +282,30 @@ namespace Teinora::Sim
 		double Storm = 0.0;
 	};
 
+	/** The density of water magic in kg/m3, up where the clouds are, at which it makes a cloud to be seen. */
+	inline constexpr double MagicCloudWater = 10.0;
+
+	/** And where it rains, and where, piled up by clouds running into each other, the cloud is a thunderstorm. */
+	inline constexpr double MagicRainWater = 30.0;
+	inline constexpr double MagicStormWater = 50.0;
+
+	/** Metres of full cloud that water magic this dense up there makes. */
+	double CloudDepthFor(double WaterMagic);
+
 	/**
-	 * The weather under cloud so many metres deep, holding this much lightning in kg/m3. Thin cloud gives none.
-	 * Deep cloud rains, and a storm, deep cloud full of lightning, pours. See CloudDepth in Storms.h.
+	 * How much of the sky the clouds are drawn over, where the water magic up there makes Gathered of a storm's
+	 * depth of cloud, as the Cloud Cover setting would say it: 1 for the usual. Shaders/Clouds.hlsli's GetCover.
 	 */
-	Weather GetWeather(double CloudDepth, double Lightning);
+	double ShownCloudCover(double Gathered);
+
+	/**
+	 * The weather under a cloud holding this much water magic and lightning, each in kg/m3: none under one that
+	 * holds less than MagicRainWater, rain over it, and a storm, which pours, over MagicStormWater.
+	 */
+	Weather GetWeather(double WaterMagic, double Lightning);
+
+	/** kg of water magic a second that rain as hard as it gets brings down onto each m2 of ground. */
+	inline constexpr double RainCarries = 2.4;
 
 	/** Seconds of the world's time for the weather to change most of the way to what the clouds overhead say. */
 	inline constexpr double WeatherChangeTime = 12.0;
@@ -481,6 +511,22 @@ namespace Teinora::Sim
 	 * less of it: the rest of that goes back to neutral. The more nature magic there is, the faster it feeds.
 	 */
 	void UpdateNatureFeeding(MagicMix& Mix, double Dt);
+
+	/** kg/m3 of magic that a thing holds inside itself, of its own aspect, while there is magic around it to keep it up. Rule 17. */
+	inline constexpr double MatterHolds = 3.0;
+
+	/**
+	 * Rule 17: everything holds magic inside itself, and without it falls apart. What it holds tends to what
+	 * the magic around it, Around in kg/m3 of all kinds, can keep up: all of MatterHolds wherever there is
+	 * magic, and less where there is next to none. Fierce fire burns it out. Returns what it holds after Dt.
+	 */
+	double UpdateHeldMagic(double Held, double Around, double FireAround, double Dt);
+
+	/** Whether something holding this much magic still holds together. */
+	inline bool HoldsTogether(double Held) { return Held > MatterHolds * 0.05; }
+
+	/** The wind that air magic streaming at Flow stirs up in the air it is in, rule 16. */
+	Vec3 MagicStirredWind(double AirMagic, const Vec3& Flow);
 
 	/** The stream of aspected magic against a body, as air would push on it. Relative is the magic's speed past it. */
 	Vec3 MagicDrag(const MagicMix& Mix, const Vec3& Relative, double DragCoefficient, double FrontalArea);

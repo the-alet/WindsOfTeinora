@@ -246,8 +246,10 @@ float4 PSMain(Varyings Input) : SV_Target
 	const float Sparkle = pow(saturate(dot(Normal, normalize(View + SunDirection.xyz))), 420.0) * 1.4;
 	const float Sparkle2 = pow(saturate(dot(Normal, normalize(View + Sun2Direction.xyz))), 420.0) * 1.4;
 
-	// Firelight on the water itself is faint: it shows mostly as the flames' own reflection.
-	float3 Color = lerp(Through, Reflected, Fresnel) + SunColor.rgb * Sparkle + Sun2Color.rgb * Sparkle2 + GetFirelight(Normal, Input.Relative) * 0.03;
+	// Firelight on the water itself is faint: it shows mostly as the flames' own reflection. The magic view
+	// sees no reflections at all, only the water.
+	const float Mirrored = 1.0 - Weather.w;
+	float3 Color = lerp(Through, Reflected, Fresnel * Mirrored) + (SunColor.rgb * Sparkle + Sun2Color.rgb * Sparkle2) * Mirrored + GetFirelight(Normal, Input.Relative) * 0.03;
 
 	// Foam where waves run up the shore and where the water has been thrown about.
 	const float Lapping = smoothstep(0.7, 0.0, Thickness) * (0.55 + 0.45 * sin(Thickness * 9.0 - CameraPosition.w * 1.3)) * WaveShare;

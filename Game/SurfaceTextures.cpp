@@ -11,7 +11,7 @@ namespace Teinora
 {
 	namespace
 	{
-		constexpr int LayerCount = NeedleLayer + 1;
+		constexpr int LayerCount = GrassBladeLayer + 1;
 		constexpr std::uint32_t Seed = 0x51C7A9E3u;
 
 		struct Rgb
@@ -286,6 +286,49 @@ namespace Teinora
 			return Field;
 		}
 
+		/**
+		 * A clump of grass for a card standing on the ground: blades rising from its foot at V 0, each a long
+		 * narrow taper that bends over to one side, darker low down, where the clump shades itself, and
+		 * lighter and yellower to the tip.
+		 */
+		std::vector<CutTexel> DrawGrassBlades(int Size)
+		{
+			std::vector<CutTexel> Field(static_cast<std::size_t>(Size) * Size);
+			std::minstd_rand Random(Seed + 11u);
+			const auto Next = [&Random] { return (Random() - 1.0) / 2147483645.0; };
+
+			constexpr int Blades = 60;
+			for (int Blade = 0; Blade < Blades; ++Blade)
+			{
+				const double Root = (0.08 + 0.84 * Next()) * Size;
+				const double Tall = (0.45 + 0.53 * Next()) * Size;
+				const double Lean = (Next() - 0.5) * 0.5 * Size;
+				const double Wide = Size * (0.009 + 0.008 * Next());
+				const double Tone = Next();
+				const Rgb Low = Lerp(Rgb{ 0.02, 0.05, 0.012 }, Rgb{ 0.035, 0.075, 0.018 }, Tone);
+				const Rgb High = Lerp(Rgb{ 0.09, 0.2, 0.035 }, Rgb{ 0.2, 0.26, 0.07 }, Tone);
+
+				const int Steps = static_cast<int>(Tall);
+				for (int Step = 0; Step <= Steps; ++Step)
+				{
+					const double Along = static_cast<double>(Step) / Steps;
+					const double Middle = Root + Lean * Along * Along;
+					const double Half = Wide * (1.0 - Along) + 0.6;
+					const Rgb Color = Lerp(Low, High, std::pow(Along, 0.7));
+					for (int X = static_cast<int>(Middle - Half); X <= static_cast<int>(Middle + Half) + 1; ++X)
+					{
+						const double Across = (X - Middle) / Half;
+						if (std::abs(Across) < 1.0)
+						{
+							const double Fold = 1.0 - std::abs(Across) * 0.35; // a crease down the middle catches the light
+							Plot(Field, Size, X, static_cast<int>(Along * Tall), 0.25 + 0.7 * (1.0 - Across * Across) + 0.05 * Tone, Scale(Color, Fold));
+						}
+					}
+				}
+			}
+			return Field;
+		}
+
 		/** A bough seen from above: a stem along U, with twigs either side of it, all thick with needles. */
 		std::vector<CutTexel> DrawNeedles(int Size)
 		{
@@ -346,6 +389,7 @@ namespace Teinora
 			case BarkLayer:                              return 9.0;
 			case LeafLayer:                              return 2.5;
 			case NeedleLayer:                            return 2.5;
+			case GrassBladeLayer:                        return 2.5;
 			default:                                     return 2.0;
 			}
 		}
@@ -418,7 +462,7 @@ namespace Teinora
 			OutNormal.resize(Count * 4);
 
 			const std::vector<BladeTexel> Blades = Layer == static_cast<int>(Sim::ESurface::Grass) ? DrawBlades(Size) : std::vector<BladeTexel>();
-			const std::vector<CutTexel> Cuts = Layer == LeafLayer ? DrawLeaves(Size) : (Layer == NeedleLayer ? DrawNeedles(Size) : std::vector<CutTexel>());
+			const std::vector<CutTexel> Cuts = Layer == LeafLayer ? DrawLeaves(Size) : Layer == NeedleLayer ? DrawNeedles(Size) : Layer == GrassBladeLayer ? DrawGrassBlades(Size) : std::vector<CutTexel>();
 
 			// What a cut-out card shows at its holes bleeds into the edges of leaves once it is
 			// filtered, so the holes take on the leaves' own colour.

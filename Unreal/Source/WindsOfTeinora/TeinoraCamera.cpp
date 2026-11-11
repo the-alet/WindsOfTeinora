@@ -212,11 +212,21 @@ void ATeinoraCamera::SetUnderwater(double Depth, const FLinearColor& Light)
 }
 
 void ATeinoraCamera::ShowMagic(float ViewAmount, bool bBends, UTexture2D* NearAtlas, UTexture2D* FarAtlas, const Vec3& NearCorner, const Vec3& NearSize,
-	const Vec3& FarCorner, const Vec3& FarSize, double Time)
+	const Vec3& FarCorner, const Vec3& FarSize, double Time, const std::vector<Teinora::MagicGlow>& Glows)
 {
 	if (MagicMaterial == nullptr)
 	{
 		return;
+	}
+
+	// The magic held inside things, relative to the eye, which the magic view sees glow through them.
+	for (int32 Index = 0; Index < 8; ++Index)
+	{
+		const bool bThere = Index < static_cast<int32>(Glows.size());
+		const Teinora::MagicGlow Glow = bThere ? Glows[Index] : Teinora::MagicGlow{};
+		const Vec3 Point = Glow.Point - Eye;
+		MagicMaterial->SetVectorParameterValue(*FString::Printf(TEXT("GlowPoint%d"), Index), FLinearColor(static_cast<float>(Point.X), static_cast<float>(Point.Y), static_cast<float>(Point.Z), static_cast<float>(Glow.Radius)));
+		MagicMaterial->SetVectorParameterValue(*FString::Printf(TEXT("GlowColor%d"), Index), FLinearColor(static_cast<float>(Glow.Color.X), static_cast<float>(Glow.Color.Y), static_cast<float>(Glow.Color.Z)));
 	}
 
 	const auto ToColor = [](const Vec3& Value)

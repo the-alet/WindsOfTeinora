@@ -115,7 +115,10 @@ if (Kind >= 0.375)
         Result += lerp(Texture2DSample(GrassColor, GrassColorSampler, Close).rgb, Texture2DSampleLevel(GrassColor, GrassColorSampler, Large, 5.0).rgb, 0.3) * Grass;
         Result += lerp(Texture2DSample(SandColor, SandColorSampler, Close).rgb, Texture2DSampleLevel(SandColor, SandColorSampler, Large, 5.0).rgb, 0.3) * Sand;
         Result += lerp(Texture2DSample(SnowColor, SnowColorSampler, Close).rgb, Texture2DSampleLevel(SnowColor, SnowColorSampler, Large, 5.0).rgb, 0.3) * Snow;
-        Result *= lerp(float3(1.0, 1.0, 1.0), lerp(float3(1.16, 1.0, 0.8), float3(0.82, 1.0, 1.1), Tint.g), Grass);
+        // Near the eye the grass cards give the green, and the soil shows between them, as in Shaders/Surfaces.hlsli.
+        float Wide = smoothstep(25.0, 180.0, GetPixelDepth(Parameters) * 0.01);
+        float3 Soil = lerp(float3(0.66, 0.5, 0.34), float3(1.0, 1.0, 1.0), Wide);
+        Result *= lerp(float3(1.0, 1.0, 1.0), lerp(float3(1.16, 1.0, 0.8), float3(0.82, 1.0, 1.1), Tint.g) * Soil, Grass);
         Result *= (0.8 + 0.4 * Broad) * Tint.r * 2.0;
         Result *= lerp(1.0, 0.6, 1.0 - smoothstep(0.1, 0.9, Above + Waver * 0.5)); // ground the water has been at stays dark
     }
@@ -346,16 +349,19 @@ float Body = smoothstep(0.0, 0.3, Round * 1.4 - (1.0 - Billows) * (0.75 + 0.45 *
 '''
 
 # The standalone game's ShadeCard in Shaders/Surfaces.hlsli. The cards' own coordinates come in UV0,
-# and UV1 says whether a card is needles rather than leaves and how light it is.
+# and UV1 says whether a card is leaves, grass blades or needles, at 0, 0.5 and 1, and how light it is.
 LEAF_COLOR = '''
-float4 Texel = Which.x > 0.5 ? Texture2DSample(NeedleColor, NeedleColorSampler, Place) : Texture2DSample(LeafColor, LeafColorSampler, Place);
+float4 Texel = Which.x > 0.75 ? Texture2DSample(NeedleColor, NeedleColorSampler, Place)
+    : (Which.x > 0.25 ? Texture2DSample(GrassBladeColor, GrassBladeColorSampler, Place) : Texture2DSample(LeafColor, LeafColorSampler, Place));
 float3 Tone = lerp(float3(0.72, 0.72, 0.74), float3(1.3, 1.12, 0.74), Which.y);
-return lerp(Texel.rgb, dot(Texel.rgb, float3(0.3, 0.6, 0.1)).xxx, 0.22) * Tone * 1.5;
+float Shown = Which.x > 0.25 && Which.x < 0.75 ? 1.0 : 1.5; // grass stands in the full sun, where the engine's foliage light makes it paler
+return lerp(Texel.rgb, dot(Texel.rgb, float3(0.3, 0.6, 0.1)).xxx, 0.22) * Tone * Shown;
 '''
 
 # Sampled finer than the pixel asks for, or at a distance a card's holes average away and it turns solid.
 LEAF_MASK = '''
-return (Which.x > 0.5 ? Texture2DSampleBias(NeedleColor, NeedleColorSampler, Place, -2.0) : Texture2DSampleBias(LeafColor, LeafColorSampler, Place, -2.0)).a;
+return (Which.x > 0.75 ? Texture2DSampleBias(NeedleColor, NeedleColorSampler, Place, -2.0)
+    : (Which.x > 0.25 ? Texture2DSampleBias(GrassBladeColor, GrassBladeColorSampler, Place, -2.0) : Texture2DSampleBias(LeafColor, LeafColorSampler, Place, -2.0))).a;
 '''
 
 
@@ -585,7 +591,7 @@ def make_leaf():
     material.set_editor_property('opacity_mask_clip_value', 0.42)
     material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_TWO_SIDED_FOLIAGE) # sunlight comes through them
 
-    names = ('Place', 'Which', 'LeafColor', 'NeedleColor')
+    names = ('Place', 'Which', 'LeafColor', 'NeedleColor', 'GrassBladeColor')
     color = custom_node(material, LEAF_COLOR, names, -300, 0)
     mask = custom_node(material, LEAF_MASK, names, -300, 300)
     mask.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT1)
@@ -595,11 +601,13 @@ def make_leaf():
     which.set_editor_property('coordinate_index', 1)
     leaf = texture_parameter(material, 'LeafColor', -800, 200)
     needle = texture_parameter(material, 'NeedleColor', -800, 320)
+    blades = texture_parameter(material, 'GrassBladeColor', -800, 440)
     for node in (color, mask):
         link(place, '', node, 'Place')
         link(which, '', node, 'Which')
         link(leaf, '', node, 'LeafColor')
         link(needle, '', node, 'NeedleColor')
+        link(blades, '', node, 'GrassBladeColor')
 
     # A leaf lets through part of what it reflects. It shows against a sun, but not against the planet's faint light.
     through = custom_node(material, 'return Leaf * LeafThrough;', ('Leaf', 'LeafThrough'), -300, 150)
@@ -699,7 +707,8 @@ return Seen;
 '''
 
 WATER_OPACITY = WATER_READ + '''
-float Fresnel = 0.02 + 0.98 * pow(1.0 - saturate(dot(Normal, Parameters.CameraVector)), 5.0);
+// The magic view sees no reflections, only the water: the mirror fades out of it.
+float Fresnel = (0.02 + 0.98 * pow(1.0 - saturate(dot(Normal, Parameters.CameraVector)), 5.0)) * (1.0 - MagicView);
 return saturate(max(lerp(Fresnel, 1.0, Foam * 0.6), Beyond));
 '''
 
@@ -741,7 +750,7 @@ def make_water():
 
     read = ('World', 'EyeAt', 'LiquidArea', 'BedReach', 'LiquidMap')
     normal = custom_node(material, WATER_NORMAL, read + ('Swell', 'Drift', 'WaveShare', 'SnowNormal'), -800, 0)
-    opacity = custom_node(material, WATER_OPACITY, read + ('Normal',), -300, 300)
+    opacity = custom_node(material, WATER_OPACITY, read + ('Normal', 'MagicView'), -300, 300)
     color = custom_node(material, WATER_COLOR, read + ('WaveShare',), -300, 0)
     metal = custom_node(material, WATER_METAL, read, -300, 600)
     roughness = custom_node(material, WATER_ROUGHNESS, read, -300, 900)
@@ -761,6 +770,7 @@ def make_water():
     link(share, '', color, 'WaveShare')
     link(texture_parameter(material, 'SnowNormal', -1400, 800), '', normal, 'SnowNormal')
     link(normal, '', opacity, 'Normal')
+    link(scalar_parameter(material, 'MagicView', 0.0, -800, 400), '', opacity, 'MagicView')
 
     glow = custom_node(material, WATER_GLOW, ('SkyGlow',), -300, 1500)
     link(vector_parameter(material, 'SkyGlow', -800, 1500), '', glow, 'SkyGlow')
@@ -911,32 +921,49 @@ struct Drops
     }
 };
 Drops Library;
-float3 Lit = float3(0.62, 0.68, 0.78) * 1.4;
-float2 Size = Parameters.ViewSizeAndInvSize.xy;
+
+// As GetRain in Shaders/Tonemap.hlsl: sheets of drops at a few distances, each measured in metres where it is.
+float2 Size = View.ViewSizeAndInvSize.xy;
 float Aspect = Size.x / Size.y;
+float Behind = SceneTextureLookup(ViewportUVToSceneTextureUV(Uv, 1), 1, false).r * 0.01; // metres to what is seen
 Color = lerp(Color, dot(Color, float3(0.333, 0.333, 0.333)).xxx, 0.25 * Rain) * (1.0 - 0.2 * Rain);
-for (int Layer = 0; Layer < 5; ++Layer)
+float Cover = 0.0;
+for (int Layer = 0; Layer < 8; ++Layer)
 {
-    float Distance = 1.3 + float(Layer) * 5.7;
-    float Across = 1.2 * Distance;
-    float Columns = clamp(Across / 0.09, 24.0, 420.0);
-    float Rows = Columns * 0.35;
-    float Falling = 9.0 / Across * Aspect;
-    float2 Place = float2(Uv.x * Aspect, Uv.y);
-    Place.x += Place.y * Slant;
-    float Column = floor(Place.x * Columns / Aspect);
-    uint Own = Library.Hash(int3(int(Column), Layer, 7));
-    float Down = Place.y * Rows - RainTime * Falling * Rows + float(Own & 1023u) / 1023.0 * 17.0;
+    float Distance = 0.9 * pow(1.5, float(Layer));
+    float InFront = saturate((Behind - Distance) / (0.25 * Distance));
+    float Tall = 1.2256 * Distance; // 2 tan(31.5°), Gaze::VerticalFov
+    float Pixel = Tall / Size.y;
+    float2 Place = float2((Uv.x - 0.5) * Aspect, Uv.y - 0.5) * Tall;
+    Place.x -= Place.y * Slant;
+    Place.y -= RainTime * 9.0;
+    float Column = floor(Place.x / 0.07);
+    uint Shift = Library.Hash(int3(int(Column), Layer, 7));
+    float Down = Place.y / 1.1 + float(Shift & 65535u) / 65535.0 * 7.0;
     uint Drop = Library.Hash(int3(int(Column), int(floor(Down)), Layer));
-    if (float(Drop & 65535u) / 65535.0 > Rain * 0.55)
+    if (InFront <= 0.0 || float(Drop & 65535u) / 65535.0 > Rain * (0.7 - 0.05 * float(Layer)))
     {
         continue;
     }
-    float Where = 0.2 + 0.6 * float((Drop >> 16) & 255u) / 255.0;
-    float Side = abs(frac(Place.x * Columns / Aspect) - Where);
-    float Along = frac(Down);
-    float Streak = (1.0 - smoothstep(0.03, 0.09, Side)) * (Along < 0.55 ? 1.0 - Along / 0.55 : 0.0);
-    Color = lerp(Color, Lit, Streak * (0.45 - 0.06 * float(Layer)));
+    uint Look = Library.Hash(int3(int(Drop), Layer, 11));
+    float Length = 9.0 * 0.025 * (0.8 + 0.5 * float(Look & 65535u) / 65535.0);
+    float Middle = (0.2 + 0.6 * float((Look >> 16) & 65535u) / 65535.0) * 0.07;
+    float Top = float((Drop >> 16) & 65535u) / 65535.0 * (1.1 - Length);
+    float Along = (frac(Down) * 1.1 - Top) / Length;
+    if (Along < 0.0 || Along > 1.0)
+    {
+        continue;
+    }
+    float Width = max(0.0025 + 0.0025 * 2.5 / Distance, Pixel * 1.3);
+    float Across = (frac(Place.x / 0.07) * 0.07 - Middle) / Width;
+    float Streak = exp(-Across * Across * 4.0) * smoothstep(0.0, 0.5, Along) * smoothstep(0.0, 0.06, 1.0 - Along) * saturate(0.0025 * 1.6 / Width);
+    Cover = 1.0 - (1.0 - Cover) * (1.0 - Streak * InFront);
+}
+if (Cover > 0.002)
+{
+    // A drop is a little lens: it shows a bent glimpse of what is behind it, lighter, and of the sky over it.
+    float3 Bent = SceneTextureLookup(ViewportUVToSceneTextureUV(Uv + float2(0.0, -0.012), 14), 14, true).rgb;
+    Color = lerp(Color, Bent * 1.3 + 0.03, Cover * 0.55);
 }
 return Color;
 '''
@@ -972,7 +999,9 @@ if (MagicView <= 0.001 && MagicBends <= 0.0)
 
 float3 Direction = normalize(ViewForward.xyz + ViewRight.xyz * (ViewUv.x * 2.0 - 1.0) + ViewUp.xyz * (1.0 - ViewUv.y * 2.0));
 float SceneDistance = SceneTextureLookup(ViewportUVToSceneTextureUV(ViewUv, 1), 1, false).r * 0.01 / max(dot(Direction, ViewForward.xyz), 0.01);
-float Limit = min(SceneDistance, MagicBends > 0.0 ? 3500.0 : 100.0); // the magic view sees 100 m, Sim::MagicSightRadius
+// The magic view sees 100 m, Sim::MagicSightRadius, right through whatever is in the way, and what is inside it.
+// Light that dense magic bends in plain sight, though, is only seen as far as what is in the way.
+float Limit = MagicBends > 0.0 ? 3500.0 : 100.0;
 
 float Near = 1.5;
 float Clear = 1.0;
@@ -1009,9 +1038,24 @@ for (int Index = 0; Index < 44 && Near < Limit; ++Index)
         float Taken = (1.0 - exp(-Density * 0.0035 / (1.0 + Density / 20.0) * Span)) * (1.0 - smoothstep(70.0, 100.0, Near));
         Glow += Sampled.yzw / Density * Clear * Taken;
         Clear *= 1.0 - Taken;
-        Dense += saturate((Density - 30.0) / 13.6) * Span;
+        Dense += Near < SceneDistance ? saturate((Density - 30.0) / 13.6) * Span : 0.0;
     }
     Near = Far;
+}
+
+// The magic held inside things glows through them, as in the standalone game's Magic.hlsl.
+float4 GlowPoints[8] = { GlowPoint0, GlowPoint1, GlowPoint2, GlowPoint3, GlowPoint4, GlowPoint5, GlowPoint6, GlowPoint7 };
+float3 GlowColors[8] = { GlowColor0, GlowColor1, GlowColor2, GlowColor3, GlowColor4, GlowColor5, GlowColor6, GlowColor7 };
+for (int Held = 0; Held < 8; ++Held)
+{
+    float Radius = GlowPoints[Held].w;
+    float Along = dot(GlowPoints[Held].xyz, Direction);
+    float Off = dot(GlowPoints[Held].xyz, GlowPoints[Held].xyz) - Along * Along;
+    if (Radius > 0.0 && Along > 0.0 && Along < 100.0 && Off < Radius * Radius)
+    {
+        float Through = 1.0 - Off / (Radius * Radius);
+        Glow += GlowColors[Held].rgb * Through * 2.5;
+    }
 }
 
 float3 Color = Plain;
@@ -1025,9 +1069,9 @@ if (Shimmer > 0.0)
 }
 
 float3 Linear = pow(max(Color, 0.0), 2.2);
-float Grey = dot(Linear, float3(0.2126, 0.7152, 0.0722));
-float3 Dimmed = lerp(Linear, float3(Grey, Grey, Grey), 0.45) * 0.22;
-Linear = lerp(Linear, Dimmed * Clear + Glow * 0.9, MagicView);
+// The world goes grey and dim, and the magic glows in it by its own light, lighting nothing, as in the standalone game's Tonemap.hlsl.
+float Grey = dot(Linear, float3(0.2126, 0.7152, 0.0722)) * 0.3;
+Linear = lerp(Linear, float3(Grey, Grey, Grey) * (1.0 - 0.5 * (1.0 - Clear)) + Glow * 0.9, MagicView);
 return pow(max(Linear, 0.0), 1.0 / 2.2);
 '''
 
@@ -1274,13 +1318,16 @@ def make_rain():
     material.set_editor_property('material_domain', unreal.MaterialDomain.MD_POST_PROCESS)
     material.set_editor_property('blendable_location', unreal.BlendableLocation.BL_SCENE_COLOR_AFTER_TONEMAPPING)
 
-    # The standalone game's Shaders/Tonemap.hlsl, without its depth: there the rain falls only in front of
-    # whatever is further than it, here it falls over the whole view.
-    names = ('Rain', 'Slant', 'RainTime', 'Scene')
+    # The standalone game's Shaders/Tonemap.hlsl: the rain falls only in front of whatever is further than it.
+    names = ('Rain', 'Slant', 'RainTime', 'Scene', 'Depth')
     node = custom_node(material, RAIN_CODE, names, -300, 0)
     scene = materials.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, -100)
     scene.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
     link(scene, 'Color', node, 'Scene')
+    # Only here so the material asks for the depth: the code reads it by itself.
+    depth = materials.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, 0)
+    depth.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_SCENE_DEPTH)
+    link(depth, 'Color', node, 'Depth')
     link(scalar_parameter(material, 'Rain', 0.0, -700, 100), '', node, 'Rain')
     link(scalar_parameter(material, 'Slant', 0.0, -700, 200), '', node, 'Slant')
     link(scalar_parameter(material, 'RainTime', 0.0, -700, 300), '', node, 'RainTime')
@@ -1294,7 +1341,8 @@ def make_magic():
     material.set_editor_property('blendable_location', unreal.BlendableLocation.BL_SCENE_COLOR_AFTER_TONEMAPPING)
 
     scalars = ('MagicView', 'MagicBends', 'MagicTime')
-    vectors = ('NearCorner', 'NearSize', 'FarCorner', 'FarSize', 'ViewForward', 'ViewRight', 'ViewUp')
+    vectors = ('NearCorner', 'NearSize', 'FarCorner', 'FarSize', 'ViewForward', 'ViewRight', 'ViewUp') \
+        + tuple('GlowPoint%d' % index for index in range(8)) + tuple('GlowColor%d' % index for index in range(8))
     textures = ('NearAtlas', 'FarAtlas')
     node = custom_node(material, MAGIC_CODE, scalars + vectors + textures + ('Scene', 'Depth'), -300, 0)
 
@@ -1303,7 +1351,8 @@ def make_magic():
         link(scalar_parameter(material, name, 0.0, -700, row), '', node, name)
         row += 100
     for name in vectors:
-        link(vector_parameter(material, name, -700, row), '', node, name)
+        # Where held magic is takes its radius along in the fourth number.
+        link(vector_parameter(material, name, -700, row), 'RGBA' if name.startswith('GlowPoint') else '', node, name)
         row += 100
     for name in textures:
         link(texture_parameter(material, name, -700, row), '', node, name)
@@ -1332,5 +1381,4 @@ make_underwater()
 make_focus()
 make_sky()
 make_magic()
-make_rain()
 make_rain()

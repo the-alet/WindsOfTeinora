@@ -35,7 +35,7 @@ bool IsCardSolid(uint Instance, uint Primitive, float2 Barycentrics)
 		Place += UnpackUnsigned(SceneVertices[Buffer].Load((First + Corner) * ChunkStride + 16)).rg * Weights[Corner];
 	}
 	const float Material = UnpackSigned(SceneVertices[Buffer].Load(First * ChunkStride + 12)).w;
-	const float Layer = Material > 0.095 ? NeedleLayer : LeafLayer;
+	const float Layer = GetCardLayer(Material);
 	return SurfaceColors.SampleLevel(LinearWrap, float3(Place, Layer), 3.0).a > 0.42;
 }
 

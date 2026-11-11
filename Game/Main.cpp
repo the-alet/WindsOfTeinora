@@ -477,6 +477,8 @@ int main(int ArgumentCount, char** Arguments)
 	std::vector<MagicPush> MagicPushes;
 	std::vector<MagicDeposit> MagicDeposits;
 	Sim::Weather Weather;
+	std::vector<float> CloudMap;
+	static_assert(StormField::Side == CloudMapSide, "the renderer takes the storms' sheet as it is");
 	World.SetMagic(&NearMagic);
 	bool bMagicView = Magic != nullptr && Launch.bMagicView;
 	float MagicFade = bMagicView ? 1.0f : 0.0f;
@@ -515,6 +517,7 @@ int main(int ArgumentCount, char** Arguments)
 	std::vector<PlantMove> PlantMoves;
 	std::vector<HotLight> HotLights;
 	std::vector<PuffDraw> Puffs;
+	std::vector<MagicGlow> Glows;
 	std::vector<FireContact> FireContacts;
 	std::vector<BoltDraw> Bolts;
 	std::vector<BoltStrike> Strikes;
@@ -668,7 +671,7 @@ int main(int ArgumentCount, char** Arguments)
 
 		if (Storms != nullptr)
 		{
-			Storms->Update(Camera.Position, CloudDrift, Wind, Settings.Render.bClouds ? Settings.World.CloudCover : 0.0, SimTime);
+			Storms->Update(Camera.Position, CloudDrift, Wind, Settings.Render.bClouds ? Settings.World.CloudCover : 0.0, GetSunHeat(Clock.Hour, Clock.Day), SimTime);
 			if (Launch.Strike > 0.0 && SettledFrames == (Launch.StrikeFrame >= 0 ? Launch.StrikeFrame : Launch.Frames - 3))
 			{
 				Storms->ForceStrike(Camera.Position + Camera.GetGaze() * Launch.Strike);
@@ -693,11 +696,12 @@ int main(int ArgumentCount, char** Arguments)
 			Extras.Cloud = Storms->Read(Camera.Position);
 		}
 
-		// The weather follows the cloud overhead: deep cloud rains, and a storm pours and darkens the sky. It
-		// comes and goes over some seconds of the world's time.
+		// The weather follows the water magic in the cloud overhead: over 30 kg/m3 it rains, over 50 a storm pours
+		// and darkens the sky. It comes and goes over some seconds of the world's time, and the rain brings water
+		// magic down into the gas.
 		{
 			const Sim::Weather Wanted = Storms != nullptr && Settings.Render.bClouds
-				? Sim::GetWeather(Extras.Cloud.CloudDepth, Extras.Cloud.Mix.Get(Sim::EMagicType::Lightning))
+				? Sim::GetWeather(Extras.Cloud.Mix.Get(Sim::EMagicType::Water), Extras.Cloud.Mix.Get(Sim::EMagicType::Lightning))
 				: Sim::Weather{};
 			const double Share = std::min(WorldDt / Sim::WeatherChangeTime, 1.0);
 			Weather.Rain += (Wanted.Rain - Weather.Rain) * Share;
@@ -706,6 +710,10 @@ int main(int ArgumentCount, char** Arguments)
 			{
 				Weather.Rain = Launch.Rain;
 				Weather.Storm = Launch.Rain;
+			}
+			if (Magic != nullptr)
+			{
+				Magic->SetRain(Sim::RainCarries * Weather.Rain);
 			}
 		}
 		Extras.Magic = NearMagic.GetMix(Camera.Position);
@@ -817,6 +825,18 @@ int main(int ArgumentCount, char** Arguments)
 		View.CloudCover = Settings.World.CloudCover + Weather.Storm * Sim::StormCloudCover;
 		View.Rain = Weather.Rain;
 		View.Storm = Weather.Storm;
+		if (Storms != nullptr && Settings.Render.bClouds)
+		{
+			// The clouds are drawn where the water magic up there has gathered.
+			Storms->WriteCloudMap(CloudMap, View.CloudMapCornerX, View.CloudMapCornerY);
+			if (Launch.Rain >= 0.0)
+			{
+				// Rain asked for by a run comes out of a sky as overcast as the water magic for it would make.
+				std::fill(CloudMap.begin(), CloudMap.end(), static_cast<float>(0.5 + 0.5 * Launch.Rain));
+			}
+			View.CloudMap = &CloudMap;
+			View.CloudMapCell = StormField::CellSize;
+		}
 		{
 			// The wind across the view slants the rain: across over down, as the drops fall.
 			const Vec3 Right = Normalize(Cross(Camera.GetForward(), Vec3{ 0.0, 0.0, 1.0 }));
@@ -826,6 +846,8 @@ int main(int ArgumentCount, char** Arguments)
 		View.LiquidCornerY = World.GetLiquid().GetCornerY();
 		View.LiquidSpan = World.GetLiquid().GetSpan();
 		View.MagicView = MagicFade;
+		World.CollectHeldMagic(Camera.Position, Glows, MaxMagicGlows);
+		View.MagicGlows = &Glows;
 		View.bMagicBends = NearMagic.PeakDensity > Sim::MagicDewPoint;
 		Output.Render(View);
 

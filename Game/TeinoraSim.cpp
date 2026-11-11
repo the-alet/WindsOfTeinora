@@ -711,8 +711,14 @@ namespace Teinora::Sim
 		return { std::cos(Heading) * Mean, std::sin(Heading) * Mean, 0.0 };
 	}
 
-	Vec3 WindAt(const Vec3& Position, double Time, std::uint32_t Seed)
+	Vec3 LargeWindAt(double X, double Y, double Time, std::uint32_t Seed)
 	{
+		constexpr double SwirlSize = 7000.0;    // metres across the great slow eddies
+		constexpr double MeetingSize = 4500.0;  // and between the lines where the air runs together
+		constexpr double Swirling = 0.75;       // of the mean wind, how hard they blow
+		constexpr double Meeting = 0.45;
+		constexpr double Changing = 2400.0;     // seconds for their pattern to change
+
 		const Vec3 Prevailing = PrevailingWind(Time, Seed);
 		const double Mean = Length(Prevailing);
 		if (Mean < 1e-6)
@@ -720,8 +726,42 @@ namespace Teinora::Sim
 			return {};
 		}
 
-		const double DirX = Prevailing.X / Mean;
-		const double DirY = Prevailing.Y / Mean;
+		// Swirls turn around the highs and lows of one smooth field and do not gather the air. The other
+		// field's slope drives the air together along lines, and that is where clouds run into each other.
+		const double Drift = Time / Changing;
+		const auto Slope = [&](double Size, std::uint32_t Salt)
+		{
+			const double Step = Size / 60.0;
+			const double U = X / Size + Drift;
+			const double V = Y / Size - Drift * 0.6;
+			const double DX = (GradientNoise(U + Step / Size, V, Seed + Salt) - GradientNoise(U - Step / Size, V, Seed + Salt)) / (2.0 * Step);
+			const double DY = (GradientNoise(U, V + Step / Size, Seed + Salt) - GradientNoise(U, V - Step / Size, Seed + Salt)) / (2.0 * Step);
+			return Vec3{ DX, DY, 0.0 } * Size; // about 1 at the steepest
+		};
+		const Vec3 Swirl = Slope(SwirlSize, 41u);
+		const Vec3 Together = Slope(MeetingSize, 42u);
+		Vec3 Large = Prevailing + (Vec3{ Swirl.Y, -Swirl.X, 0.0 } * Swirling + Together * Meeting) * Mean;
+
+		// Never quite still: where the eddies would cancel the wind, it still blows a little their way.
+		const double Speed = Length(Large);
+		if (Speed < 0.3 * Mean)
+		{
+			Large = Speed > 1e-6 ? Large * (0.3 * Mean / Speed) : Prevailing * 0.3;
+		}
+		return Large;
+	}
+
+	Vec3 WindAt(const Vec3& Position, double Time, std::uint32_t Seed)
+	{
+		const Vec3 Large = LargeWindAt(Position.X, Position.Y, Time, Seed);
+		const double Mean = Length(Large);
+		if (Mean < 1e-6)
+		{
+			return {};
+		}
+
+		const double DirX = Large.X / Mean;
+		const double DirY = Large.Y / Mean;
 
 		// Gust cells are carried downwind, so a front visibly crosses the world.
 		const double FrontX = (Position.X - DirX * 8.0 * Time) / 380.0;
@@ -818,15 +858,29 @@ namespace Teinora::Sim
 		return RelativeSpin * (0.5 * Density * MomentCoefficient * std::pow(Radius, 5.0) * Length(RelativeSpin));
 	}
 
-	Weather GetWeather(double CloudDepth, double Lightning)
+	double CloudDepthFor(double WaterMagic)
 	{
-		constexpr double RainsFrom = 450.0;  // metres of full cloud overhead before any rain falls
-		constexpr double Pouring = 1100.0;   // and where it pours
-		constexpr double StormsFrom = 750.0; // where a cloud is tall enough to be a storm cloud
+		constexpr double StormDepth = 1100.0; // metres, at MagicStormWater: tall enough to churn, see CloudUpdraft
+		return StormDepth * std::clamp((WaterMagic - MagicCloudWater) / (MagicStormWater - MagicCloudWater), 0.0, 1.3);
+	}
 
+	double ShownCloudCover(double Gathered)
+	{
+		// None where the water magic makes no cloud, scattered ones as it begins to, the sky closing over as it
+		// nears MagicRainWater, and overcast in rain. See GetCover in Shaders/Clouds.hlsli.
+		return -0.5 + 4.2 * std::clamp(Gathered, 0.0, 1.3);
+	}
+
+	Weather GetWeather(double WaterMagic, double Lightning)
+	{
+		// Only a cloud dense enough to rain is a storm cloud, however much charge has drifted into it.
 		Weather Result;
-		Result.Storm = std::clamp((CloudDepth - StormsFrom) / 500.0 + Lightning / MagicBreakdown * 0.6, 0.0, 1.0);
-		Result.Rain = std::max(std::clamp((CloudDepth - RainsFrom) / (Pouring - RainsFrom), 0.0, 1.0), Result.Storm);
+		if (WaterMagic < MagicRainWater)
+		{
+			return Result;
+		}
+		Result.Storm = std::clamp((WaterMagic - MagicStormWater) / 10.0 + Lightning / MagicBreakdown * 0.6, 0.0, 1.0);
+		Result.Rain = std::max(std::clamp((WaterMagic - MagicRainWater) / 12.0, 0.0, 1.0), Result.Storm);
 		return Result;
 	}
 
@@ -1149,9 +1203,9 @@ namespace Teinora::Sim
 
 	double CloudUpdraft(double Depth)
 	{
-		constexpr double Fastest = 42.0; // m/s, as in the tallest storms there are
-		constexpr double Lowest = 500.0; // metres of cloud
-		constexpr double Tallest = 1000.0;
+		constexpr double Fastest = 42.0;  // m/s, as in the tallest storms there are
+		constexpr double Lowest = 900.0;  // metres of cloud: only those piled up to near MagicStormWater, see CloudDepthFor
+		constexpr double Tallest = 1100.0; // at MagicStormWater
 		return Fastest * std::clamp((Depth - Lowest) / (Tallest - Lowest), 0.0, 1.0);
 	}
 
@@ -1285,6 +1339,27 @@ namespace Teinora::Sim
 		Mix.Amounts[Neutral] += Returned - Taken;
 	}
 
+	double UpdateHeldMagic(double Held, double Around, double FireAround, double Dt)
+	{
+		constexpr double Enough = 0.1;      // kg/m3 of magic around that keeps all of it up: far less than there is anywhere near the ground
+		constexpr double Exchanging = 20.0; // seconds for what it holds to come to that
+		constexpr double Burning = 0.5;     // per second, of what it holds, in fierce fire
+
+		// Fierce fire burns it out faster than anything around can keep it up.
+		if (FireAround >= MagicFierceFire)
+		{
+			return Held * std::exp(-Burning * Dt);
+		}
+		const double Kept = MatterHolds * std::clamp(Around / Enough, 0.0, 1.0);
+		return Held + (Kept - Held) * (1.0 - std::exp(-Dt / Exchanging));
+	}
+
+	Vec3 MagicStirredWind(double AirMagic, const Vec3& Flow)
+	{
+		constexpr double HalfWay = 5.0; // kg/m3 of air magic that takes the air along at half its own speed
+		return Flow * (std::max(AirMagic, 0.0) / (std::max(AirMagic, 0.0) + HalfWay));
+	}
+
 	void UpdateNatureFeeding(MagicMix& Mix, double Dt)
 	{
 		constexpr double TakingLight = 2.0;  // per second, for each kg/m3 of nature magic
@@ -1404,6 +1479,7 @@ namespace Teinora::Sim
 	{
 		constexpr double Layer = 45.0;      // metres over which earth and water magic thin out
 		constexpr double Canopy = 14.0;     // and natural magic over grass
+		constexpr double Blades = 1.5;      // and what the blades themselves hold, right at the ground
 		constexpr double TreeTops = 28.0;   // and in a wood
 		constexpr double DenseMagic = 10.0; // the most there is, in the wells
 
@@ -1413,8 +1489,9 @@ namespace Teinora::Sim
 		case EMagicType::Air:
 			return DenseMagic;
 		case EMagicType::Nature:
-			// Grass gives a little, and a wood a good deal more, up through its crowns.
-			return 0.14 * Ground.Plants * std::exp(-Height / Canopy) + 0.45 * Ground.Trees * std::exp(-Height / TreeTops) + 0.002;
+			// Every blade of grass holds nature magic, rule 17, so it is thickest right among them. Grass gives a
+			// little more around, and a wood a good deal more, up through its crowns.
+			return 0.6 * Ground.Plants * std::exp(-Height / Blades) + 0.14 * Ground.Plants * std::exp(-Height / Canopy) + 0.45 * Ground.Trees * std::exp(-Height / TreeTops) + 0.002;
 		case EMagicType::Earth:
 			return (0.3 + 2.7 * Ground.Land) * std::exp(-Height / Layer) + 0.05;
 		default:

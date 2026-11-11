@@ -36,8 +36,8 @@ namespace Teinora
 
 		// Far plants keep their outline with a few big cards, so that a wood does not change shape as it comes nearer.
 		const DetailLevel DetailLevels[] = {
-			{ { 32, 8 },   2, 70,  10, { { 5, 1, 0, 8, 1.7, 1.45 },   { 3, 1, 0, 4, 1.0, 1.7 } },  { 8, 5 },   3, 0 },
-			{ { 64, 16 },  2, 100, 16, { { 6, 2, 3, 12, 1.7, 1.05 },  { 3, 1, 0, 5, 1.3, 1.6 } },  { 10, 6 },  4, 0 },
+			{ { 32, 8 },   2, 70,  10, { { 5, 1, 0, 8, 1.7, 1.45 },   { 3, 1, 0, 4, 1.0, 1.7 } },  { 8, 5 },   3, 4000 },
+			{ { 64, 16 },  2, 100, 16, { { 6, 2, 3, 12, 1.7, 1.05 },  { 3, 1, 0, 5, 1.3, 1.6 } },  { 10, 6 },  4, 8000 },
 			{ { 128, 32 }, 3, 150, 24, { { 8, 2, 4, 17, 2.4, 0.85 },  { 4, 1, 0, 6, 1.7, 1.5 } },  { 16, 8 },  6, 12000 },
 			{ { 256, 64 }, 4, 220, 36, { { 10, 3, 4, 24, 1.7, 0.8 },  { 4, 1, 0, 7, 2.0, 1.45 } }, { 24, 10 }, 9, 48000 } };
 		constexpr int MaxBuildsInFlight = 8;
@@ -51,6 +51,8 @@ namespace Teinora
 		constexpr double SmokeLife = 12.0;
 		constexpr double FlameReach = 26.0;     // metres that a flame's light goes
 		constexpr double FireKeptInWind = 0.5;  // of the fire magic a fire's heat gathers, what a light wind leaves in it
+		constexpr double DustLife = 4.0;        // seconds the dust of something that fell apart hangs in the air
+		constexpr int DenseGrass = 4;           // times as many clumps of grass in the chunks right around the eye
 
 		/** Mass follows from what a thing is made of and how big it is, inertia from mass and shape. */
 		struct PropSpec
@@ -66,6 +68,7 @@ namespace Teinora
 			EPrimitive Primitive;
 			Float3 Scale;
 			Float3 Color;
+			Sim::EMagicType Aspect; // of the magic it holds inside itself, by what it is made of
 
 			double GetVolume() const { return Collider.GetVolume(); }
 			double GetMass() const { return Density * GetVolume(); }
@@ -74,9 +77,9 @@ namespace Teinora
 		const PropSpec& GetPropSpec(EPropKind Kind)
 		{
 			static const std::array<PropSpec, static_cast<std::size_t>(EPropKind::Count)> Specs = { {
-				{ P::Shape::MakeBox({ 0.5, 0.5, 0.5 }), 120.0, 0.6, 0.15, 1.05, 1.0, 0.5, false, EPrimitive::Cube, { 1.0f, 1.0f, 1.0f }, { 0.45f, 0.28f, 0.12f } },
-				{ P::Shape::MakeCapsule(0.3, 0.3), 100.0, 0.5, 0.2, 0.9, 0.5, 0.45, true, EPrimitive::Cylinder, { 0.6f, 0.6f, 1.2f }, { 0.30f, 0.14f, 0.06f } },
-				{ P::Shape::MakeSphere(0.35), 45.0, 0.5, 0.5, 0.47, 0.38, 0.35, true, EPrimitive::Sphere, { 0.7f, 0.7f, 0.7f }, { 0.95f, 0.75f, 0.15f } },
+				{ P::Shape::MakeBox({ 0.5, 0.5, 0.5 }), 120.0, 0.6, 0.15, 1.05, 1.0, 0.5, false, EPrimitive::Cube, { 1.0f, 1.0f, 1.0f }, { 0.45f, 0.28f, 0.12f }, Sim::EMagicType::Nature }, // wood
+				{ P::Shape::MakeCapsule(0.3, 0.3), 100.0, 0.5, 0.2, 0.9, 0.5, 0.45, true, EPrimitive::Cylinder, { 0.6f, 0.6f, 1.2f }, { 0.30f, 0.14f, 0.06f }, Sim::EMagicType::Nature },
+				{ P::Shape::MakeSphere(0.35), 45.0, 0.5, 0.5, 0.47, 0.38, 0.35, true, EPrimitive::Sphere, { 0.7f, 0.7f, 0.7f }, { 0.95f, 0.75f, 0.15f }, Sim::EMagicType::Earth }, // clay and earth
 			} };
 			return Specs[static_cast<std::size_t>(Kind)];
 		}
@@ -165,6 +168,23 @@ namespace Teinora
 			Out.push_back(MakeVertex(B, Normal, Root, 0.0));
 			Out.push_back(MakeVertex(A, Normal, Root, 0.0));
 			Out.push_back(MakeVertex(Tip, Normal, End, 0.35));
+		}
+
+		/**
+		 * A card of grass standing on the ground, cut out by the grass blades texture: its foot is the ground's, its
+		 * top sways. Lit with the ground's normal, as a blade is, so that it blends into the ground under it.
+		 */
+		void AddGrassCard(std::vector<TerrainVertex>& Out, const Vec3& Foot, const Vec3& Across, const Vec3& Up, const Vec3& Normal, double Tone)
+		{
+			const auto Corner = [&](double U, double V)
+			{
+				return MakeVertex(Foot + Across * (U * 2.0 - 1.0) + Up * V, Normal, Color{ U, V, Tone }, V * 0.35, TerrainGrass);
+			};
+			const TerrainVertex A = Corner(0.0, 0.0);
+			const TerrainVertex B = Corner(1.0, 0.0);
+			const TerrainVertex C = Corner(1.0, 1.0);
+			const TerrainVertex D = Corner(0.0, 1.0);
+			Out.insert(Out.end(), { A, B, C, A, C, D });
 		}
 
 		/**
@@ -817,6 +837,24 @@ namespace Teinora
 		// Fireflies, and the dust whirlwinds lift.
 		Shows.CollectPuffs(LastUpdateTime, Out);
 
+		// What has fallen apart for want of magic, as a cloud of dust that spreads, sinks and clears.
+		for (const Crumbled& Item : Dust)
+		{
+			const double Age = std::max(LastUpdateTime - Item.Born, 0.0) / DustLife;
+			for (int Index = 0; Index < 5; ++Index)
+			{
+				const double Angle = Index * 2.4 + Item.Born;
+				PuffDraw Draw;
+				Draw.Point = Item.Point + Vec3{ std::cos(Angle), std::sin(Angle), 0.3 } * (Item.Radius * (0.4 + 2.0 * Age)) - Vec3{ 0.0, 0.0, Age * 0.4 };
+				Draw.Radius = Item.Radius * (0.8 + 1.6 * Age);
+				Draw.Thickness = 0.7 * (1.0 - Age) * (1.0 - Age);
+				Draw.Seed = Item.Born + Index * 3.1;
+				Draw.Floor = Item.Point.Z - Item.Radius;
+				Draw.Shade = 0.75;
+				Out.push_back(Draw);
+			}
+		}
+
 		std::sort(Out.begin(), Out.end(), [&Eye](const PuffDraw& A, const PuffDraw& B)
 		{
 			return Length(A.Point - Eye) < Length(B.Point - Eye);
@@ -894,6 +932,26 @@ namespace Teinora
 				break;
 			}
 			Out.push_back(Each);
+		}
+	}
+
+	void GameWorld::CollectHeldMagic(const Vec3& Eye, std::vector<MagicGlow>& Out, std::size_t Most) const
+	{
+		Out.clear();
+		for (const Prop& Thing : Props)
+		{
+			const PropSpec& Spec = GetPropSpec(Thing.Kind);
+			const Vec3 Color = GetMagicColor(Spec.Aspect);
+			MagicGlow Glow;
+			Glow.Point = Physics.GetBody(Thing.Body).Position;
+			Glow.Radius = Spec.HalfHeight;
+			Glow.Color = Color * (Thing.Held / Sim::MatterHolds);
+			Out.push_back(Glow);
+		}
+		std::sort(Out.begin(), Out.end(), [&Eye](const MagicGlow& A, const MagicGlow& B) { return LengthSquared(A.Point - Eye) < LengthSquared(B.Point - Eye); });
+		if (Out.size() > Most)
+		{
+			Out.resize(Most);
 		}
 	}
 
@@ -1050,7 +1108,7 @@ namespace Teinora
 
 	void GameWorld::GrowGrass(ChunkBuild& Build)
 	{
-		const int Tufts = DetailLevels[Build.Detail].GrassTufts;
+		const int Tufts = DetailLevels[Build.Detail].GrassTufts * (Build.bDenseGrass ? DenseGrass : 1);
 		if (Build.Lod != 0 || Tufts == 0)
 		{
 			return;
@@ -1096,24 +1154,39 @@ namespace Teinora
 				continue;
 			}
 
-			const Color Tint = bReeds ? Color{ 0.10 * Shade, 0.15 * Shade, 0.05 * Shade } : Color{ 0.065 * Shade, 0.15 * Shade, 0.03 * Shade };
-			const double Width = bReeds ? 0.03 : 0.045;
-			const double Lean = bReeds ? 0.22 : 0.14;
+			if (!bReeds)
+			{
+				// Two cards of grass blades across each other, so that it looks like a clump from any side.
+				const double Wide = Rng.Range(0.3, 0.45);
+				const double Tall = Rng.Range(0.3, 0.55);
+				const Vec3 Foot{ X, Y, Height - 0.04 };
+				for (int Card = 0; Card < 2; ++Card)
+				{
+					const double Angle = Facing + Card * Pi * 0.5;
+					AddGrassCard(Build.Vertices, Foot, Vec3{ std::cos(Angle), std::sin(Angle), 0.0 } * Wide, Vec3{ 0.0, 0.0, Tall }, Normal, std::clamp(Shade - 0.4, 0.0, 1.0));
+				}
+				continue;
+			}
+
+			const Color Tint{ 0.10 * Shade, 0.15 * Shade, 0.05 * Shade };
+			const double Width = 0.03;
+			const double Lean = 0.22;
 			for (int Blade = 0; Blade < 3; ++Blade)
 			{
 				const double Angle = Facing + Blade * Pi / 3.0;
 				const Vec3 Across{ std::cos(Angle) * Width, std::sin(Angle) * Width, 0.0 };
 				const Vec3 Leaning{ -std::sin(Angle) * Lean, std::cos(Angle) * Lean, 0.0 };
 				const Vec3 Root{ X, Y, Height - 0.03 };
-				const Vec3 Tip = Root + Leaning + Vec3{ 0.0, 0.0, bReeds ? std::max(WaterLevel + 0.6 - Height, 0.0) + Rng.Range(0.6, 1.4) : Rng.Range(0.22, 0.55) };
+				const Vec3 Tip = Root + Leaning + Vec3{ 0.0, 0.0, std::max(WaterLevel + 0.6 - Height, 0.0) + Rng.Range(0.6, 1.4) };
 				AddBlade(Build.Vertices, Root - Across, Root + Across, Tip, Normal, Tint);
 			}
 		}
 	}
 
-	std::unique_ptr<GameWorld::ChunkBuild> GameWorld::BuildChunk(int X, int Y, int Lod, int Detail)
+	std::unique_ptr<GameWorld::ChunkBuild> GameWorld::BuildChunk(int X, int Y, int Lod, int Detail, bool bDenseGrass)
 	{
 		auto Build = std::make_unique<ChunkBuild>();
+		Build->bDenseGrass = bDenseGrass;
 		Build->X = X;
 		Build->Y = Y;
 		Build->Lod = Lod;
@@ -1191,6 +1264,7 @@ namespace Teinora
 			int Y;
 			int Lod;
 			int Ring;
+			bool bDenseGrass;
 		};
 		std::vector<Request> Requests;
 
@@ -1218,9 +1292,13 @@ namespace Teinora
 				const int NearRadius = DetailLevels[Detail].NearRadius;
 				const bool bNear = Ring <= NearRadius || (CurrentLod == 0 && Ring <= NearRadius + 1);
 				const int WantedLod = bNear ? 0 : 1;
-				if (CurrentLod != WantedLod || bOutdated)
+
+				// The chunks right around the eye grow their grass thicker, again with a ring of hysteresis.
+				const bool bWasDense = Existing != Chunks.end() && Existing->second.bDenseGrass;
+				const bool bDense = WantedLod == 0 && (Ring <= 1 || (bWasDense && Ring <= 2));
+				if (CurrentLod != WantedLod || bOutdated || bDense != bWasDense)
 				{
-					Requests.push_back({ X, Y, WantedLod, Ring });
+					Requests.push_back({ X, Y, WantedLod, Ring, bDense });
 				}
 			}
 		}
@@ -1237,9 +1315,9 @@ namespace Teinora
 
 			InFlight[ChunkKey(Item.X, Item.Y)] = Item.Lod;
 			Stale.erase(ChunkKey(Item.X, Item.Y));
-			Workers.Enqueue([Results = Finished, X = Item.X, Y = Item.Y, Lod = Item.Lod, Level = Detail]
+			Workers.Enqueue([Results = Finished, X = Item.X, Y = Item.Y, Lod = Item.Lod, Level = Detail, bDense = Item.bDenseGrass]
 			{
-				std::unique_ptr<ChunkBuild> Build = BuildChunk(X, Y, Lod, Level);
+				std::unique_ptr<ChunkBuild> Build = BuildChunk(X, Y, Lod, Level, bDense);
 				std::lock_guard Lock(Results->Mutex);
 				Results->Items.push_back(std::move(Build));
 			});
@@ -1294,6 +1372,7 @@ namespace Teinora
 
 		Target.Lod = Build.Lod;
 		Target.Detail = Build.Detail;
+		Target.bDenseGrass = Build.bDenseGrass;
 
 		ChunkMesh Mesh;
 		Mesh.Origin = { Build.X * ChunkSize, Build.Y * ChunkSize, 0.0 };
@@ -1557,6 +1636,10 @@ namespace Teinora
 
 	void GameWorld::CullProps(double Time)
 	{
+		const double Dt = std::clamp(Time - LastCullTime, 0.0, 1.0);
+		LastCullTime = Time;
+		std::erase_if(Dust, [Time](const Crumbled& Item) { return Time > Item.Born + DustLife; });
+
 		for (std::size_t Index = Props.size(); Index > 0; --Index)
 		{
 			P::Body& Item = Physics.GetBody(Props[Index - 1].Body);
@@ -1564,6 +1647,19 @@ namespace Teinora
 			// A body must not outlive the ground under it, or it falls for ever.
 			if (!HasGroundAt(Item.Position.X, Item.Position.Y))
 			{
+				RemoveProp(Index - 1);
+				continue;
+			}
+
+			// Rule 17: it holds magic inside itself, kept up by the magic around it, and without it falls apart.
+			const Sim::MagicMix Around = Magic != nullptr && Magic->Contains(Item.Position)
+				? Magic->GetMix(Item.Position)
+				: Sim::MagicBaseline(Item.Position, WellsAround, Sim::ReadMagicGround(Item.Position.X, Item.Position.Y, Sim::WorldSeed), Sim::WorldSeed);
+			Prop& Thing = Props[Index - 1];
+			Thing.Held = Sim::UpdateHeldMagic(Thing.Held, Around.GetTotal(), Around.GetAllFire(), Dt);
+			if (!Sim::HoldsTogether(Thing.Held))
+			{
+				Dust.push_back({ Item.Position, GetPropSpec(Thing.Kind).HalfHeight, Time });
 				RemoveProp(Index - 1);
 				continue;
 			}
@@ -1657,8 +1753,10 @@ namespace Teinora
 			Felt->Impulse -= Pushed * Dt;
 		}
 
-		// Fire magic warms the air, and warm air rises and takes things with it. Dense air magic spins it into whirlwinds.
-		const Vec3 Moving = Air.Flow.Velocity + Shows.GetWhirl(Item.Position) + Vec3{ 0.0, 0.0, Felt != nullptr ? Felt->Rising : 0.0 };
+		// Fire magic warms the air, and warm air rises and takes things with it. Streams of air magic take the air
+		// along, and where it is dense enough it spins it into whirlwinds.
+		const Vec3 Stirred = Felt != nullptr ? Sim::MagicStirredWind(Felt->Mix.Get(Sim::EMagicType::Air), Felt->Flow) : Vec3{};
+		const Vec3 Moving = Air.Flow.Velocity + Stirred + Shows.GetWhirl(Item.Position) + Vec3{ 0.0, 0.0, Felt != nullptr ? Felt->Rising : 0.0 };
 		Item.Force += (Sim::AeroForce(Moving - Item.Velocity, Spec.DragCoefficient, Spec.FrontalArea) + Sim::AirLift(Spec.GetVolume())) * Exposed;
 
 		// Spinning air turns what is in it, until the body keeps pace at half the vorticity.

@@ -11,9 +11,16 @@ struct TonemapConstants
 [[vk::binding(2, 1)]] Texture2D<float4> BendMap : register(t2);
 [[vk::binding(3, 1)]] Texture2D<float> RainDepth : register(t3); // the scene's depth, for what the rain falls in front of
 
-static const int RainLayers = 5;
-static const float RainDistances[RainLayers] = { 1.3, 3.0, 6.5, 14.0, 30.0 }; // metres from the eye
-static const float RainFall = 9.0; // m/s
+// Rain, as sheets of drops at a few distances in front of the eye, each sheet measured in metres where it is.
+static const int RainLayers = 8;
+static const float RainNearest = 0.9;     // metres to the nearest sheet
+static const float RainSpread = 1.5;      // each further than the one before by this much, out to about 15 m
+static const float RainFall = 9.0;        // m/s, how fast a drop falls
+static const float RainShutter = 0.025;   // seconds an eye blurs a drop over, which draws it out into a streak
+static const float DropWidth = 0.0025;    // metres
+static const float DropColumns = 0.07;    // metres between drops across a sheet
+static const float DropRows = 1.1;        // and up and down it, which leaves room for a streak in each
+static const float ViewTall = 1.2256;     // metres the view spans top to bottom 1 m off: 2 tan(31.5°), Gaze::VerticalFov
 
 uint RainHash(int3 Cell)
 {
@@ -24,36 +31,52 @@ uint RainHash(int3 Cell)
 	return Mixed;
 }
 
+float RainShare(uint Bits)
+{
+	return float(Bits & 65535u) / 65535.0;
+}
+
 /**
- * Streaks of rain at one distance in front of the eye, from 0 to 1: drops falling at RainFall, blurred into
- * streaks over the moment a camera or an eye takes in, blown aslant by the wind. The nearer, the bigger and
- * the faster across the view, and the fewer.
+ * How much of a pixel one sheet of rain covers, from 0 to 1. Each drop is a thin streak as long as it falls
+ * while the eye takes it in, brightest at its lower end where the drop is now. Near the eye the drops are out
+ * of focus, wider and fainter; far off they are thinner than a pixel, and fainter for it.
  */
 float GetRain(float2 Uv, int Layer, float Amount)
 {
-	const float Distance = RainDistances[Layer];
+	const float Distance = RainNearest * pow(RainSpread, float(Layer));
+	const float Tall = ViewTall * Distance;
+	const float Pixel = Tall * ScreenSize.w; // metres a pixel of the scene spans there
 	const float Aspect = ScreenSize.x * ScreenSize.w;
-	const float Across = 1.2 * Distance; // metres the view takes in from side to side there, about
-	const float Columns = clamp(Across / 0.09, 24.0, 420.0);
-	const float Rows = Columns * 0.35;
-	const float Falling = RainFall / Across * Aspect; // screen heights a second
 
-	float2 Place = float2(Uv.x * Aspect, Uv.y);
-	Place.x += Place.y * Weather.z;
-	const float Column = floor(Place.x * Columns / Aspect);
-	const uint Own = RainHash(int3(int(Column), Layer, 7));
-	const float Down = Place.y * Rows - CameraPosition.w * Falling * Rows + float(Own & 1023u) / 1023.0 * 17.0;
-	const float Row = floor(Down);
-	const uint Drop = RainHash(int3(int(Column), int(Row), Layer));
-	if (float(Drop & 65535u) / 65535.0 > Amount * 0.55)
+	// Where this pixel is on the sheet, in metres, slanted by the wind and moving down as the rain falls.
+	float2 Place = float2((Uv.x - 0.5) * Aspect, Uv.y - 0.5) * Tall;
+	Place.x -= Place.y * Weather.z;
+	Place.y -= CameraPosition.w * RainFall;
+
+	const float Column = floor(Place.x / DropColumns);
+	const uint Shift = RainHash(int3(int(Column), Layer, 7));
+	const float Down = Place.y / DropRows + RainShare(Shift) * 7.0;
+	const uint Drop = RainHash(int3(int(Column), int(floor(Down)), Layer));
+	if (RainShare(Drop) > Amount * (0.7 - 0.05 * float(Layer)))
 	{
 		return 0.0;
 	}
-	const float Where = 0.2 + 0.6 * float((Drop >> 16) & 255u) / 255.0;
-	const float Side = abs(frac(Place.x * Columns / Aspect) - Where);
-	const float Along = frac(Down);
-	const float Length = 0.55;
-	return (1.0 - smoothstep(0.03, 0.09, Side)) * (Along < Length ? 1.0 - Along / Length : 0.0);
+
+	// Its streak, somewhere in the cell, a little longer or shorter for a bigger or smaller drop.
+	const uint Look = RainHash(int3(int(Drop), Layer, 11));
+	const float Length = RainFall * RainShutter * (0.8 + 0.5 * RainShare(Look));
+	const float Middle = (0.2 + 0.6 * RainShare(Look >> 16)) * DropColumns;
+	const float Top = RainShare(Drop >> 16) * (DropRows - Length);
+	const float Along = (frac(Down) * DropRows - Top) / Length; // 0 at the top of the streak, 1 at the drop
+	if (Along < 0.0 || Along > 1.0)
+	{
+		return 0.0;
+	}
+	const float Blur = DropWidth * 2.5 / Distance;           // out of focus near the eye
+	const float Width = max(DropWidth + Blur, Pixel * 1.3);
+	const float Across = (frac(Place.x / DropColumns) * DropColumns - Middle) / Width;
+	const float Strength = DropWidth * 1.6 / Width;           // the same light spread wider is fainter
+	return exp(-Across * Across * 4.0) * smoothstep(0.0, 0.5, Along) * smoothstep(0.0, 0.06, 1.0 - Along) * saturate(Strength);
 }
 
 struct Varyings
@@ -97,22 +120,32 @@ float4 PSMain(Varyings Input) : SV_Target
 
 	float3 Color = Texture0.SampleLevel(LinearClamp, Uv, 0.0).rgb * Options.x * (1.0 + Shimmer);
 
-	// Rain, in front of whatever is further than it, lit by the sky. Under it everything is a little greyer and darker.
+	// Rain, in front of whatever is further than it. Under it everything is a little greyer and darker.
 	const float Rain = Weather.x;
 	if (Rain > 0.001)
 	{
 		const float Depth = RainDepth.SampleLevel(PointClamp, Input.Uv, 0.0).r;
 		const float Scene = Depth > 0.0 ? Options.z / Depth : 1e9;
-		const float3 Lit = (SkyZenith.rgb * 0.6 + SkyHorizon.rgb * 0.4 + PlanetColor.rgb * 0.1) * Options.x * 1.4;
 		const float Grey = dot(Color, float3(0.2126, 0.7152, 0.0722));
 		Color = lerp(Color, Grey.xxx, 0.25 * Rain) * (1.0 - 0.2 * Rain);
+
+		float Cover = 0.0;
 		for (int Layer = 0; Layer < RainLayers; ++Layer)
 		{
-			if (Scene > RainDistances[Layer])
+			const float Distance = RainNearest * pow(RainSpread, float(Layer));
+			const float InFront = saturate((Scene - Distance) / (0.25 * Distance));
+			if (InFront > 0.0)
 			{
-				const float Streak = GetRain(Input.Uv, Layer, Rain) * (0.45 - 0.06 * Layer);
-				Color = lerp(Color, Lit, Streak);
+				Cover = 1.0 - (1.0 - Cover) * (1.0 - GetRain(Input.Uv, Layer, Rain) * InFront);
 			}
+		}
+		if (Cover > 0.002)
+		{
+			// A drop is a little lens: it shows the light from a wide piece of the sky over it, and a bent glimpse of
+			// what is behind, so it is lighter than a dark ground and hardly shows against the sky.
+			const float3 Sky = (SkyZenith.rgb * 0.55 + SkyHorizon.rgb * 0.45 + PlanetColor.rgb * 0.15) * Options.x;
+			const float3 Bent = Texture0.SampleLevel(LinearClamp, Input.Uv + float2(0.0, -0.012), 0.0).rgb * Options.x;
+			Color = lerp(Color, Sky * 1.1 + Bent * 0.35, Cover * 0.55);
 		}
 	}
 	float3 Shown = Aces(Color);
@@ -120,12 +153,12 @@ float4 PSMain(Varyings Input) : SV_Target
 	const float View = Push.Magic.x;
 	if (View > 0.0)
 	{
-		// The world goes dim and pale, and the haze shows in front of it. This comes after the curve: before
-		// it, fire and all it lights are so bright that dimming them only takes them down to white.
+		// The world goes grey and dim, and the magic glows in it, through it, by its own light: it lights nothing,
+		// so the grey is only a little hidden behind it. This comes after the curve: before it, fire and all it
+		// lights are so bright that dimming them only takes them down to white.
 		const float4 Haze = Texture1.SampleLevel(LinearClamp, Input.Uv, 0.0);
-		const float Grey = dot(Shown, float3(0.2126, 0.7152, 0.0722));
-		const float3 Dimmed = lerp(Shown, Grey.xxx, 0.45) * 0.2;
-		Shown = lerp(Shown, saturate(Dimmed * (1.0 - Haze.a) + Aces(Haze.rgb * 0.9)), View);
+		const float Grey = dot(Shown, float3(0.2126, 0.7152, 0.0722)) * 0.3;
+		Shown = lerp(Shown, saturate(Grey.xxx * (1.0 - 0.5 * Haze.a) + Aces(Haze.rgb * 0.9)), View);
 	}
 
 	return float4(pow(Shown, 1.0 / 2.2), 1.0);

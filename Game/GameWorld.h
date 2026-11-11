@@ -98,6 +98,9 @@ namespace Teinora
 		/** The puffs of steam and smoke nearest to Eye, nearest first. */
 		void CollectPuffs(const Vec3& Eye, std::vector<PuffDraw>& Out, std::size_t Most);
 
+		/** The magic held inside the bodies nearest to Eye, as it glows in the magic view, nearest first. */
+		void CollectHeldMagic(const Vec3& Eye, std::vector<MagicGlow>& Out, std::size_t Most) const;
+
 	private:
 		struct StaticSpawn
 		{
@@ -118,6 +121,7 @@ namespace Teinora
 			int Y = 0;
 			int Lod = 0;
 			int Detail = 0;
+			bool bDenseGrass = false;
 			std::vector<TerrainVertex> Vertices;
 			std::vector<TerrainVertex> Leaves; // joined on after the solid vertices
 			std::uint32_t SolidVertexCount = 0;
@@ -137,6 +141,7 @@ namespace Teinora
 		{
 			int Lod = -1;
 			int Detail = 0;
+			bool bDenseGrass = false; // right around the eye, where the grass grows thicker
 			Physics::GroundId Ground = Physics::NoGround;
 			std::vector<Physics::BodyId> Statics;
 			std::vector<float> Heights;         // kept for reading the ground without working it out again
@@ -163,6 +168,15 @@ namespace Teinora
 		{
 			Physics::BodyId Body = Physics::NoBody;
 			EPropKind Kind = EPropKind::Crate;
+			double Held = Sim::MatterHolds; // the magic it holds inside itself, in kg/m3, rule 17
+		};
+
+		/** Something that has fallen apart for want of magic, as the dust it leaves. */
+		struct Crumbled
+		{
+			Vec3 Point;
+			double Radius = 0.0;
+			double Born = 0.0;
 		};
 
 		/** Eddies change far more slowly than the physics steps, so each body keeps a recent reading. */
@@ -207,7 +221,7 @@ namespace Teinora
 			std::deque<std::unique_ptr<ChunkBuild>> Items;
 		};
 
-		static std::unique_ptr<ChunkBuild> BuildChunk(int X, int Y, int Lod, int Detail);
+		static std::unique_ptr<ChunkBuild> BuildChunk(int X, int Y, int Lod, int Detail, bool bDenseGrass);
 		static void BuildTerrain(ChunkBuild& Build);
 		static void ScatterObjects(ChunkBuild& Build);
 		static void GrowGrass(ChunkBuild& Build);
@@ -251,8 +265,10 @@ namespace Teinora
 		std::vector<double> BurningUntil;
 		std::vector<Smouldering> BurntOut;
 		std::vector<SteamPuff> Steam;
+		std::vector<Crumbled> Dust;
 		Vec3 AirDrift;
 		double LastUpdateTime = 0.0;
+		double LastCullTime = 0.0;
 		PlantField Plants;
 		LiquidField Liquid;
 

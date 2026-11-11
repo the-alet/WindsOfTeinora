@@ -840,6 +840,20 @@ namespace
 		Expect(Drops(12.0, 1.0) > 0.5 && Drops(SunsMeetHour, FirstEclipseDay) < 0.05, "the suns pelt the ground by day, and the planet stops it in the triple eclipse");
 		Expect(GetLightDropSources(12.0, 1.0)[2].Rate <= PlanetDropShare * 2.0, "the planet sends back only a few of the drops");
 
+		// Everything holds magic inside itself, kept up by the magic around it, and falls apart without it.
+		const auto Holding = [](double Around, double Fire, double Seconds)
+		{
+			double Held = MatterHolds;
+			for (double Time = 0.0; Time < Seconds; Time += 0.1)
+			{
+				Held = UpdateHeldMagic(Held, Around, Fire, 0.1);
+			}
+			return Held;
+		};
+		Expect(std::fabs(Holding(0.7, 0.0, 300.0) - MatterHolds) < 1e-9 && HoldsTogether(Holding(0.7, 0.0, 300.0)), "where there is magic about, a thing keeps all it holds");
+		Expect(!HoldsTogether(Holding(0.0, 0.0, 120.0)), "where there is none, it runs out and the thing falls apart");
+		Expect(!HoldsTogether(Holding(0.7, MagicFierceFire + 1.0, 10.0)) && HoldsTogether(Holding(0.7, MagicFierceFire - 1.0, 10.0)), "fierce fire burns it out, and lesser fire does not");
+
 		// Thin magic does nothing to bodies, and over that only the excess does.
 		Expect(Only(EMagicType::Earth, MagicActsOnMatter - 1.0).GetActing().GetTotal() == 0.0, "magic thinner than MagicActsOnMatter acts on nothing");
 		Expect(std::fabs(Only(EMagicType::Water, MagicActsOnMatter + 10.0).GetActing().Get(EMagicType::Water) - 10.0) < 1e-9, "and denser, only what it has over that acts");
@@ -982,7 +996,7 @@ namespace
 		Expect(MagicBaseline(Away, {}, AtSea, WorldSeed).Get(EMagicType::Air) > 0.0, "air magic is everywhere");
 		const MagicMix InWell = MagicBaseline(Well.Position, Wells, UnderWell, WorldSeed);
 		Expect(InWell.Get(EMagicType::Air) > InWell.Get(EMagicType::Earth) && std::fabs(InWell.Get(EMagicType::Air) - InWell.Get(EMagicType::Neutral)) < 1e-9, "wells are air and neutral magic, half and half");
-		Expect(MagicLimit(EMagicType::Nature, 2.0, OnLand) < 0.15, "natural magic is very weak even among plants");
+		Expect(MagicLimit(EMagicType::Nature, 0.2, OnLand) > 0.5 && MagicLimit(EMagicType::Nature, 20.0, OnLand) < 0.15, "the blades of grass hold nature magic, and over them it is weak");
 		Expect(MagicLimit(EMagicType::Nature, 2.0, AtSea) < 0.01, "natural magic stays near plants");
 
 		MagicField::Options Open;
@@ -1045,15 +1059,120 @@ namespace
 		constexpr int NoiseSize = 64;
 		StormField Sky(WorldSeed, MakeCloudNoise(NoiseSize), NoiseSize, CloudBottom, 1.0 / 80000.0);
 		const Vec3 Wind{ 4.0, 0.0, 0.0 };
-		Sky.Update({}, {}, Wind, 1.5, 0.0);
+		Sky.Update({}, {}, Wind, 1.5, 0.0, 0.0);
 		const double SkyAmount = Sky.GetTotalAmount();
 		for (int Step = 1; Step <= 240; ++Step)
 		{
-			Sky.Update({}, {}, Wind, 1.5, Step * 0.25);
+			Sky.Update({}, {}, Wind, 1.5, 0.0, Step * 0.25);
 		}
 		std::printf("       %d bolts in a minute over 19 km of heavy cloud\n", Sky.GetBoltCount());
 		Expect(Sky.GetBoltCount() > 0, "tall clouds strike");
-		Expect(std::fabs(Sky.GetTotalAmount() - SkyAmount) < 1e-6 * SkyAmount, "and neither their rubbing nor their bolts change the amount of magic");
+		Expect(std::fabs(Sky.GetTotalAmount() + Sky.GetRainedDown() - Sky.GetCameIn() - SkyAmount) < 1e-6 * SkyAmount, "neither the wind, their rubbing nor their bolts change the amount of magic, only what the rain takes down and the wind brings across the edges");
+
+		// Clouds are where water magic gathers: what the suns lift off the water, run together by the wind.
+		const auto Survey = [](const StormField& Field, double& OutMost, int& OutRaining, int& OutStorming)
+		{
+			OutMost = 0.0;
+			OutRaining = 0;
+			OutStorming = 0;
+			for (double Y = -9400.0; Y < 9400.0; Y += StormField::CellSize)
+			{
+				for (double X = -9400.0; X < 9400.0; X += StormField::CellSize)
+				{
+					const double Water = Field.Read({ X, Y, 0.0 }).Mix.Get(EMagicType::Water);
+					OutMost = std::max(OutMost, Water);
+					OutRaining += Water > MagicRainWater ? 1 : 0;
+					OutStorming += Water > MagicStormWater ? 1 : 0;
+				}
+			}
+		};
+		StormField Weather(WorldSeed, MakeCloudNoise(NoiseSize), NoiseSize, CloudBottom, 1.0 / 80000.0);
+		const Vec3 Aloft = WindAt({}, 0.0, WorldSeed);
+		double Most = 0.0;
+		int Raining = 0;
+		int Storming = 0;
+		for (int Minute = 0; Minute <= 20; ++Minute)
+		{
+			if (Minute % 5 == 0)
+			{
+				Survey(Weather, Most, Raining, Storming);
+				std::printf("       after %2d min of sun: water magic in the clouds up to %.1f kg/m3, %d cells raining, %d stormy\n", Minute, Most, Raining, Storming);
+			}
+			for (int Step = 0; Step < 240; ++Step)
+			{
+				const double Time = Minute * 60.0 + Step * 0.25;
+				Weather.Update({}, Aloft * CloudWindRatio * Time, Aloft, 1.0, 1.0, Time);
+			}
+		}
+		{
+			double MostAir = 0.0;
+			double MostNeutral = 0.0;
+			double MostLightning = 0.0;
+			for (double Y = -9400.0; Y < 9400.0; Y += StormField::CellSize)
+			{
+				for (double X = -9400.0; X < 9400.0; X += StormField::CellSize)
+				{
+					const StormField::Reading Over = Weather.Read({ X, Y, 0.0 });
+					MostAir = std::max(MostAir, Over.Mix.Get(EMagicType::Air));
+					MostNeutral = std::max(MostNeutral, Over.Mix.Get(EMagicType::Neutral));
+					MostLightning = std::max(MostLightning, Over.Mix.Get(EMagicType::Lightning));
+				}
+			}
+			std::printf("       most air magic in the clouds %.2f, neutral %.2f, lightning %.3f kg/m3\n", MostAir, MostNeutral, MostLightning);
+		}
+		std::printf("       %d bolts in those 20 minutes\n", Weather.GetBoltCount());
+		{
+			// Rain must only fall from a cloud that is there to be seen. Over each cell of the sheet: what the
+			// weather says, and how much of the sky Shaders/Clouds.hlsli draws there, which MeasureCloud reads
+			// the same way at the cover that matches what the cell's water magic gathers.
+			int RainyCells = 0;
+			int RainWithoutCloud = 0;
+			int ChargedClear = 0;
+			double CoverWhereRaining = 0.0;
+			for (double Y = -9400.0; Y < 9400.0; Y += StormField::CellSize)
+			{
+				for (double X = -9400.0; X < 9400.0; X += StormField::CellSize)
+				{
+					const StormField::Reading Over = Weather.Read({ X, Y, 0.0 });
+					const double Water = Over.Mix.Get(EMagicType::Water);
+					const Sim::Weather Here = GetWeather(Water, Over.Mix.Get(EMagicType::Lightning));
+					ChargedClear += Over.CloudDepth <= 0.0 && Over.Mix.Get(EMagicType::Lightning) >= MagicBreakdown ? 1 : 0;
+					if (Here.Rain <= 0.0)
+					{
+						continue;
+					}
+					++RainyCells;
+					RainWithoutCloud += Over.CloudDepth <= 0.0 ? 1 : 0;
+					int Covered = 0;
+					for (int Spot = 0; Spot < 16; ++Spot)
+					{
+						const double Gathered = Over.CloudDepth / CloudDepthFor(MagicStormWater);
+						Covered += Weather.MeasureCloud(X + (Spot % 4) * 100.0, Y + (Spot / 4) * 100.0, ShownCloudCover(Gathered)) > 0.0 ? 1 : 0;
+					}
+					CoverWhereRaining += Covered / 16.0;
+				}
+			}
+			std::printf("       %d cells with rain: %d of them with no cloud at all, %.0f%% of their sky drawn with cloud; %d clear cells hold a charge\n",
+				RainyCells, RainWithoutCloud, RainyCells > 0 ? 100.0 * CoverWhereRaining / RainyCells : 0.0, ChargedClear);
+			Expect(RainWithoutCloud == 0 && ChargedClear == 0, "it rains, and lightning gathers, only in a cloud");
+			Expect(RainyCells == 0 || CoverWhereRaining / RainyCells > 0.7, "and where it rains, most of the sky is drawn with cloud");
+		}
+		Expect(Raining > 0, "water magic gathers in the clouds until it rains");
+		Expect(Weather.GetRainedDown() > 0.0, "and the rain takes water magic down");
+		Expect(GetWeather(MagicRainWater - 1.0, 0.0).Rain == 0.0 && GetWeather(MagicRainWater + 6.0, 0.0).Rain > 0.0, "it rains only over 30 kg/m3 of water magic");
+		Expect(GetWeather(MagicStormWater - 1.0, 0.0).Storm == 0.0 && GetWeather(MagicStormWater + 5.0, 0.0).Storm > 0.0, "and storms over 50");
+		Expect(CloudDepthFor(MagicCloudWater - 1.0) == 0.0 && CloudDepthFor(MagicStormWater) > 1000.0, "thin water magic makes no cloud, and a storm's is tall");
+
+		// The wind blows differently from place to place, so it runs things together.
+		const Vec3 Here = LargeWindAt(0.0, 0.0, 100.0, WorldSeed);
+		double Widest = 0.0;
+		for (double Away = 1000.0; Away <= 20000.0; Away += 1000.0)
+		{
+			const Vec3 There = LargeWindAt(Away, Away * 0.4, 100.0, WorldSeed);
+			Widest = std::max(Widest, std::acos(std::clamp(Dot(Normalize(Here), Normalize(There)), -1.0, 1.0)));
+		}
+		std::printf("       the wind turns up to %.0f degrees from one place to another within 20 km\n", Widest * 180.0 / Pi);
+		Expect(Widest > 0.6, "the wind does not blow the same way everywhere");
 
 		// What a bolt brings to the gas is dense enough to change matter at first, and goes from lightning to fire by itself.
 		MagicField::Options Sealed;
@@ -1476,6 +1595,11 @@ namespace
 		const double AirAway = Gas.GetDensity(Camp.Position + Vec3{ 40.0, 0.0, 1.0 }, EMagicType::Air);
 		std::printf("       air magic in the campfire %.3f kg/m3, 40 m from it %.3f\n", AirAtFire, AirAway);
 		Expect(AirAtFire < 0.5 * AirAway, "the fire burns the air magic around it");
+		const double RisingOver = Gas.GetVelocity(Camp.Position + Vec3{ 0.0, 0.0, 6.0 }).Z;
+		const double RisingAway = Gas.GetVelocity(Camp.Position + Vec3{ 40.0, 0.0, 6.0 }).Z;
+		std::printf("       magic rises at %.2f m/s over the campfire, %.2f m/s 40 m off\n", RisingOver, RisingAway);
+		Expect(RisingOver > RisingAway + 0.3, "fire magic rises, and takes the magic over it up in a stream");
+		Expect(Length(MagicStirredWind(20.0, { 3.0, 0.0, 0.0 })) > 2.0 && Length(MagicStirredWind(0.02, { 3.0, 0.0, 0.0 })) < 0.02, "a stream of dense air magic is a wind, and thin air magic stirs none");
 
 		// Drops of light magic from a sun overhead come to rest in the gas.
 		const double LightBefore = Gas.GetTotalAmount(EMagicType::Light) + Gas.GetTotalAmount(EMagicType::Nature);

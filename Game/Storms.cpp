@@ -20,6 +20,9 @@ namespace Teinora
 		constexpr double ChannelReach = 120.0;  // metres of a channel over the ground that the gas gets to hear of
 		constexpr double ChannelSpacing = 4.0;  // metres, the size of a cell of that gas
 		constexpr double LayerStep = (Sim::CloudTop - Sim::CloudBottom) / 7.0;
+		constexpr double LayerThickness = Sim::CloudTop - Sim::CloudBottom; // metres the sheet's magic fills, up and down
+		constexpr double Spreading = 0.1;       // m/s for each kg/m3 a cell is denser than the next: magic's own pressure, which keeps clouds from piling up for ever
+		constexpr double KeptAloft = 0.8;       // kg/m3 of air and neutral magic the world keeps up at the clouds at least: air magic is at home at any height
 
 		double Saturate(double Value)
 		{
@@ -181,67 +184,212 @@ namespace Teinora
 		return Depth;
 	}
 
-	void StormField::ReadClouds(Cell& Item)
-	{
-		const double Middle = (Item.X + 0.5) * CellSize;
-		Item.Depth = MeasureCloud(Middle, (Item.Y + 0.5) * CellSize, Cover);
-		Item.Vapour = Saturate(Item.Depth / (Sim::CloudTop - Sim::CloudBottom) * 1.6);
-		Item.Volume = CellSize * CellSize * std::max(Item.Depth, 50.0);
-	}
-
 	void StormField::Fill(Cell& Item, std::int64_t X, std::int64_t Y)
 	{
 		Item.X = X;
 		Item.Y = Y;
-		ReadClouds(Item);
 
-		const double WorldX = (X + 0.5) * CellSize;
-		const double WorldY = (Y + 0.5) * CellSize;
-		const Sim::MagicMix Air = Sim::MagicBaseline({ WorldX, WorldY, Sim::CloudBottom }, {}, Sim::ReadMagicGround(WorldX, WorldY, Seed), Seed);
+		const double WorldX = (X + 0.5) * CellSize + Drift.X;
+		const double WorldY = (Y + 0.5) * CellSize + Drift.Y;
+		const Sim::MagicGround Ground = Sim::ReadMagicGround(WorldX, WorldY, Seed);
+		Item.Wet = 1.0 - Ground.Land;
+		const Sim::MagicMix Air = Sim::MagicBaseline({ WorldX, WorldY, Sim::CloudBottom }, {}, Ground, Seed);
 
+		// A cloud has long been where it is by the time anyone comes to it: the water magic it holds starts out as
+		// the noise of the clouds' shapes says, at the usual cover. Its charge starts from nothing.
 		Item.Mix = Sim::MagicMix{};
 		Item.Mix.Amounts[static_cast<int>(Sim::EMagicType::Air)] = Air.Get(Sim::EMagicType::Air);
-		Item.Mix.Amounts[static_cast<int>(Sim::EMagicType::Neutral)] = Air.Get(Sim::EMagicType::Neutral) + Sim::MagicHeldByVapour(Item.Vapour);
+		Item.Mix.Amounts[static_cast<int>(Sim::EMagicType::Neutral)] = Air.Get(Sim::EMagicType::Neutral);
 
-		// A cloud has long been what it is by the time anyone comes to it. Its charge starts from nothing.
+		// What the air is up there has long been half air magic and half neutral.
 		Sim::MagicMix Rates;
-		Rates.Amounts[static_cast<int>(Sim::EMagicType::Water)] = Sim::MagicVapourImprint(Item.Vapour);
 		Rates.Amounts[static_cast<int>(Sim::EMagicType::Air)] = 1.0 / Sim::MagicFadeTime(Sim::EMagicType::Air);
 		for (int Round = 0; Round < 30; ++Round)
 		{
 			Sim::UpdateMagicAspects(Item.Mix, Rates, 60.0);
 		}
+
+		Item.Kept = std::max(Item.Mix.GetTotal(), KeptAloft);
+
+		const double Shaped = MeasureCloud((X + 0.5) * CellSize, (Y + 0.5) * CellSize, Cover);
+		// The noise's thickest, some 2 km of full cloud, are thunderstorms.
+		const double Water = Shaped > 0.0 ? Sim::MagicCloudWater + (Sim::MagicStormWater - Sim::MagicCloudWater) * std::min(Shaped / 2000.0, 1.2) : 0.0;
+		Item.Mix.Amounts[static_cast<int>(Sim::EMagicType::Water)] = Water;
+		Item.Depth = Sim::CloudDepthFor(Water);
+		Item.Vapour = Saturate(Item.Depth / (Sim::CloudTop - Sim::CloudBottom) * 1.6);
+	}
+
+	void StormField::Carry(double Dt)
+	{
+		// The window of cells around the camera, by column and row. Nothing goes in or out at its edges.
+		const auto At = [this](int Column, int Row) -> Cell& { return CellAt(WindowX - Side / 2 + Column, WindowY - Side / 2 + Row); };
+		const auto Index = [](int Column, int Row) { return static_cast<std::size_t>(Column + Row * Side); };
+
+		// The wind up here blows differently from place to place. The sheet drifts with it over the camera,
+		// so what moves magic between cells is how it blows there as against that.
+		Carried.resize(static_cast<std::size_t>(Side) * Side);
+		for (int Row = 0; Row < Side; ++Row)
+		{
+			for (int Column = 0; Column < Side; ++Column)
+			{
+				Cell& Item = At(Column, Row);
+				const double WorldX = (Item.X + 0.5) * CellSize + Drift.X;
+				const double WorldY = (Item.Y + 0.5) * CellSize + Drift.Y;
+				Item.Flow = Sim::LargeWindAt(WorldX, WorldY, Now, Seed) * Sim::CloudWindRatio - SheetWind;
+				Carried[Index(Column, Row)] = Item.Mix;
+			}
+		}
+
+		// Across each face between two cells, what the wind there carries from the one it blows out of, and what
+		// magic's own pressure pushes from the denser to the thinner. What leaves one cell goes into the other.
+		// Water magic goes with the vapour, so with all of the wind. The rest only takes up part of it.
+		const auto Across = [&](int ColumnA, int RowA, int ColumnB, int RowB, double FlowA, double FlowB)
+		{
+			const Cell& A = At(ColumnA, RowA);
+			const Cell& B = At(ColumnB, RowB);
+			const double Wind = 0.5 * (FlowA + FlowB);
+			const double Pushed = -Spreading * (B.Mix.GetTotal() - A.Mix.GetTotal());
+			for (int Type = 0; Type < Sim::MagicTypeCount; ++Type)
+			{
+				const double Speed = Wind * (Type == static_cast<int>(Sim::EMagicType::Water) ? 1.0 : Sim::MagicWindShare) + Pushed;
+				const double Share = std::min(std::fabs(Speed) * Dt / CellSize, 0.2);
+				const bool bForward = Speed > 0.0;
+				const double Moved = (bForward ? A.Mix : B.Mix).Amounts[Type] * Share;
+				Carried[bForward ? Index(ColumnA, RowA) : Index(ColumnB, RowB)].Amounts[Type] -= Moved;
+				Carried[bForward ? Index(ColumnB, RowB) : Index(ColumnA, RowA)].Amounts[Type] += Moved;
+			}
+		};
+		// At the edges of the sheet the wind carries magic out, or brings in more of what lies beyond, which is like
+		// what lies just inside: the sheet is a window onto clouds that go on past it.
+		const auto Edge = [&](int Column, int Row, double Flow, bool bLowSide)
+		{
+			const Sim::MagicMix& Mix = At(Column, Row).Mix;
+			for (int Type = 0; Type < Sim::MagicTypeCount; ++Type)
+			{
+				const double Speed = Flow * (Type == static_cast<int>(Sim::EMagicType::Water) ? 1.0 : Sim::MagicWindShare);
+				const double Moved = Mix.Amounts[Type] * std::min(std::fabs(Speed) * Dt / CellSize, 0.2);
+				const bool bIn = (Speed > 0.0) == bLowSide;
+				Carried[Index(Column, Row)].Amounts[Type] += bIn ? Moved : -Moved;
+				CameIn += (bIn ? Moved : -Moved) * CellSize * CellSize * LayerThickness;
+			}
+		};
+		for (int Row = 0; Row < Side; ++Row)
+		{
+			for (int Column = 0; Column < Side; ++Column)
+			{
+				const Cell& Item = At(Column, Row);
+				if (Column + 1 < Side)
+				{
+					Across(Column, Row, Column + 1, Row, Item.Flow.X, At(Column + 1, Row).Flow.X);
+				}
+				if (Row + 1 < Side)
+				{
+					Across(Column, Row, Column, Row + 1, Item.Flow.Y, At(Column, Row + 1).Flow.Y);
+				}
+				if (Column == 0 || Column == Side - 1)
+				{
+					Edge(Column, Row, Item.Flow.X, Column == 0);
+				}
+				if (Row == 0 || Row == Side - 1)
+				{
+					Edge(Column, Row, Item.Flow.Y, Row == 0);
+				}
+			}
+		}
+
+		for (int Row = 0; Row < Side; ++Row)
+		{
+			for (int Column = 0; Column < Side; ++Column)
+			{
+				Sim::MagicMix& Mix = At(Column, Row).Mix;
+				Mix = Carried[Index(Column, Row)];
+				for (double& Amount : Mix.Amounts)
+				{
+					Amount = std::max(Amount, 0.0);
+				}
+			}
+		}
 	}
 
 	void StormField::Step(double Dt)
 	{
+		constexpr double Lifting = 0.02;     // kg/m3 a second of water magic that both suns high lift off open water up here
+		constexpr double RainingOut = 0.003; // per second, of what water magic is over MagicRainWater, that rain takes out
+		constexpr double KeepingTime = 60.0; // seconds for the world to make up the density it keeps up here
+
+		Carry(Dt);
+
 		for (Cell& Item : Cells)
 		{
+			const int Water = static_cast<int>(Sim::EMagicType::Water);
+			const int Neutral = static_cast<int>(Sim::EMagicType::Neutral);
+
+			// The suns lift water magic off open water, the more the warmer they make it. It comes from below, so
+			// it is new to the sheet.
+			Item.Mix.Amounts[Water] += Lifting * SunHeat * Item.Wet * Cover * Dt;
+
+			// The world keeps up the density of what is up here, as it does near the ground (MagicField's
+			// RestoreAmount): what the wind piles up of the rest goes back, and what it thins out comes back,
+			// as neutral. Only the water magic the vapour holds stays piled up.
+			const double Rest = Item.Mix.GetTotal() - Item.Mix.Amounts[Water];
+			const double Change = (Item.Kept - Rest) * (1.0 - std::exp(-Dt / KeepingTime));
+			if (Change >= 0.0)
+			{
+				Item.Mix.Amounts[Neutral] += Change;
+			}
+			else if (Rest > 0.0)
+			{
+				for (int Type = 0; Type < Sim::MagicTypeCount; ++Type)
+				{
+					Item.Mix.Amounts[Type] *= Type == Water ? 1.0 : 1.0 + Change / Rest;
+				}
+			}
+			CameIn += Change * CellSize * CellSize * LayerThickness;
+
+			// Rain takes water magic out of a cloud, down to the ground with its drops.
+			const double Over = Item.Mix.Amounts[Water] - Sim::MagicRainWater;
+			if (Over > 0.0)
+			{
+				const double Out = Over * (1.0 - std::exp(-RainingOut * Dt));
+				Item.Mix.Amounts[Water] -= Out;
+				RainedDown += Out * CellSize * CellSize * LayerThickness;
+			}
+
+			// A cloud is wherever water magic has gathered and has air or neutral magic to be held in.
+			const bool bHeld = Item.Mix.Get(Sim::EMagicType::Air) + Item.Mix.Amounts[Neutral] > 0.01;
+			Item.Depth = bHeld ? Sim::CloudDepthFor(Item.Mix.Amounts[Water]) : 0.0;
+			Item.Vapour = Saturate(Item.Depth / (Sim::CloudTop - Sim::CloudBottom) * 1.6);
 			if (Item.Depth <= 0.0)
 			{
+				// Out of any cloud, what the wind has brought here fades, charge and all, as anywhere in the air.
+				Sim::MagicMix Rates;
+				Rates.Amounts[static_cast<int>(Sim::EMagicType::Air)] = 1.0 / Sim::MagicFadeTime(Sim::EMagicType::Air);
+				Sim::UpdateMagicAspects(Item.Mix, Rates, Dt);
 				continue;
 			}
 
 			// Vapour goes with the air, and water magic with it. Air magic takes up only part of that.
 			const double Rising = Sim::CloudUpdraft(Item.Depth);
 			const double Speed = std::hypot(RubbingSpeed, Rising * (1.0 - Sim::MagicWindShare));
-			const double Rubbing = Sim::MagicRubPressure(Item.Mix.Get(Sim::EMagicType::Water), Item.Mix.Get(Sim::EMagicType::Air), Speed);
+			const double Rubbing = Sim::MagicRubPressure(Item.Mix.Amounts[Water], Item.Mix.Get(Sim::EMagicType::Air), Speed);
 
 			Sim::MagicMix Rates;
-			Rates.Amounts[static_cast<int>(Sim::EMagicType::Water)] = Sim::MagicVapourImprint(Item.Vapour);
+			Rates.Amounts[Water] = Sim::MagicVapourImprint(Item.Vapour);
 			Rates.Amounts[static_cast<int>(Sim::EMagicType::Air)] = 1.0 / Sim::MagicFadeTime(Sim::EMagicType::Air);
 			Rates.Amounts[static_cast<int>(Sim::EMagicType::Fire)] = Sim::MagicRubImprint(Rubbing);
 			Sim::UpdateMagicAspects(Item.Mix, Rates, Dt);
 
-			const double Pressure = Item.Mix.GetTotal() * Sim::MagicSoundSpeed * Sim::MagicSoundSpeed + Rubbing;
+			// The vapour holds the water magic to itself, so only the rest presses.
+			const double Pressure = (Item.Mix.GetTotal() - Item.Mix.Amounts[Water]) * Sim::MagicSoundSpeed * Sim::MagicSoundSpeed + Rubbing;
 			Sim::UpdateFireForms(Item.Mix, Pressure, Dt);
 		}
 
 		std::uniform_real_distribution<double> Share(0.0, 1.0);
 		for (Cell& Item : Cells)
 		{
+			// A bolt comes out of a cloud: charge with none to hold it only fades.
 			const double Charge = Item.Mix.Get(Sim::EMagicType::Lightning);
-			if (Charge >= Sim::MagicBreakdown && Share(Dice) < 1.0 - std::exp(-BreakdownRate * Charge / Sim::MagicBreakdown * Dt))
+			if (Item.Depth > 0.0 && Charge >= Sim::MagicBreakdown && Share(Dice) < 1.0 - std::exp(-BreakdownRate * Charge / Sim::MagicBreakdown * Dt))
 			{
 				Discharge(Item.X, Item.Y);
 			}
@@ -328,30 +476,26 @@ namespace Teinora
 		AddBolt(Vec3{ Point.X, Point.Y, std::max(CloudBase - BaseFall * Away * Away, Strike.Z + 200.0) }, Strike, Now - LeaderTime);
 	}
 
-	void StormField::Update(const Vec3& Focus, const Vec3& CloudDrift, const Vec3& Wind, double CloudCover, double Time)
+	void StormField::Update(const Vec3& Focus, const Vec3& CloudDrift, const Vec3& Wind, double CloudCover, double InSunHeat, double Time)
 	{
 		Eye = Focus;
 		Drift = CloudDrift;
 		Now = Time;
+		SunHeat = InSunHeat;
+		SheetWind = Wind * Sim::CloudWindRatio;
 		RubbingSpeed = Length(Wind) * (1.0 - Sim::MagicWindShare);
-
-		const bool bCoverChanged = CloudCover != Cover;
 		Cover = CloudCover;
 
-		const auto CenterX = static_cast<std::int64_t>(std::floor((Focus.X - Drift.X) / CellSize));
-		const auto CenterY = static_cast<std::int64_t>(std::floor((Focus.Y - Drift.Y) / CellSize));
-		for (std::int64_t Y = CenterY - Side / 2; Y < CenterY + Side / 2; ++Y)
+		WindowX = static_cast<std::int64_t>(std::floor((Focus.X - Drift.X) / CellSize));
+		WindowY = static_cast<std::int64_t>(std::floor((Focus.Y - Drift.Y) / CellSize));
+		for (std::int64_t Y = WindowY - Side / 2; Y < WindowY + Side / 2; ++Y)
 		{
-			for (std::int64_t X = CenterX - Side / 2; X < CenterX + Side / 2; ++X)
+			for (std::int64_t X = WindowX - Side / 2; X < WindowX + Side / 2; ++X)
 			{
 				Cell& Item = CellAt(X, Y);
 				if (Item.X != X || Item.Y != Y)
 				{
 					Fill(Item, X, Y);
-				}
-				else if (bCoverChanged)
-				{
-					ReadClouds(Item);
 				}
 			}
 		}
@@ -477,9 +621,25 @@ namespace Teinora
 			Result.CloudDepth = Item.Depth;
 			Result.Speed = std::hypot(RubbingSpeed, Sim::CloudUpdraft(Item.Depth) * (1.0 - Sim::MagicWindShare));
 			Result.Rubbing = Sim::MagicRubPressure(Item.Mix.Get(Sim::EMagicType::Water), Item.Mix.Get(Sim::EMagicType::Air), Result.Speed);
+			Result.Rain = Sim::RainCarries * Sim::GetWeather(Item.Mix.Get(Sim::EMagicType::Water), 0.0).Rain;
 			Result.Mix = Item.Mix;
 		}
 		return Result;
+	}
+
+	void StormField::WriteCloudMap(std::vector<float>& Out, double& OutCornerX, double& OutCornerY) const
+	{
+		Out.resize(static_cast<std::size_t>(Side) * Side);
+		for (int Row = 0; Row < Side; ++Row)
+		{
+			for (int Column = 0; Column < Side; ++Column)
+			{
+				const Cell& Item = CellAt(WindowX - Side / 2 + Column, WindowY - Side / 2 + Row);
+				Out[static_cast<std::size_t>(Column + Row * Side)] = static_cast<float>(Item.Depth / Sim::CloudDepthFor(Sim::MagicStormWater));
+			}
+		}
+		OutCornerX = (WindowX - Side / 2) * CellSize + Drift.X;
+		OutCornerY = (WindowY - Side / 2) * CellSize + Drift.Y;
 	}
 
 	double StormField::GetTotalAmount() const
@@ -487,8 +647,8 @@ namespace Teinora
 		double Total = 0.0;
 		for (const Cell& Item : Cells)
 		{
-			Total += Item.Mix.GetTotal() * Item.Volume;
+			Total += Item.Mix.GetTotal();
 		}
-		return Total;
+		return Total * CellSize * CellSize * LayerThickness;
 	}
 }

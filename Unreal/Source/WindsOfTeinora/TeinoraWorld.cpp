@@ -262,6 +262,7 @@ struct FTeinoraSimulation
 	Teinora::MagicVolume FarMagic;
 	std::vector<Teinora::MagicPush> MagicPushes;
 	std::vector<Teinora::MagicDeposit> MagicDeposits;
+	std::vector<Teinora::MagicGlow> HeldGlows; // magic held inside things, for the magic view
 	double Time = 0.0;
 	double Accumulator = 0.0;
 	double Hour = 10.0;
@@ -288,6 +289,7 @@ struct FTeinoraSimulation
 	float RainShown = -1.0f;
 	Sim::Weather Weather;        // what the clouds overhead make of it, as in the standalone game
 	double ForcedRain = -1.0;    // or what an automated run asks for
+	double CloudCoverShown = -1e9; // the cover the clouds were last given, which follows the water magic overhead
 	TArray<FBodyGroup> Groups;
 	TArray<FVector> WaterVertices;
 	TArray<FVector> WaterNormals;
@@ -311,7 +313,7 @@ void ATeinoraWorld::BeginPlay()
 	const Teinora::SurfaceTextures Surfaces = Teinora::MakeSurfaceTextures(SurfaceTextureSize);
 	UMaterialInstanceDynamic* Ground = UMaterialInstanceDynamic::Create(LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Terrain.M_Terrain")), this);
 	UMaterialInstanceDynamic* Leaves = UMaterialInstanceDynamic::Create(LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teinora/M_Leaf.M_Leaf")), this);
-	const TCHAR* const LayerNames[] = { TEXT("Sand"), TEXT("Grass"), TEXT("Rock"), TEXT("Snow"), TEXT("Bark"), TEXT("Leaf"), TEXT("Needle") };
+	const TCHAR* const LayerNames[] = { TEXT("Sand"), TEXT("Grass"), TEXT("Rock"), TEXT("Snow"), TEXT("Bark"), TEXT("Leaf"), TEXT("Needle"), TEXT("GrassBlade") };
 	for (int32 Layer = 0; Layer < Surfaces.Layers; ++Layer)
 	{
 		UTexture2D* Colors = MakeSurfaceTexture(Surfaces.Colors, Surfaces, Layer);
@@ -509,7 +511,7 @@ void ATeinoraWorld::ShowChunk(int32 X, int32 Y, const Teinora::ChunkMesh& Mesh)
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const Teinora::TerrainVertex& Source = Mesh.Vertices[Index];
-		const bool bLeaf = Index >= FirstLeaf && Index < LastLeaf;
+		const bool bLeaf = (Index >= FirstLeaf && Index < LastLeaf) || Source.Normal[3] == Teinora::TerrainGrass; // grass cards follow the leaves
 		FProcMeshSection& Section = bLeaf ? Leaves : Solid;
 
 		FProcMeshVertex Target;
@@ -519,7 +521,7 @@ void ATeinoraWorld::ShowChunk(int32 X, int32 Y, const Teinora::ChunkMesh& Mesh)
 		if (bLeaf)
 		{
 			Target.UV0 = FVector2D(Source.Color[0] / 255.0, Source.Color[1] / 255.0);                                // where on the card
-			Target.UV1 = FVector2D(Source.Normal[3] == Teinora::TerrainNeedle ? 1.0 : 0.0, Source.Color[2] / 255.0); // leaf or needle, and how light
+			Target.UV1 = FVector2D(Source.Normal[3] == Teinora::TerrainNeedle ? 1.0 : (Source.Normal[3] == Teinora::TerrainGrass ? 0.5 : 0.0), Source.Color[2] / 255.0); // leaf, grass or needle, and how light
 		}
 		else
 		{
@@ -834,6 +836,7 @@ void ATeinoraWorld::UpdateLiquid(const Vec3& Eye)
 		Surface->SetVectorParameterValue(TEXT("Drift"), Drift);
 		Surface->SetVectorParameterValue(TEXT("EyeAt"), FLinearColor(EyeAt));
 		Surface->SetVectorParameterValue(TEXT("SkyGlow"), Sim->WaterLight * LowSky);
+		Surface->SetScalarParameterValue(TEXT("MagicView"), MagicFade);
 		Surface->SetScalarParameterValue(TEXT("BedReach"), BedReach);
 	}
 }
@@ -889,7 +892,7 @@ void ATeinoraWorld::CreateFires()
 void ATeinoraWorld::UpdateStorms(const ATeinoraCamera& Eye)
 {
 	const Vec3 Here = Eye.GetEye();
-	Sim->Storms->Update(Here, Sim->CloudDrift, Sim::WindAt(Here, Sim->Time, Sim::WorldSeed), StormCover, Sim->Time);
+	Sim->Storms->Update(Here, Sim->CloudDrift, Sim::WindAt(Here, Sim->Time, Sim::WorldSeed), StormCover, Teinora::GetSunHeat(Sim->Hour, Sim->Day), Sim->Time);
 
 	// The engine's clouds go with the same wind: their pattern is moved under them by as far as it has carried them.
 	// The pattern covers Layout_CloudGlobalScale kilometres, and its placement is in shares of that.
@@ -1301,13 +1304,13 @@ void ATeinoraWorld::UpdateBodies()
 
 void ATeinoraWorld::UpdateWeather(ATeinoraCamera& Eye, double WorldDt)
 {
-	// The weather follows the cloud overhead, as in the standalone game's Main.cpp: deep cloud rains, and a storm
-	// pours, covers more of the sky and turns the clouds dark.
+	// The weather follows the water magic in the cloud overhead, as in the standalone game's Main.cpp: over 30 kg/m3
+	// it rains, and over 50 a storm pours, covers more of the sky and turns the clouds dark.
 	Sim::Weather Wanted;
 	if (Sim->Storms != nullptr && StormCover > 0.0)
 	{
 		const Teinora::StormField::Reading Cloud = Sim->Storms->Read(Eye.GetEye());
-		Wanted = Sim::GetWeather(Cloud.CloudDepth, Cloud.Mix.Get(Sim::EMagicType::Lightning));
+		Wanted = Sim::GetWeather(Cloud.Mix.Get(Sim::EMagicType::Water), Cloud.Mix.Get(Sim::EMagicType::Lightning));
 	}
 	const double Share = FMath::Min(WorldDt / Sim::WeatherChangeTime, 1.0);
 	Sim->Weather.Rain += (Wanted.Rain - Sim->Weather.Rain) * Share;
@@ -1317,10 +1320,37 @@ void ATeinoraWorld::UpdateWeather(ATeinoraCamera& Eye, double WorldDt)
 		Sim->Weather.Rain = Sim->ForcedRain;
 		Sim->Weather.Storm = Sim->ForcedRain;
 	}
-
-	if (CloudMaterial != nullptr)
+	if (Sim->Magic != nullptr)
 	{
-		CloudMaterial->SetScalarParameterValue(TEXT("Cloud_GlobalCoverage"), static_cast<float>((StormCover + Sim->Weather.Storm * Sim::StormCloudCover - 1.0) * CloudCoverReach));
+		Sim->Magic->SetRain(Sim::RainCarries * Sim->Weather.Rain); // the drops bring water magic down
+	}
+
+	if (CloudMaterial != nullptr && Sim->Storms != nullptr && StormCover > 0.0)
+	{
+		// Unreal's clouds are one layer over the whole sky, so they take the cover the water magic over the
+		// camera and a few kilometres round it makes, as the standalone game's sky draws it there.
+		double Cover = 0.0;
+		int32 Count = 0;
+		for (int32 Ring = 0; Ring <= 2; ++Ring)
+		{
+			const int32 Spots = Ring == 0 ? 1 : 8;
+			for (int32 Spot = 0; Spot < Spots; ++Spot)
+			{
+				const double Angle = Spot * UE_DOUBLE_PI * 2.0 / Spots;
+				const Vec3 Where = Eye.GetEye() + Vec3{ FMath::Cos(Angle), FMath::Sin(Angle), 0.0 } * (Ring * 1500.0);
+				const double Gathered = Sim->Storms->Read(Where).CloudDepth / Sim::CloudDepthFor(Sim::MagicStormWater);
+				Cover += Sim::ShownCloudCover(Gathered) * (Ring == 0 ? 4.0 : 1.0);
+				Count += Ring == 0 ? 4 : 1;
+			}
+		}
+		Cover /= Count;
+		if (Sim->ForcedRain >= 0.0)
+		{
+			Cover = Sim::ShownCloudCover(0.5 + 0.5 * Sim->ForcedRain); // rain asked for by a run comes out of an overcast sky
+		}
+		const double Shown = FMath::Lerp(Sim->CloudCoverShown < -1e8 ? Cover : Sim->CloudCoverShown, Cover, FMath::Min(WorldDt / Sim::WeatherChangeTime, 1.0));
+		Sim->CloudCoverShown = Shown;
+		CloudMaterial->SetScalarParameterValue(TEXT("Cloud_GlobalCoverage"), static_cast<float>(FMath::Clamp((Shown - 1.0) * CloudCoverReach, -0.6, 1.0)));
 		CloudMaterial->SetScalarParameterValue(TEXT("StormClouds"), static_cast<float>(Sim->Weather.Storm));
 	}
 
@@ -1360,9 +1390,10 @@ void ATeinoraWorld::UpdateMagic(ATeinoraCamera& Eye, float DeltaSeconds)
 	{
 		const Teinora::MagicVolume& Near = Sim->NearMagic;
 		const Teinora::MagicVolume& Far = Sim->FarMagic;
+		Sim->World.CollectHeldMagic(Eye.GetEye(), Sim->HeldGlows, 8);
 		Eye.ShowMagic(MagicFade, Near.PeakDensity > Sim::MagicDewPoint, MagicNearAtlas, MagicFarAtlas,
 			Near.Corner, Vec3{ Near.SizeX * Near.CellSize, Near.SizeY * Near.CellSize, Near.SizeZ * Near.CellSize },
-			Far.Corner, Vec3{ Far.SizeX * Far.CellSize, Far.SizeY * Far.CellSize, Far.SizeZ * Far.CellSize }, Sim->Time);
+			Far.Corner, Vec3{ Far.SizeX * Far.CellSize, Far.SizeY * Far.CellSize, Far.SizeZ * Far.CellSize }, Sim->Time, Sim->HeldGlows);
 	}
 }
 

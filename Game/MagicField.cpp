@@ -139,6 +139,12 @@ namespace Teinora
 		}
 	}
 
+	Vec3 GetMagicColor(Sim::EMagicType Type)
+	{
+		const double* Color = MagicColors[static_cast<int>(Type)];
+		return { Color[0], Color[1], Color[2] };
+	}
+
 	bool MagicVolume::Contains(const Vec3& Position) const
 	{
 		const double X = (Position.X - Corner.X) / CellSize;
@@ -867,6 +873,7 @@ namespace Teinora
 		if (Settings.bOpen)
 		{
 			RainLight(Span);
+			RainWater(Span);
 			ActOnMatter(Span);
 		}
 
@@ -1203,6 +1210,29 @@ namespace Teinora
 		}
 	}
 
+	void MagicField::RainWater(float Dt)
+	{
+		// Each drop of rain carries water magic down, and leaves it where it lands, on land or water alike.
+		if (RainFlux <= 0.0)
+		{
+			return;
+		}
+		const int Water = static_cast<int>(Sim::EMagicType::Water);
+		const float Added = static_cast<float>(RainFlux * Dt / CellSize);
+		for (int Y = 0; Y < GridY; ++Y)
+		{
+			for (int X = 0; X < GridX; ++X)
+			{
+				const Sim::MagicGround& Below = Columns[static_cast<std::size_t>(Wrap(OriginX + X, GridX) + Wrap(OriginY + Y, GridY) * GridX)];
+				const int Z = FloorToInt(Below.Surface / CellSize) - OriginZ;
+				if (Z >= 0 && Z < GridZ)
+				{
+					Amounts[Water][CellIndex(X, Y, Z)] += Added;
+				}
+			}
+		}
+	}
+
 	void MagicField::ActOnMatter(float Dt)
 	{
 		const int Fire = static_cast<int>(Sim::EMagicType::Fire);
@@ -1277,6 +1307,12 @@ namespace Teinora
 	{
 		std::lock_guard Lock(Mutex);
 		PendingDrops = Sources;
+	}
+
+	void MagicSimulation::SetRain(double Flux)
+	{
+		std::lock_guard Lock(Mutex);
+		PendingRain = Flux;
 	}
 
 	void MagicSimulation::AddPushes(const std::vector<MagicPush>& Pushes)
@@ -1402,6 +1438,7 @@ namespace Teinora
 				Deposits.swap(PendingDeposits);
 				Field.SetBurning(PendingBurning);
 				Field.SetLightDrops(PendingDrops);
+				Field.SetRain(PendingRain);
 				if (!bWarmedUp)
 				{
 					Clock = TargetTime;

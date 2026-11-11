@@ -17,6 +17,7 @@ namespace Teinora
 	{
 		TerrainPlain = 0,   // the colour alone
 		TerrainLeaf = 8,    // a card cut out by the leaf texture: red and green are its coordinates, blue its tone
+		TerrainGrass = 12,  // the same with the grass blades texture, for a card standing on the ground
 		TerrainNeedle = 16, // the same with the needle texture
 		TerrainBark = 32,   // the colour over the bark texture
 		TerrainStone = 64,  // the colour over the rock texture
@@ -130,6 +131,14 @@ namespace Teinora
 		double Shade = 1.0;     // how much of the light on it it gives back: all for steam, less for smoke
 		double Firelight = 0.0; // how much a fire's light reaches it, as a share of that light at the flame
 		double Glow = 0.0;      // light of its own, in the colour of light magic: a firefly is a small round glowing puff
+	};
+
+	/** Magic held inside a thing, as the magic view sees it glow through it: a ball of the colour of its aspect. */
+	struct MagicGlow
+	{
+		Vec3 Point;
+		double Radius = 0.0; // metres
+		Vec3 Color;          // linear, already as bright as the magic it holds makes it
 	};
 
 	/** The colour of a flame's light, which HotLight carries for each fire. Also in Shaders/Puffs.hlsl and Unreal/Scripts/make_content.py. */

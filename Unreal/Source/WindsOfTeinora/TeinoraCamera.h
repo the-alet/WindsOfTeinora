@@ -5,7 +5,10 @@
 
 THIRD_PARTY_INCLUDES_START
 #include "Gaze.h"
+#include "Render/SceneTypes.h"
 THIRD_PARTY_INCLUDES_END
+
+#include <vector>
 
 #include "TeinoraCamera.generated.h"
 
@@ -39,7 +42,7 @@ public:
 
 	/** Feeds the magic view: how far it has faded in, and where the boxes of magic are. */
 	void ShowMagic(float ViewAmount, bool bBends, UTexture2D* NearAtlas, UTexture2D* FarAtlas, const Teinora::Vec3& NearCorner, const Teinora::Vec3& NearSize,
-		const Teinora::Vec3& FarCorner, const Teinora::Vec3& FarSize, double Time);
+		const Teinora::Vec3& FarCorner, const Teinora::Vec3& FarSize, double Time, const std::vector<Teinora::MagicGlow>& Glows);
 
 	/** Feeds the rain: how hard it falls, how far the wind slants it across the view, and the time it falls by. */
 	void ShowRain(float Amount, float Slant, double Time);

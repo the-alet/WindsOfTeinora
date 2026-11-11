@@ -22,7 +22,7 @@
 namespace Teinora::Rhi
 {
 	inline constexpr std::uint32_t MaxPushConstantBytes = 64;
-	inline constexpr std::uint32_t MaxConstantBytes = 4096;
+	inline constexpr std::uint32_t MaxConstantBytes = 8192; // half of the least that Vulkan promises a uniform buffer may be
 	inline constexpr int MaxTextureBindings = 6;
 	inline constexpr std::uint32_t MaxRayBuffers = 2048;
 

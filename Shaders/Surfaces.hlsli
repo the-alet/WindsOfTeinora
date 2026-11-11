@@ -16,6 +16,13 @@ static const float SnowLayer = 3.0;
 static const float BarkLayer = 4.0;
 static const float LeafLayer = 5.0;
 static const float NeedleLayer = 6.0;
+static const float GrassBladeLayer = 7.0;
+
+/** Which texture a card of this ETerrainMaterial is cut out by: leaves, grass blades or needles. */
+float GetCardLayer(float Material)
+{
+	return Material > 0.11 ? NeedleLayer : (Material > 0.08 ? GrassBladeLayer : LeafLayer);
+}
 
 // Whole fractions of 4096 m, the distance the camera position wraps at in the shaders.
 static const float TileSize = 8.0;
@@ -129,7 +136,10 @@ Shaded ShadeGround(float3 World, float3 Normal, Footprint Pixel, float Brightnes
 
 	const float3 Dry = float3(1.16, 1.0, 0.8);
 	const float3 Green = float3(0.82, 1.0, 1.1);
-	Result.Color *= lerp(float3(1.0, 1.0, 1.0), lerp(Dry, Green, Lush), Grass);
+	// Near the eye the blades of the grass cards give the green, and what shows between them is the soil they
+	// grow from. Far off, where there are no cards, the ground itself looks like the grass.
+	const float3 Soil = float3(0.66, 0.5, 0.34);
+	Result.Color *= lerp(float3(1.0, 1.0, 1.0), lerp(Dry, Green, Lush) * lerp(Soil, float3(1.0, 1.0, 1.0), Pixel.Wide), Grass);
 	Result.Color *= (0.8 + 0.4 * Broad) * Brightness;
 
 	// Ground the water has been at stays dark and has a shine to it.
@@ -221,13 +231,9 @@ Shaded ShadeMaterial(float Material, float3 Tint, float3 World, float3 Normal, F
 		AddProjected(Result, BarkLayer, World * float3(1.6, 1.6, 0.6), Normal, Pixel, 1.0, 0.04);
 		Result.Color *= Tint * 4.5; // and the bark, about the same
 	}
-	else if (Material > 0.095)
-	{
-		Result = ShadeCard(NeedleLayer, Tint, Pixel);
-	}
 	else if (Material > 0.03)
 	{
-		Result = ShadeCard(LeafLayer, Tint, Pixel);
+		Result = ShadeCard(GetCardLayer(Material), Tint, Pixel);
 	}
 	else
 	{

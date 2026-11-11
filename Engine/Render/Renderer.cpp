@@ -405,11 +405,16 @@ namespace Teinora
 		Float4 SkyShift;
 		Float4 Coronas[2];
 		Float4 Weather;
+		Float4 Shade;
+		Float4 GlowPoints[MaxMagicGlows];
+		Float4 GlowColors[MaxMagicGlows];
+		Float4 CloudMapPlace;
+		std::uint8_t CloudMap[CloudMapSide * CloudMapSide];
 	};
-
 	Renderer::Renderer(Rhi::Device& InDevice, std::uint32_t InWindowWidth, std::uint32_t InWindowHeight, const RenderSettings& InSettings)
 		: Device(InDevice), Vendor(InDevice.GetVendorFeatures()), Settings(InSettings), WindowWidth(InWindowWidth), WindowHeight(InWindowHeight)
 	{
+		static_assert(sizeof(FrameData) <= Rhi::MaxConstantBytes, "the frame's constants must fit what a constant buffer is bound with");
 		CreatePipelines();
 		CreateMeshes();
 		CreateFontTexture();
@@ -1002,16 +1007,18 @@ namespace Teinora
 				{
 					Device.Draw(Chunk.ShadowVertexCount - Chunk.SolidVertexCount, 1, Chunk.SolidVertexCount);
 					TriangleCount += (Chunk.ShadowVertexCount - Chunk.SolidVertexCount) / 3;
+
+					// Grass, cut out like the leaves, but too much of it to cast shadows.
+					if (!bShadowPass && Chunk.VertexCount > Chunk.ShadowVertexCount)
+					{
+						Device.Draw(Chunk.VertexCount - Chunk.ShadowVertexCount, 1, Chunk.ShadowVertexCount);
+						TriangleCount += (Chunk.VertexCount - Chunk.ShadowVertexCount) / 3;
+					}
 				}
 				else
 				{
 					Device.Draw(Chunk.SolidVertexCount);
 					TriangleCount += Chunk.SolidVertexCount / 3;
-					if (!bShadowPass && Chunk.VertexCount > Chunk.ShadowVertexCount)
-					{
-						Device.Draw(Chunk.VertexCount - Chunk.ShadowVertexCount, 1, Chunk.ShadowVertexCount); // grass
-						TriangleCount += (Chunk.VertexCount - Chunk.ShadowVertexCount) / 3;
-					}
 				}
 			}
 		}
@@ -1540,7 +1547,26 @@ namespace Teinora
 		Frame.Sun2Color = ToFloat4(Sky.Sun2Color);
 		Frame.Coronas[0] = ToFloat4(Sky.SunCorona);
 		Frame.Coronas[1] = ToFloat4(Sky.Sun2Corona);
-		Frame.Weather = { static_cast<float>(View.Rain), static_cast<float>(View.Storm), static_cast<float>(View.RainSlant), 0.0f };
+		Frame.Weather = { static_cast<float>(View.Rain), static_cast<float>(View.Storm), static_cast<float>(View.RainSlant), View.MagicView };
+		Frame.Shade = { static_cast<float>(View.Overcast), 0.0f, 0.0f, 0.0f };
+		for (std::size_t Index = 0; Index < MaxMagicGlows; ++Index)
+		{
+			const bool bThere = View.MagicGlows != nullptr && Index < View.MagicGlows->size();
+			const MagicGlow Glow = bThere ? (*View.MagicGlows)[Index] : MagicGlow{};
+			const Float3 Point = ToFloat(Glow.Point - View.CameraPosition);
+			Frame.GlowPoints[Index] = { Point.X, Point.Y, Point.Z, static_cast<float>(Glow.Radius) };
+			Frame.GlowColors[Index] = ToFloat4(ToFloat(Glow.Color));
+		}
+		Frame.CloudMapPlace = {};
+		if (View.CloudMap != nullptr && View.CloudMap->size() == static_cast<std::size_t>(CloudMapSide) * CloudMapSide)
+		{
+			Frame.CloudMapPlace = { static_cast<float>(View.CloudMapCornerX - View.CameraPosition.X), static_cast<float>(View.CloudMapCornerY - View.CameraPosition.Y),
+				static_cast<float>(View.CloudMapCell), 1.0f };
+			for (std::size_t Index = 0; Index < View.CloudMap->size(); ++Index)
+			{
+				Frame.CloudMap[Index] = static_cast<std::uint8_t>(std::clamp((*View.CloudMap)[Index] / CloudMapTop, 0.0f, 1.0f) * 255.0f + 0.5f);
+			}
+		}
 		Frame.PlanetDirection = ToFloat4(ToFloat(Sky.PlanetDirection));
 		Frame.PlanetColor = ToFloat4(Sky.PlanetColor);
 

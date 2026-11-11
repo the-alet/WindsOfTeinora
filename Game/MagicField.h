@@ -63,6 +63,9 @@ namespace Teinora
 		double Sample(const std::vector<float>& Field, const Vec3& Position) const;
 	};
 
+	/** The colour each kind of magic shows in the magic view, linear. */
+	Vec3 GetMagicColor(Sim::EMagicType Type);
+
 	/** A push on the magic around a point, in N s: what matter does back to it. */
 	struct MagicPush
 	{
@@ -131,6 +134,9 @@ namespace Teinora
 		/** Where the drops of light magic from the suns and the planet are coming from, see GetLightDropSources. */
 		void SetLightDrops(const std::array<LightDropSource, 3>& Sources) { DropSources = Sources; }
 
+		/** How much water magic the rain brings down, in kg a second onto each m2 of ground. */
+		void SetRain(double Flux) { RainFlux = Flux; }
+
 		/** Adds on where dense fire has met plants or water since the last call. */
 		void TakeContacts(std::vector<FireContact>& Out);
 
@@ -155,6 +161,7 @@ namespace Teinora
 		void UpdateAspects(float Dt);
 		void GatherHeat();
 		void RainLight(float Dt);
+		void RainWater(float Dt);
 		void ActOnMatter(float Dt);
 		bool IsInGrid(const Vec3& Position) const;
 		void Transport(int Axis, float Dt);
@@ -182,6 +189,7 @@ namespace Teinora
 		std::vector<Sim::HotSpot> HotSpots;
 		std::vector<Sim::HotSpot> Burning;
 		std::array<LightDropSource, 3> DropSources{};
+		double RainFlux = 0.0;
 		std::mt19937 Dice{ 0x5eed1u };
 		std::vector<FireContact> Contacts;
 		double SunHeat = 0.0;
@@ -243,6 +251,9 @@ namespace Teinora
 		/** Where drops of light magic are coming from now, see GetLightDropSources. */
 		void SetLightDrops(const std::array<LightDropSource, 3>& Sources);
 
+		/** How much water magic the rain is bringing down, in kg a second onto each m2 of ground. */
+		void SetRain(double Flux);
+
 		/** Hands over where dense fire has met plants or water since the last call. */
 		void TakeContacts(std::vector<FireContact>& Out);
 
@@ -274,6 +285,7 @@ namespace Teinora
 		std::vector<MagicDeposit> PendingDeposits;
 		std::vector<Sim::HotSpot> PendingBurning;
 		std::array<LightDropSource, 3> PendingDrops{};
+		double PendingRain = 0.0;
 		std::vector<FireContact> FinishedContacts;
 		bool bStarted = false;
 		bool bReady = false;

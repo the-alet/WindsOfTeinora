@@ -35,7 +35,12 @@
 	float4 CloudDrift;     // xy how far the wind aloft has carried the clouds, wrapped to 4096 m; z how far they have changed, from 0 to 1
 	float4 SkyShift;       // what to add to a direction from the sky's middle to see it from the camera, see SeenFrom in SceneTypes.h
 	float4 Coronas[2];     // the light of each sun's corona, which the planet in front of a sun does not take away
-	float4 Weather;        // x how hard it rains, from 0 to 1, y how stormy, z how far the wind slants the rain across the screen, w unused
+	float4 Weather;        // x how hard it rains, from 0 to 1, y how stormy, z how far the wind slants the rain across the screen, w how far the magic view has faded in
+	float4 Shade;          // x how overcast the sky around the camera is, from 0 for clear or scattered cloud to 1 under a closed sky
+	float4 GlowPoints[8];  // magic held inside things, relative to the camera; w the radius, 0 for none. MaxMagicGlows in Renderer.h
+	float4 GlowColors[8];  // and its colour and brightness
+	float4 CloudMapPlace;  // the cloud map's low corner relative to the camera in xy, z the size of its cells, w 1 when there is one
+	uint4 CloudMap[144];   // how much cloud the water magic up there makes, 48 by 48 bytes from 0 to 1.3, see StormField::WriteCloudMap
 };
 
 [[vk::binding(1, 0)]] cbuffer PassData : register(b1)
@@ -102,7 +107,12 @@ float3 ApplyFog(float3 Color, float3 Relative)
 	// By day the air in front of a far hill glows as the sky does. At night the little light there is comes
 	// from the whole depth of the sky behind a hill, and the few kilometres of air in front of it hold far
 	// less: a hill stands against the night sky as a dark shape rather than fading into its glow.
-	const float3 Air = SkyColor(float3(Direction.xy, max(Direction.z, 0.02))) * lerp(1.0, 0.35, Night);
+	float3 Air = SkyColor(float3(Direction.xy, max(Direction.z, 0.02))) * lerp(1.0, 0.35, Night);
+
+	// Under a closed sky no sun lights the haze: it is as grey as the cloud over it, and a good deal darker
+	// than the bright horizon of a clear day, so far hills sink into grey and not into white.
+	const float Overcast = Shade.x;
+	Air = lerp(Air, dot(Air, float3(0.2126, 0.7152, 0.0722)).xxx * float3(0.92, 0.98, 1.08) * 0.5, Overcast);
 	return lerp(Color, Air, Amount);
 }
 
