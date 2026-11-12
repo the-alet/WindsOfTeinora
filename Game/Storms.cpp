@@ -627,6 +627,17 @@ namespace Teinora
 		return Result;
 	}
 
+	double StormField::GetGathered(const Vec3& Position, double Radius) const
+	{
+		double Depth = Read(Position).CloudDepth * 4.0;
+		for (int Spot = 0; Spot < 8; ++Spot)
+		{
+			const double Angle = Spot * Teinora::Pi / 4.0;
+			Depth += Read(Position + Vec3{ std::cos(Angle), std::sin(Angle), 0.0 } * Radius).CloudDepth;
+		}
+		return Depth / 12.0 / Sim::CloudDepthFor(Sim::MagicStormWater);
+	}
+
 	void StormField::WriteCloudMap(std::vector<float>& Out, double& OutCornerX, double& OutCornerY) const
 	{
 		Out.resize(static_cast<std::size_t>(Side) * Side);

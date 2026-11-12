@@ -139,12 +139,6 @@ namespace Teinora
 		}
 	}
 
-	Vec3 GetMagicColor(Sim::EMagicType Type)
-	{
-		const double* Color = MagicColors[static_cast<int>(Type)];
-		return { Color[0], Color[1], Color[2] };
-	}
-
 	bool MagicVolume::Contains(const Vec3& Position) const
 	{
 		const double X = (Position.X - Corner.X) / CellSize;

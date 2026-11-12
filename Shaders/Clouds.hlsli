@@ -89,8 +89,10 @@ float GetGathered(float2 Relative)
 	const int2 Cell = int2(Base);
 	const float Here = lerp(lerp(ReadCloudMap(Cell), ReadCloudMap(Cell + int2(1, 0)), Part.x),
 		lerp(ReadCloudMap(Cell + int2(0, 1)), ReadCloudMap(Cell + int2(1, 1)), Part.x), Part.y);
+	// Past the sheet's edge the sky goes on as it is at the edge for some kilometres, since weather is wider than
+	// the sheet, and only then comes to what the setting says.
 	const float2 FromEdge = min(Place, CloudMapSide - 1.0 - Place);
-	return lerp(Usual, Here, saturate(min(FromEdge.x, FromEdge.y) / 4.0));
+	return lerp(Usual, Here, saturate(1.0 + min(FromEdge.x, FromEdge.y) / 30.0));
 }
 
 /**

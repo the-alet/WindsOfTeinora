@@ -406,8 +406,7 @@ namespace Teinora
 		Float4 Coronas[2];
 		Float4 Weather;
 		Float4 Shade;
-		Float4 GlowPoints[MaxMagicGlows];
-		Float4 GlowColors[MaxMagicGlows];
+		Float4 WhiteBalance;
 		Float4 CloudMapPlace;
 		std::uint8_t CloudMap[CloudMapSide * CloudMapSide];
 	};
@@ -600,7 +599,6 @@ namespace Teinora
 		UnderwaterPipeline = Device.CreatePipeline(Underwater);
 		CopyPipeline = Device.CreatePipeline(MakeFullscreen("CopyPS", EFormat::RGBA16Float));
 
-		MagicPipeline = Device.CreatePipeline(MakeFullscreen("MagicPS", EFormat::RGBA16Float));
 		MagicBendPipeline = Device.CreatePipeline(MakeFullscreen("MagicBendPS", EFormat::RG16Float));
 		TonemapPipeline = Device.CreatePipeline(MakeFullscreen("TonemapPS", EFormat::RGBA8Unorm));
 		BlurPipeline = Device.CreatePipeline(MakeFullscreen("BlurPS", EFormat::RGBA8Unorm));
@@ -791,8 +789,6 @@ namespace Teinora
 		// Magic is soft enough for half the resolution, and that keeps its long rays cheap.
 		Desc.Width = std::max<std::uint32_t>(PostWidth / 2, 1);
 		Desc.Height = std::max<std::uint32_t>(PostHeight / 2, 1);
-		Desc.Format = EFormat::RGBA16Float;
-		MagicTarget = Device.CreateTexture(Desc);
 		Desc.Format = EFormat::RG16Float;
 		MagicBendTarget = Device.CreateTexture(Desc);
 
@@ -830,7 +826,6 @@ namespace Teinora
 		Device.DestroyTexture(SceneBehindWater);
 		Device.DestroyTexture(SceneDepth);
 		Device.DestroyTexture(ToneMapped);
-		Device.DestroyTexture(MagicTarget);
 		Device.DestroyTexture(MagicBendTarget);
 		Device.DestroyTexture(BlurredView);
 		Device.DestroyTexture(BlurScratch);
@@ -974,7 +969,7 @@ namespace Teinora
 				RayInstances.push_back(Instance);
 			}
 
-			List.insert(List.end(), { Object.Color.X, Object.Color.Y, Object.Color.Z, 1.0f });
+			List.insert(List.end(), { Object.Color.X, Object.Color.Y, Object.Color.Z, Object.Magic });
 		}
 	}
 
@@ -1396,7 +1391,7 @@ namespace Teinora
 		Blur(BlurredView, BlurScratch, 0.0f, SmallStepY * 0.6f);
 	}
 
-	void Renderer::RenderFinal(const SceneView& View, bool bMagicHaze, bool bMagicBends, const Float2& FocusCenter)
+	void Renderer::RenderFinal(bool bMagicBends, const Float2& FocusCenter)
 	{
 		const bool bUpscale = IsUpscaling();
 		const Rhi::TextureHandle Source = bUpscale ? Upscaled : SceneColor;
@@ -1404,19 +1399,18 @@ namespace Teinora
 		RenderPass Tonemap;
 		Tonemap.Color = ToneMapped;
 		Tonemap.Reads[0] = Source;
-		Tonemap.Reads[1] = bMagicHaze ? MagicTarget : Rhi::TextureHandle{};
 		Tonemap.Reads[2] = bMagicBends ? MagicBendTarget : Rhi::TextureHandle{};
 		Tonemap.Reads[3] = SceneDepth; // rain falls in front of what is further than it
 		Device.BeginPass(Tonemap);
 
-		const float MagicData[4] = {
-			bMagicHaze ? View.MagicView : 0.0f,
+		const float BendData[4] = {
 			bMagicBends ? 1.0f : 0.0f,
 			2.0f / static_cast<float>(PostWidth),
-			2.0f / static_cast<float>(PostHeight) };
-		const Rhi::TextureHandle TonemapTextures[] = { Source, bMagicHaze ? MagicTarget : Rhi::TextureHandle{}, bMagicBends ? MagicBendTarget : Rhi::TextureHandle{}, SceneDepth };
+			2.0f / static_cast<float>(PostHeight),
+			0.0f };
+		const Rhi::TextureHandle TonemapTextures[] = { Source, {}, bMagicBends ? MagicBendTarget : Rhi::TextureHandle{}, SceneDepth };
 		Device.SetPipeline(TonemapPipeline);
-		Device.SetPushConstants(MagicData, sizeof(MagicData));
+		Device.SetPushConstants(BendData, sizeof(BendData));
 		Device.SetTextures(TonemapTextures, 4);
 		Device.Draw(3);
 		Device.EndPass();
@@ -1549,13 +1543,15 @@ namespace Teinora
 		Frame.Coronas[1] = ToFloat4(Sky.Sun2Corona);
 		Frame.Weather = { static_cast<float>(View.Rain), static_cast<float>(View.Storm), static_cast<float>(View.RainSlant), View.MagicView };
 		Frame.Shade = { static_cast<float>(View.Overcast), 0.0f, 0.0f, 0.0f };
-		for (std::size_t Index = 0; Index < MaxMagicGlows; ++Index)
 		{
-			const bool bThere = View.MagicGlows != nullptr && Index < View.MagicGlows->size();
-			const MagicGlow Glow = bThere ? (*View.MagicGlows)[Index] : MagicGlow{};
-			const Float3 Point = ToFloat(Glow.Point - View.CameraPosition);
-			Frame.GlowPoints[Index] = { Point.X, Point.Y, Point.Z, static_cast<float>(Glow.Radius) };
-			Frame.GlowColors[Index] = ToFloat4(ToFloat(Glow.Color));
+			// What lights the scene, all told, which the eye gets half used to the colour of. Cloud greys it.
+			const auto Lit = [](const Float3& Color, double Share) { return Vec3{ Color.X, Color.Y, Color.Z } * Share; };
+			Vec3 Light = Lit(Sky.SunColor, std::max(Sky.SunDirection.Z, 0.0)) + Lit(Sky.Sun2Color, std::max(Sky.Sun2Direction.Z, 0.0))
+				+ Lit(Sky.Zenith, 0.6) + Lit(Sky.Horizon, 0.22) + Lit(Sky.PlanetColor, 0.35);
+			const double Grey = 0.2126 * Light.X + 0.7152 * Light.Y + 0.0722 * Light.Z;
+			Light = Light + (Vec3{ Grey, Grey, Grey } - Light) * (0.6 * View.Overcast);
+			const Vec3 Balance = GetWhiteBalance(Light);
+			Frame.WhiteBalance = { static_cast<float>(Balance.X), static_cast<float>(Balance.Y), static_cast<float>(Balance.Z), 1.0f };
 		}
 		Frame.CloudMapPlace = {};
 		if (View.CloudMap != nullptr && View.CloudMap->size() == static_cast<std::size_t>(CloudMapSide) * CloudMapSide)
@@ -1668,18 +1664,12 @@ namespace Teinora
 		const float GazeW = M[12] * static_cast<float>(Gaze.X) + M[13] * static_cast<float>(Gaze.Y) + M[14] * static_cast<float>(Gaze.Z);
 
 		// Magic is only worked out when there is something of it to see.
-		const bool bMagicReady = MagicVolumes[0] && MagicVolumes[1];
-		const bool bMagicHaze = bMagicReady && View.MagicView > 0.001f;
-		const bool bMagicBends = bMagicReady && View.bMagicBends;
-		if (bMagicHaze)
-		{
-			RenderMagicPass(View, MagicTarget, MagicPipeline);
-		}
+		const bool bMagicBends = MagicVolumes[0] && MagicVolumes[1] && View.bMagicBends;
 		if (bMagicBends)
 		{
 			RenderMagicPass(View, MagicBendTarget, MagicBendPipeline);
 		}
-		RenderFinal(View, bMagicHaze, bMagicBends, { GazeX / GazeW * 0.5f + 0.5f, 0.5f - GazeY / GazeW * 0.5f });
+		RenderFinal(bMagicBends, { GazeX / GazeW * 0.5f + 0.5f, 0.5f - GazeY / GazeW * 0.5f });
 
 		Device.EndFrame();
 	}

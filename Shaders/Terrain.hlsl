@@ -106,10 +106,18 @@ float4 PSMain(Varyings Input) : SV_Target
 	// Light comes through leaves when the eye looks towards a sun past them.
 	const float3 Ray = normalize(Input.Relative);
 	const float3 Through = SunColor.rgb * pow(saturate(dot(Ray, SunDirection.xyz)), 3.0) + Sun2Color.rgb * pow(saturate(dot(Ray, Sun2Direction.xyz)), 3.0);
-	Color += Surface.Color * Through * 0.4;
+	Color += Surface.Color * Through * (0.4 * (1.0 - Shade.x)); // and none does under a closed sky
 #endif
 
-	return float4(Color, 1.0);
+	// What it is made of says which magic it holds: nature in all that grows, fire in what is molten, earth in the rest.
+#ifdef FOLIAGE
+	const int Held = NatureMagic;
+#else
+	const bool bMolten = Input.Material > 0.62 && Input.Material <= 0.75;
+	const bool bBark = Input.Material > 0.19 && Input.Material <= 0.38;
+	const int Held = bMolten ? FireMagic : (bBark ? NatureMagic : EarthMagic);
+#endif
+	return float4(ShowMagic(Color, MagicColors[Held], length(Input.Relative)), 1.0);
 }
 
 #ifdef FOLIAGE

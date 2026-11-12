@@ -1,9 +1,6 @@
-// Follows each pixel's ray through the magic in front of what it hits.
-//
-// PSMain makes the haze of the magic view: its light in RGB, and in alpha how much of what lies
-// behind it covers. BendMain finds where dense magic bends light in plain sight: red is the
-// optical path the swirls add to the ray, and green how much dense magic the ray went through.
-// Tonemap.hlsl makes a picture of both.
+// Follows each pixel's ray through the magic in front of what it hits, and finds where dense magic
+// bends light: red is the optical path the swirls add to the ray, and green how much dense magic
+// the ray went through. Tonemap.hlsl makes the shimmer of it.
 #include "Clouds.hlsli"
 
 struct MagicConstants
@@ -24,25 +21,9 @@ static const float FirstStep = 1.5;
 static const float Reach = 3500.0;
 static const float Growth = 1.1771; // (Reach / FirstStep)^(1 / Steps)
 
-// The magic view sees only so far around the eye, though magic goes on beyond it.
-static const float SightRadius = 100.0; // Sim::MagicSightRadius
-static const float SightFade = 70.0;    // where it starts to give out
-static const int SightSteps = 32;
-static const float SightGrowth = 1.1402; // (SightRadius / FirstStep)^(1 / SightSteps)
-
 static const float DensityScale = 120.0;  // MagicVolume::DensityScale
 static const float DewPoint = 30.0;       // Sim::MagicDewPoint, where magic shows and bends light
 static const float BendRamp = 13.6;       // kg/m3 over that for it to bend fully
-static const float ThickDensity = 0.8;    // thinner than this, the haze has no structure worth drawing
-static const float Extinction = 0.0035;   // square metres per kilogram of thin magic
-static const float Crowding = 20.0;       // kg/m3 at which the dense hides only half as much more again
-
-/** How much a density hides, per metre: in proportion while thin, less and less so when dense, so that the dense cores
- * of wells and bolts do not black out what is behind them. */
-float Hiding(float Density)
-{
-	return Density * Extinction / (1.0 + Density / Crowding);
-}
 
 struct Varyings
 {
@@ -111,65 +92,6 @@ float3 GetRay(Varyings Input, out float Distance)
 		Distance = min(length(Hit.xyz / Hit.w), Reach);
 	}
 	return normalize(Aim.xyz / Aim.w);
-}
-
-float4 PSMain(Varyings Input) : SV_Target
-{
-	// Magic glows through whatever is in the way, and so does what is inside it: the view looks right through
-	// to the edge of its sight.
-	float Distance;
-	const float3 Direction = GetRay(Input, Distance);
-	Distance = SightRadius;
-
-	float Near = FirstStep;
-	float Clear = 1.0;           // how much of what lies behind still gets through
-	float3 Glow = float3(0.0, 0.0, 0.0); // the light of the haze, nearest first
-	for (int Step = 0; Step < SightSteps && Near < Distance; ++Step)
-	{
-		const float Far = min(Near * SightGrowth, Distance);
-		const float Span = Far - Near;
-		const float3 Relative = Direction * (0.5 * (Near + Far));
-		const float4 Sampled = SampleMagic(Relative);
-		const float Density = Sampled.x;
-
-		// Close up the fine curls show, further out only the broad ones can.
-		float Swirl = 1.0;
-		if (Density > ThickDensity)
-		{
-			const float3 World = ToWorld(Relative);
-			const float Close = 1.0 - smoothstep(30.0, 140.0, Near);
-			Swirl = Curls(World, 0.045);
-			if (Close > 0.0)
-			{
-				Swirl *= lerp(1.0, Curls(World, 0.21), Close);
-			}
-		}
-
-		if (Density > 1e-4)
-		{
-			const float Seen = 1.0 - smoothstep(SightFade, SightRadius, Near);
-			const float Taken = (1.0 - exp(-Hiding(Density) * Span)) * Seen;
-			Glow += Sampled.yzw / Density * Clear * Taken * (0.35 + 0.65 * Swirl);
-			Clear *= 1.0 - Taken;
-		}
-		Near = Far;
-	}
-
-	// The magic held inside things glows through them as well, as balls of their aspect's colour, brightest
-	// where the ray goes through most of one.
-	for (int Index = 0; Index < 8; ++Index)
-	{
-		const float Radius = GlowPoints[Index].w;
-		const float Along = dot(GlowPoints[Index].xyz, Direction);
-		const float Off = dot(GlowPoints[Index].xyz, GlowPoints[Index].xyz) - Along * Along;
-		if (Radius > 0.0 && Along > 0.0 && Along < SightRadius && Off < Radius * Radius)
-		{
-			const float Through = sqrt(1.0 - Off / (Radius * Radius));
-			Glow += GlowColors[Index].rgb * (Through * Through) * 2.5;
-		}
-	}
-
-	return float4(Glow, 1.0 - Clear);
 }
 
 float4 BendMain(Varyings Input) : SV_Target

@@ -70,6 +70,7 @@ namespace
 	constexpr float NightHaze = 0.02f;
 	constexpr float NightHazeGlow = 0.35f;  // how bright the night haze is, against the air: dim, so that far hills stand dark against the sky
 	constexpr float NightSkyFill = 1.8f;    // how much the dark sky lights the ground, against the bright one
+	constexpr float CloudPassing = 0.25f;   // of a sun's light, what thick cloud still lets down: CloudPassing in Shaders/Lighting.hlsli
 	const FLinearColor PlanetCloudGlow(1.2f, 1.2f, 1.5f); // what the planet does to clouds, against what it does to the ground
 	const FLinearColor CloudGlow(1.9f, 1.55f, 1.9f); // the two suns on clouds: brighter than on the ground, and with their green taken out
 	constexpr double SkyDomeRadius = 2.0e7; // 200 km, past all the ground there is to see
@@ -233,6 +234,7 @@ namespace
 		TArray<FTransform> Transforms;
 		TArray<float> WaterLevels;      // of the water at each instance
 		TArray<float> ShownWaterLevels; // and what the mesh has been told, since it is rarely different
+		TArray<float> Magics;           // the magic each instance holds, see ObjectDraw::Magic
 	};
 }
 
@@ -262,7 +264,6 @@ struct FTeinoraSimulation
 	Teinora::MagicVolume FarMagic;
 	std::vector<Teinora::MagicPush> MagicPushes;
 	std::vector<Teinora::MagicDeposit> MagicDeposits;
-	std::vector<Teinora::MagicGlow> HeldGlows; // magic held inside things, for the magic view
 	double Time = 0.0;
 	double Accumulator = 0.0;
 	double Hour = 10.0;
@@ -290,6 +291,7 @@ struct FTeinoraSimulation
 	Sim::Weather Weather;        // what the clouds overhead make of it, as in the standalone game
 	double ForcedRain = -1.0;    // or what an automated run asks for
 	double CloudCoverShown = -1e9; // the cover the clouds were last given, which follows the water magic overhead
+	double Overcast = 0.0;         // how closed the sky around the camera is, from 0 to 1
 	TArray<FBodyGroup> Groups;
 	TArray<FVector> WaterVertices;
 	TArray<FVector> WaterNormals;
@@ -866,6 +868,7 @@ void ATeinoraWorld::CreateFires()
 		Sheet->SetupAttachment(RootComponent);
 		Sheet->SetCastShadow(false);
 		Sheet->SetVisibility(false);
+		Sheet->SetRenderCustomDepth(true); // which is how the magic view knows a flame, see M_Magic in make_content.py
 		Sheet->RegisterComponent();
 		Sheet->CreateMeshSection(0, Corners, Triangles, Facing, Places, TArray<FColor>(), TArray<FProcMeshTangent>(), false);
 		Sheet->SetMaterial(0, Look);
@@ -1119,9 +1122,14 @@ void ATeinoraWorld::UpdateEyeInWater(ATeinoraCamera& Eye)
 	// From inside it the water between the eye and the bed is the camera's to show, not the bed's.
 	const float EyeUnder = bUnder ? 1.0f : 0.0f;
 	TerrainMaterial->SetScalarParameterValue(TEXT("EyeUnder"), EyeUnder);
+
+	// To the magic view each thing shows the magic it holds and not its own colour, see MAGIC_COLORS in make_content.py.
+	TerrainMaterial->SetScalarParameterValue(TEXT("MagicView"), MagicFade);
+	LeafMaterial->SetScalarParameterValue(TEXT("MagicView"), MagicFade);
 	for (FBodyGroup& Group : Sim->Groups)
 	{
 		Group.Surface->SetScalarParameterValue(TEXT("EyeUnder"), EyeUnder);
+		Group.Surface->SetScalarParameterValue(TEXT("MagicView"), MagicFade);
 	}
 }
 
@@ -1144,11 +1152,13 @@ void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
 	const float SecondUp = FMath::SmoothStep(-0.02f, 0.03f, SecondHeight) * SecondPast;
 
 	Sun->SetWorldRotation((TeinoraConvert::DirectionToUnreal(Towards) * -1.0).Rotation());
-	Sun->SetIntensity(SunIntensity * SunUp);
+	// Under a closed sky only a share of the suns' light comes down, as in the standalone game.
+	const float Through = FMath::Lerp(1.0f, CloudPassing, static_cast<float>(Sim->Overcast));
+	Sun->SetIntensity(SunIntensity * SunUp * Through);
 	Sun->SetVisibility(SunUp > 0.0f);
 
 	SecondSun->SetWorldRotation((TeinoraConvert::DirectionToUnreal(TowardsSecond) * -1.0).Rotation());
-	SecondSun->SetIntensity(SecondSunIntensity * SecondUp);
+	SecondSun->SetIntensity(SecondSunIntensity * SecondUp * Through);
 	SecondSun->SetVisibility(SecondUp > 0.0f);
 
 	// The planet sends down a share of what falls on the side of it facing the ground.
@@ -1197,11 +1207,16 @@ void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
 	const FLinearColor NightAir = NightLight * PlanetInAir * Dark;
 	SkyMaterial->SetVectorParameterValue(TEXT("NightAir"), NightAir);
 	const float Rain = static_cast<float>(Sim->Weather.Rain);
-	if (FMath::Abs(Dark - Sim->HazeShown) > 0.01f || !NightAir.Equals(Sim->HazeColorShown, 0.0005f) || FMath::Abs(Rain - Sim->RainShown) > 0.01f)
+	const float Closed = static_cast<float>(Sim->Overcast);
+	if (FMath::Abs(Dark - Sim->HazeShown) > 0.01f || !NightAir.Equals(Sim->HazeColorShown, 0.0005f) || FMath::Abs(Rain + Closed - Sim->RainShown) > 0.01f)
 	{
 		Sim->HazeShown = Dark;
 		Sim->HazeColorShown = NightAir;
-		Sim->RainShown = Rain;
+		Sim->RainShown = Rain + Closed;
+
+		// What comes through a closed sky has been scattered on its way, and casts no shadows.
+		Sun->SetShadowAmount(1.0f - Closed);
+		SecondSun->SetShadowAmount(1.0f - Closed);
 		Fog->SetFogDensity(FMath::Lerp(DayHaze, NightHaze, Dark) * (1.0f + 2.5f * Rain));
 		Fog->SetFogInscatteringColor(FMath::Lerp(DayHazeColor, NightAir * NightHazeGlow, Dark));
 		SkyFill->SetIntensity(FMath::Lerp(1.0f, NightSkyFill, Dark));
@@ -1229,7 +1244,19 @@ void ATeinoraWorld::UpdateSky(ATeinoraCamera* Eye)
 		// eclipse is left out of it, since that is meant to be seen, and is over before an eye would adjust.
 		const float FirstLight = SunTint.G * SunIntensity * FMath::SmoothStep(-0.02f, 0.03f, Height) * FMath::Max(Height, 0.0f);
 		const float NextLight = SecondSunTint.G * SecondSunIntensity * FMath::SmoothStep(-0.02f, 0.03f, SecondHeight) * FMath::Max(SecondHeight, 0.0f);
-		Eye->SetExposure(ExposureKey / (FirstLight + NextLight + DarkAdaptation), FMath::Lerp(1.0f, NightColor, Dark));
+
+		// And it gets half used to the colour of that light, as in the standalone game: the suns' own, in that
+		// game's measure of them, with the blue of the sky they light, greyed by cloud.
+		const FLinearColor Direct = Sunlight * (1.75f / SunIntensity);
+		FLinearColor Lighting = Direct + FLinearColor(0.12f, 0.21f, 0.36f) * FMath::Min(Direct.GetLuminance(), 1.0f) + NightLight * (1.75f / SunIntensity);
+		const float Bright = Lighting.GetLuminance();
+		Lighting = FMath::Lerp(Lighting, FLinearColor(Bright, Bright, Bright), 0.6f * static_cast<float>(Sim->Overcast));
+		const Vec3 Balance = Teinora::GetWhiteBalance({ Lighting.R, Lighting.G, Lighting.B });
+		// The magic view shows magic in its own colours, whatever the light: getting used to the light's colour,
+		// and seeing less colour in the dark, are of plain sight.
+		const FLinearColor Used(static_cast<float>(Balance.X), static_cast<float>(Balance.Y), static_cast<float>(Balance.Z));
+		Eye->SetExposure(ExposureKey / ((FirstLight + NextLight) * Through + DarkAdaptation), // less of it reaches the ground under cloud
+			FMath::Lerp(FMath::Lerp(1.0f, NightColor, Dark), 1.0f, MagicFade), FMath::Lerp(Used, FLinearColor::White, MagicFade));
 	}
 }
 
@@ -1242,6 +1269,7 @@ void ATeinoraWorld::UpdateBodies()
 	{
 		Group.Transforms.Reset();
 		Group.WaterLevels.Reset();
+		Group.Magics.Reset();
 	}
 
 	for (const Teinora::ObjectDraw& Item : Sim->Objects)
@@ -1259,7 +1287,7 @@ void ATeinoraWorld::UpdateBodies()
 			Mesh->SetMobility(EComponentMobility::Movable);
 			Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 			Mesh->SetStaticMesh(Primitives[static_cast<int32>(Item.Primitive)]);
-			Mesh->NumCustomDataFloats = 1;
+			Mesh->NumCustomDataFloats = 2; // the level of its water, and the magic it holds
 			Mesh->RegisterComponent();
 
 			UMaterialInstanceDynamic* Tint = UMaterialInstanceDynamic::Create(BodyMaterial, Mesh);
@@ -1275,6 +1303,7 @@ void ATeinoraWorld::UpdateBodies()
 
 		Group->Transforms.Emplace(TeinoraConvert::ToUnreal(Item.Rotation), TeinoraConvert::ToUnreal(Item.Position), FVector(Item.Scale.X, Item.Scale.Y, Item.Scale.Z));
 		Group->WaterLevels.Add(static_cast<float>(Sim::FindWater(Item.Position.X, Item.Position.Y, Sim::WorldSeed).Level));
+		Group->Magics.Add(Item.Magic);
 	}
 
 	for (FBodyGroup& Group : Sim->Groups)
@@ -1297,6 +1326,15 @@ void ATeinoraWorld::UpdateBodies()
 			{
 				Group.ShownWaterLevels[Index] = Group.WaterLevels[Index];
 				Group.Mesh->SetCustomDataValue(Index, 0, Group.WaterLevels[Index], true);
+			}
+		}
+
+		// Only the magic view shows what each holds.
+		if (MagicFade > 0.0f)
+		{
+			for (int32 Index = 0; Index < Group.Magics.Num(); ++Index)
+			{
+				Group.Mesh->SetCustomDataValue(Index, 1, Group.Magics[Index], true);
 			}
 		}
 	}
@@ -1329,27 +1367,16 @@ void ATeinoraWorld::UpdateWeather(ATeinoraCamera& Eye, double WorldDt)
 	{
 		// Unreal's clouds are one layer over the whole sky, so they take the cover the water magic over the
 		// camera and a few kilometres round it makes, as the standalone game's sky draws it there.
-		double Cover = 0.0;
-		int32 Count = 0;
-		for (int32 Ring = 0; Ring <= 2; ++Ring)
-		{
-			const int32 Spots = Ring == 0 ? 1 : 8;
-			for (int32 Spot = 0; Spot < Spots; ++Spot)
-			{
-				const double Angle = Spot * UE_DOUBLE_PI * 2.0 / Spots;
-				const Vec3 Where = Eye.GetEye() + Vec3{ FMath::Cos(Angle), FMath::Sin(Angle), 0.0 } * (Ring * 1500.0);
-				const double Gathered = Sim->Storms->Read(Where).CloudDepth / Sim::CloudDepthFor(Sim::MagicStormWater);
-				Cover += Sim::ShownCloudCover(Gathered) * (Ring == 0 ? 4.0 : 1.0);
-				Count += Ring == 0 ? 4 : 1;
-			}
-		}
-		Cover /= Count;
+		double Gathered = Sim->Storms->GetGathered(Eye.GetEye(), 1500.0);
 		if (Sim->ForcedRain >= 0.0)
 		{
-			Cover = Sim::ShownCloudCover(0.5 + 0.5 * Sim->ForcedRain); // rain asked for by a run comes out of an overcast sky
+			Gathered = 0.5 + 0.5 * Sim->ForcedRain; // rain asked for by a run comes out of an overcast sky
 		}
-		const double Shown = FMath::Lerp(Sim->CloudCoverShown < -1e8 ? Cover : Sim->CloudCoverShown, Cover, FMath::Min(WorldDt / Sim::WeatherChangeTime, 1.0));
+		const double Cover = Sim::ShownCloudCover(Gathered);
+		const bool bFirst = Sim->CloudCoverShown < -1e8 || Sim->ForcedRain >= 0.0;
+		const double Shown = bFirst ? Cover : FMath::Lerp(Sim->CloudCoverShown, Cover, Share);
 		Sim->CloudCoverShown = Shown;
+		Sim->Overcast = bFirst ? Sim::GetOvercast(Gathered) : FMath::Lerp(Sim->Overcast, Sim::GetOvercast(Gathered), Share);
 		CloudMaterial->SetScalarParameterValue(TEXT("Cloud_GlobalCoverage"), static_cast<float>(FMath::Clamp((Shown - 1.0) * CloudCoverReach, -0.6, 1.0)));
 		CloudMaterial->SetScalarParameterValue(TEXT("StormClouds"), static_cast<float>(Sim->Weather.Storm));
 	}
@@ -1390,10 +1417,9 @@ void ATeinoraWorld::UpdateMagic(ATeinoraCamera& Eye, float DeltaSeconds)
 	{
 		const Teinora::MagicVolume& Near = Sim->NearMagic;
 		const Teinora::MagicVolume& Far = Sim->FarMagic;
-		Sim->World.CollectHeldMagic(Eye.GetEye(), Sim->HeldGlows, 8);
 		Eye.ShowMagic(MagicFade, Near.PeakDensity > Sim::MagicDewPoint, MagicNearAtlas, MagicFarAtlas,
 			Near.Corner, Vec3{ Near.SizeX * Near.CellSize, Near.SizeY * Near.CellSize, Near.SizeZ * Near.CellSize },
-			Far.Corner, Vec3{ Far.SizeX * Far.CellSize, Far.SizeY * Far.CellSize, Far.SizeZ * Far.CellSize }, Sim->Time, Sim->HeldGlows);
+			Far.Corner, Vec3{ Far.SizeX * Far.CellSize, Far.SizeY * Far.CellSize, Far.SizeZ * Far.CellSize }, Sim->Time);
 	}
 }
 

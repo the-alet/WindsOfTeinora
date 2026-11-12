@@ -477,6 +477,7 @@ int main(int ArgumentCount, char** Arguments)
 	std::vector<MagicPush> MagicPushes;
 	std::vector<MagicDeposit> MagicDeposits;
 	Sim::Weather Weather;
+	double Overcast = -1.0; // how closed the sky is around the camera, from 0 to 1; below zero until first read
 	std::vector<float> CloudMap;
 	static_assert(StormField::Side == CloudMapSide, "the renderer takes the storms' sheet as it is");
 	World.SetMagic(&NearMagic);
@@ -517,7 +518,6 @@ int main(int ArgumentCount, char** Arguments)
 	std::vector<PlantMove> PlantMoves;
 	std::vector<HotLight> HotLights;
 	std::vector<PuffDraw> Puffs;
-	std::vector<MagicGlow> Glows;
 	std::vector<FireContact> FireContacts;
 	std::vector<BoltDraw> Bolts;
 	std::vector<BoltStrike> Strikes;
@@ -715,6 +715,16 @@ int main(int ArgumentCount, char** Arguments)
 			{
 				Magic->SetRain(Sim::RainCarries * Weather.Rain);
 			}
+
+			// How closed the sky is around the camera, which greys the light and the haze. Rain a run asks for
+			// comes with the sky that would make it.
+			double Gathered = Storms != nullptr && Settings.Render.bClouds ? Storms->GetGathered(Camera.Position, 1500.0) : 0.0;
+			if (Launch.Rain >= 0.0)
+			{
+				Gathered = 0.5 + 0.5 * Launch.Rain;
+			}
+			const double Wanting = Sim::GetOvercast(Gathered);
+			Overcast = Overcast < 0.0 || Launch.Rain >= 0.0 ? Wanting : Overcast + (Wanting - Overcast) * Share;
 		}
 		Extras.Magic = NearMagic.GetMix(Camera.Position);
 		Extras.bMagicView = bMagicView;
@@ -825,6 +835,7 @@ int main(int ArgumentCount, char** Arguments)
 		View.CloudCover = Settings.World.CloudCover + Weather.Storm * Sim::StormCloudCover;
 		View.Rain = Weather.Rain;
 		View.Storm = Weather.Storm;
+		View.Overcast = std::max(Overcast, 0.0);
 		if (Storms != nullptr && Settings.Render.bClouds)
 		{
 			// The clouds are drawn where the water magic up there has gathered.
@@ -846,8 +857,6 @@ int main(int ArgumentCount, char** Arguments)
 		View.LiquidCornerY = World.GetLiquid().GetCornerY();
 		View.LiquidSpan = World.GetLiquid().GetSpan();
 		View.MagicView = MagicFade;
-		World.CollectHeldMagic(Camera.Position, Glows, MaxMagicGlows);
-		View.MagicGlows = &Glows;
 		View.bMagicBends = NearMagic.PeakDensity > Sim::MagicDewPoint;
 		Output.Render(View);
 

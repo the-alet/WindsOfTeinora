@@ -70,7 +70,6 @@ set(WOT_SHADERS
     "PuffPS Puffs.hlsl PSMain ps_6_0"
     "UnderwaterPS Underwater.hlsl PSMain ps_6_0"
     "CopyPS Underwater.hlsl CopyMain ps_6_0"
-    "MagicPS Magic.hlsl PSMain ps_6_0"
     "MagicBendPS Magic.hlsl BendMain ps_6_0"
     "TonemapPS Tonemap.hlsl PSMain ps_6_0"
     "BlurPS Blur.hlsl PSMain ps_6_0"

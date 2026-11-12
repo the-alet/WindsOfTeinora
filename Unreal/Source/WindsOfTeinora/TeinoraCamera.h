@@ -34,15 +34,15 @@ public:
 
 	void SetEyeFocus(bool bEnabled);
 
-	/** How much brighter than by day to show the scene, and how much of its colour, as an eye does at night. */
-	void SetExposure(double Multiplier, float Saturation);
+	/** How much brighter than by day to show the scene, how much of its colour, as an eye does at night, and what it makes of colours for being half used to the light's own, see Teinora::GetWhiteBalance. */
+	void SetExposure(double Multiplier, float Saturation, const FLinearColor& Balance);
 
 	/** How far under water the eye is, zero above it. */
 	void SetUnderwater(double Depth, const FLinearColor& Light);
 
-	/** Feeds the magic view: how far it has faded in, and where the boxes of magic are. */
+	/** Feeds the magic view: how far it has faded in, and where the boxes of magic are, for the light that dense magic bends. */
 	void ShowMagic(float ViewAmount, bool bBends, UTexture2D* NearAtlas, UTexture2D* FarAtlas, const Teinora::Vec3& NearCorner, const Teinora::Vec3& NearSize,
-		const Teinora::Vec3& FarCorner, const Teinora::Vec3& FarSize, double Time, const std::vector<Teinora::MagicGlow>& Glows);
+		const Teinora::Vec3& FarCorner, const Teinora::Vec3& FarSize, double Time);
 
 	/** Feeds the rain: how hard it falls, how far the wind slants it across the view, and the time it falls by. */
 	void ShowRain(float Amount, float Slant, double Time);

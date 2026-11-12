@@ -80,6 +80,12 @@ namespace Teinora
 
 		Reading Read(const Vec3& Position) const;
 
+		/**
+		 * How much cloud the water magic makes around a point, as a share of a storm's depth of it: the mean
+		 * over the point and a ring Radius metres out, the point counting for a third.
+		 */
+		double GetGathered(const Vec3& Position, double Radius) const;
+
 		/** Metres of full cloud over a point of the clouds' own map, at a share of the usual cover. */
 		double MeasureCloud(double CarriedX, double CarriedY, double CloudCover) const;
 

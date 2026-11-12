@@ -935,26 +935,6 @@ namespace Teinora
 		}
 	}
 
-	void GameWorld::CollectHeldMagic(const Vec3& Eye, std::vector<MagicGlow>& Out, std::size_t Most) const
-	{
-		Out.clear();
-		for (const Prop& Thing : Props)
-		{
-			const PropSpec& Spec = GetPropSpec(Thing.Kind);
-			const Vec3 Color = GetMagicColor(Spec.Aspect);
-			MagicGlow Glow;
-			Glow.Point = Physics.GetBody(Thing.Body).Position;
-			Glow.Radius = Spec.HalfHeight;
-			Glow.Color = Color * (Thing.Held / Sim::MatterHolds);
-			Out.push_back(Glow);
-		}
-		std::sort(Out.begin(), Out.end(), [&Eye](const MagicGlow& A, const MagicGlow& B) { return LengthSquared(A.Point - Eye) < LengthSquared(B.Point - Eye); });
-		if (Out.size() > Most)
-		{
-			Out.resize(Most);
-		}
-	}
-
 	void GameWorld::TakeMagicDeposits(std::vector<MagicDeposit>& Out)
 	{
 		Out.clear();
@@ -1832,6 +1812,7 @@ namespace Teinora
 			Draw.Rotation = Target.Rotation;
 			Draw.Scale = Spec.Scale;
 			Draw.Color = Spec.Color;
+			Draw.Magic = static_cast<float>(Spec.Aspect) + 0.99f * static_cast<float>(std::clamp(Item.Held / Sim::MatterHolds, 0.0, 1.0));
 			Out.push_back(Draw);
 		}
 	}

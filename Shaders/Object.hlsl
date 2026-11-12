@@ -7,7 +7,7 @@ struct VertexInput
 	float4 Row0 : TEXCOORD2; // instance transform, rows of a 3x4 matrix relative to the camera
 	float4 Row1 : TEXCOORD3;
 	float4 Row2 : TEXCOORD4;
-	float4 Color : TEXCOORD5;
+	float4 Color : TEXCOORD5; // alpha is the magic it holds, see ObjectDraw in Engine/Render/SceneTypes.h
 };
 
 struct Varyings
@@ -17,6 +17,7 @@ struct Varyings
 	float3 Normal : TEXCOORD1;
 	float3 Albedo : TEXCOORD2;
 	float ViewDepth : TEXCOORD3;
+	float3 Held : TEXCOORD4; // the colour of the magic it holds inside itself, as bright as there is of it
 };
 
 Varyings VSMain(VertexInput Input)
@@ -38,10 +39,12 @@ Varyings VSMain(VertexInput Input)
 	Output.Normal = mul(Linear, Input.Normal.xyz / ScaleSquared);
 	Output.Albedo = Input.Color.rgb;
 	Output.ViewDepth = Output.Clip.w;
+	Output.Held = MagicColors[int(Input.Color.a)] * (frac(Input.Color.a) / 0.99);
 	return Output;
 }
 
 float4 PSMain(Varyings Input) : SV_Target
 {
-	return float4(ShadeSurface(Input.Albedo, normalize(Input.Normal), Input.Relative, Input.ViewDepth, 0.1, 0.0), 1.0);
+	const float3 Color = ShadeSurface(Input.Albedo, normalize(Input.Normal), Input.Relative, Input.ViewDepth, 0.1, 0.0);
+	return float4(ShowMagic(Color, Input.Held, length(Input.Relative)), 1.0);
 }

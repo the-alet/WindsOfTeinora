@@ -81,6 +81,7 @@ namespace Teinora
 		Quat Rotation;
 		Float3 Scale{ 1.0f, 1.0f, 1.0f };
 		Float3 Color{ 1.0f, 1.0f, 1.0f };
+		float Magic = 0.0f; // the magic it holds inside itself, for the magic view: the number of its aspect among the kinds of magic, plus how much it has of what it can hold, from 0 to 0.99
 	};
 
 	/** Part of a plant moved out of its place by something, for the mesh to follow. */
@@ -131,14 +132,6 @@ namespace Teinora
 		double Shade = 1.0;     // how much of the light on it it gives back: all for steam, less for smoke
 		double Firelight = 0.0; // how much a fire's light reaches it, as a share of that light at the flame
 		double Glow = 0.0;      // light of its own, in the colour of light magic: a firefly is a small round glowing puff
-	};
-
-	/** Magic held inside a thing, as the magic view sees it glow through it: a ball of the colour of its aspect. */
-	struct MagicGlow
-	{
-		Vec3 Point;
-		double Radius = 0.0; // metres
-		Vec3 Color;          // linear, already as bright as the magic it holds makes it
 	};
 
 	/** The colour of a flame's light, which HotLight carries for each fire. Also in Shaders/Puffs.hlsl and Unreal/Scripts/make_content.py. */
@@ -457,5 +450,29 @@ namespace Teinora
 			{ Sun, Risen(Sun) * GetLightPastPlanet(Sun, Planet, Axis, SunSize) },
 			{ Second, Risen(Second) * GetLightPastPlanet(Second, Planet, Axis, SecondSunSize) },
 			{ Planet, Risen(Planet) * PlanetDropShare * Struck } } };
+	}
+
+	/**
+	 * What an eye, or a camera, makes of light of this colour, linear RGB with X red: it gets used to the colour
+	 * of the light it is in, part of the way, so that under one sun alone the world is tinted by it and not dyed in
+	 * it. Returns what to multiply colours by, which leaves grey as bright as it was. In the dark an eye does
+	 * not do this, and the night keeps its blue.
+	 */
+	inline Vec3 GetWhiteBalance(const Vec3& Light)
+	{
+		constexpr double Share = 0.3;      // of the way to seeing the light as white, in stops: enough to take the edge off, and leave each sun its cast
+		constexpr double FullFrom = 0.3;   // as bright a light as it takes for all of that
+
+		const auto GetGrey = [](const Vec3& Color) { return 0.2126 * Color.X + 0.7152 * Color.Y + 0.0722 * Color.Z; };
+		const double Grey = GetGrey(Light);
+		if (Grey < 1e-6)
+		{
+			return { 1.0, 1.0, 1.0 };
+		}
+		const double Amount = Share * std::clamp(Grey / FullFrom, 0.0, 1.0);
+		const auto Balance = [Grey, Amount](double Channel) { return std::clamp(std::pow(Grey / std::max(Channel, 1e-6), Amount), 0.6, 1.6); };
+		const Vec3 Gains{ Balance(Light.X), Balance(Light.Y), Balance(Light.Z) };
+		const double Kept = GetGrey({ Light.X * Gains.X, Light.Y * Gains.Y, Light.Z * Gains.Z });
+		return Gains * (Grey / std::max(Kept, 1e-6));
 	}
 }

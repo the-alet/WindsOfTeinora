@@ -63,9 +63,6 @@ namespace Teinora
 		double Sample(const std::vector<float>& Field, const Vec3& Position) const;
 	};
 
-	/** The colour each kind of magic shows in the magic view, linear. */
-	Vec3 GetMagicColor(Sim::EMagicType Type);
-
 	/** A push on the magic around a point, in N s: what matter does back to it. */
 	struct MagicPush
 	{

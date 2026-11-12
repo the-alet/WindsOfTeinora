@@ -32,7 +32,7 @@ float3 TraceReflection(float3 Origin, float3 Direction, out float Reach)
 	}
 	if (Query.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
 	{
-		return AddClouds(AddPlanet(SkyColor(Direction), Direction), Direction, 10, 0.5);
+		return AddClouds(AddPlanet(GetOvercastAir(SkyColor(Direction)), Direction), Direction, 10, 0.5);
 	}
 
 	const float Distance = Query.CommittedRayT();
@@ -198,8 +198,11 @@ float4 PSMain(Varyings Input) : SV_Target
 	const float3 Swell = WaveShare > 0.0 ? WaterNormal(World, CameraPosition.w) : float3(0.0, 0.0, 1.0);
 	const float3 Normal = normalize(Swell + float3((RippleA + RippleB) * RippleSize - Liquid.xy * 9.0, 0.0));
 
-	const float3 Sunlight = SunColor.rgb * max(SunDirection.z, 0.0) + Sun2Color.rgb * max(Sun2Direction.z, 0.0);
-	const float3 Ambient = SkyZenith.rgb + SkyHorizon.rgb * 0.3 + Sunlight * 0.25;
+	// Under a closed sky the suns reach the water only as the cloud's grey light, and glint on nothing.
+	const float Overcast = Shade.x;
+	const float3 Direct = SunColor.rgb * max(SunDirection.z, 0.0) + Sun2Color.rgb * max(Sun2Direction.z, 0.0);
+	const float3 Sunlight = lerp(Direct, Greyed(Direct, 0.6) * CloudPassing, Overcast);
+	const float3 Ambient = Greyed(SkyZenith.rgb + SkyHorizon.rgb * 0.3, 0.7 * Overcast) * (1.0 - 0.35 * Overcast) + Sunlight * 0.25;
 
 	if (bFromBelow)
 	{
@@ -207,9 +210,9 @@ float4 PSMain(Varyings Input) : SV_Target
 		// the surface is a mirror for the water itself.
 		const float3 Bent = refract(-View, -Normal, 1.33);
 		const float3 Mirror = float3(0.03, 0.17, 0.19) * Ambient;
-		const float3 Sky = SkyColor(normalize(Bent));
+		const float3 Sky = GetOvercastAir(SkyColor(normalize(Bent)));
 		const float Inside = dot(Bent, Bent) > 0.0 ? 1.0 - pow(1.0 - saturate(dot(View, -Normal)), 5.0) : 0.0;
-		return float4(lerp(Mirror, Sky, Inside), 1.0);
+		return float4(ShowMagic(lerp(Mirror, Sky, Inside), MagicColors[WaterMagic], length(Input.Relative)), 1.0);
 	}
 
 	// Reversed depth stores near / z, so the view depth comes straight back.
@@ -240,7 +243,7 @@ float4 PSMain(Varyings Input) : SV_Target
 	float Reach;
 	const float3 Reflected = TraceReflection(Origin, Bounce, Reach) + ReflectFlames(Origin, Bounce, Reach);
 #else
-	const float3 Reflected = SkyColor(Bounce) + ReflectFlames(Origin, Bounce, 1e9);
+	const float3 Reflected = GetOvercastAir(SkyColor(Bounce)) + ReflectFlames(Origin, Bounce, 1e9);
 #endif
 
 	const float Sparkle = pow(saturate(dot(Normal, normalize(View + SunDirection.xyz))), 420.0) * 1.4;
@@ -249,16 +252,15 @@ float4 PSMain(Varyings Input) : SV_Target
 	// Firelight on the water itself is faint: it shows mostly as the flames' own reflection. The magic view
 	// sees no reflections at all, only the water.
 	const float Mirrored = 1.0 - Weather.w;
-	float3 Color = lerp(Through, Reflected, Fresnel * Mirrored) + (SunColor.rgb * Sparkle + Sun2Color.rgb * Sparkle2) * Mirrored + GetFirelight(Normal, Input.Relative) * 0.03;
+	float3 Color = lerp(Through, Reflected, Fresnel * Mirrored) + (SunColor.rgb * Sparkle + Sun2Color.rgb * Sparkle2) * (Mirrored * (1.0 - Overcast)) + GetFirelight(Normal, Input.Relative) * 0.03;
 
 	// Foam where waves run up the shore and where the water has been thrown about.
 	const float Lapping = smoothstep(0.7, 0.0, Thickness) * (0.55 + 0.45 * sin(Thickness * 9.0 - CameraPosition.w * 1.3)) * WaveShare;
 	const float Foam = saturate(Lapping + Liquid.z * 1.4);
-	Color = lerp(Color, Ambient * 0.9 + (SunColor.rgb + Sun2Color.rgb) * 0.5, Foam * 0.6);
+	Color = lerp(Color, Ambient * 0.9 + (SunColor.rgb + Sun2Color.rgb) * (0.5 * lerp(1.0, CloudPassing, Overcast)), Foam * 0.6);
 
-	const float Distance = length(Input.Relative);
-	const float Density = Options.w;
-	Color = lerp(Color, SkyColor(float3(-View.xy, 0.02)), 1.0 - exp(-Distance * Density));
+	// The same haze as lies over the land, so that far water and far shore sink into it alike.
+	Color = ApplyFog(Color, Input.Relative);
 
-	return float4(Color, saturate(Thickness * 7.0 + Fresnel));
+	return float4(ShowMagic(Color, MagicColors[WaterMagic], length(Input.Relative)), saturate(Thickness * 7.0 + Fresnel));
 }

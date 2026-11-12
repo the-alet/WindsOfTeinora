@@ -78,10 +78,10 @@ float4 PSMain(Varyings Input) : SV_Target
 	// Brighter on top, where the sky and the suns reach it, and underneath where a fire does.
 	const float Top = Input.Place.y * 0.5 + 0.5;
 	const float3 Ambient = SkyZenith.rgb * 0.55 + SkyHorizon.rgb * 0.45 + PlanetColor.rgb * 0.25;
-	const float3 Sunlight = SunColor.rgb * max(SunDirection.z, 0.0) + Sun2Color.rgb * max(Sun2Direction.z, 0.0);
+	const float3 Sunlight = (SunColor.rgb * max(SunDirection.z, 0.0) + Sun2Color.rgb * max(Sun2Direction.z, 0.0)) * lerp(1.0, 0.25, Shade.x); // less under a closed sky
 	const float3 Above = (Ambient * 1.1 + Sunlight * 0.3) * (0.55 + 0.3 * Top + 0.5 * Billows);
 	const float3 Below = FlameLight * Input.Look.w * (0.5 - 0.25 * Top);
 	const float3 Color = (Above + Below) * Input.Look.z;
 
-	return float4(ApplyFog(Color, Input.Relative), Body * Input.Look.x * Soft);
+	return float4(ShowMagic(ApplyFog(Color, Input.Relative), float3(0.0, 0.0, 0.0), 0.0), Body * Input.Look.x * Soft);
 }

@@ -871,6 +871,11 @@ namespace Teinora::Sim
 		return -0.5 + 4.2 * std::clamp(Gathered, 0.0, 1.3);
 	}
 
+	double GetOvercast(double Gathered)
+	{
+		return SmoothStep(0.35, 0.55, Gathered); // rain begins at half a storm's depth of cloud
+	}
+
 	Weather GetWeather(double WaterMagic, double Lightning)
 	{
 		// Only a cloud dense enough to rain is a storm cloud, however much charge has drifted into it.

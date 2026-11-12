@@ -58,9 +58,6 @@ namespace Teinora
 	inline constexpr int CloudMapSide = 48;
 	inline constexpr float CloudMapTop = 1.3f;
 
-	/** How many things' held magic the magic view shows. Also in Shaders/Common.hlsli. */
-	inline constexpr std::size_t MaxMagicGlows = 8;
-
 	struct SceneView
 	{
 		Vec3 CameraPosition;
@@ -97,9 +94,8 @@ namespace Teinora
 		double LiquidCornerX = 0.0; // the patch of moving water, see SetLiquid
 		double LiquidCornerY = 0.0;
 		double LiquidSpan = 0.0;
-		float MagicView = 0.0f;   // from 0, plain sight, to 1: the world dimmed and magic showing as haze
+		float MagicView = 0.0f;   // from 0, plain sight, to 1: the world grey and dim, and each thing glowing with the magic it holds
 		bool bMagicBends = false; // some magic nearby is dense enough to bend light
-		const std::vector<MagicGlow>* MagicGlows = nullptr; // magic held inside things, which the magic view sees through them, nearest first
 	};
 
 	class Renderer
@@ -177,7 +173,7 @@ namespace Teinora
 		void RenderUpscale(const FrameData& Frame, const Float4x4& Steady, const Float4x4& SteadyProjection, const SceneView& View, const float* Jitter, const Vec3* Axes, double Aspect);
 		void RenderMagicPass(const SceneView& View, Rhi::TextureHandle Target, Rhi::PipelineHandle Pipeline);
 		void RenderBlur();
-		void RenderFinal(const SceneView& View, bool bMagicHaze, bool bMagicBends, const Float2& FocusCenter);
+		void RenderFinal(bool bMagicBends, const Float2& FocusCenter);
 
 		Rhi::Device& Device;
 		Rhi::VendorFeatures* Vendor = nullptr;
@@ -207,7 +203,6 @@ namespace Teinora
 		Rhi::PipelineHandle FoliageShadowPipeline;
 		Rhi::PipelineHandle UnderwaterPipeline;
 		Rhi::PipelineHandle CopyPipeline;
-		Rhi::PipelineHandle MagicPipeline;
 		Rhi::PipelineHandle MagicBendPipeline;
 		Rhi::PipelineHandle TonemapPipeline;
 		Rhi::PipelineHandle BlurPipeline;
@@ -228,7 +223,6 @@ namespace Teinora
 		Rhi::TextureHandle MagicVolumes[2];
 		Vec3 MagicCorners[2];
 		Vec3 MagicSizes[2];
-		Rhi::TextureHandle MagicTarget;
 		Rhi::TextureHandle MagicBendTarget;
 		Rhi::TextureHandle MotionVectors;
 		Rhi::TextureHandle Upscaled;

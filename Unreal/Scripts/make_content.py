@@ -71,6 +71,46 @@ def texture_parameter(material, name, x, y):
     return node
 
 
+# The magic view shows each thing glowing with the magic it holds, in its own shape. For that, every lit
+# material writes the colour of its magic where its own colour would go while that view is on, and M_Magic,
+# which draws the view, reads it back from there. The colours are MagicColors in the standalone game's
+# Shaders/Common.hlsli, in the order of EMagicType.
+MAGIC_COLORS = '''
+const float3 MagicColors[8] = {
+    float3(0.34, 0.17, 0.06), float3(0.06, 0.28, 0.80), float3(0.17, 0.85, 0.46), float3(0.05, 0.30, 0.09),
+    float3(1.00, 0.34, 0.04), float3(0.52, 0.42, 1.00), float3(1.00, 0.95, 0.80), float3(0.20, 0.20, 0.26) };
+'''
+
+# What the ground is made of says which magic it holds, as in the standalone game's Shaders/Terrain.hlsl:
+# fire in what is molten, nature in bark, earth in the rest. The water is not drawn in the magic view, so
+# what lies under it shows the water's.
+TERRAIN_HELD = MAGIC_COLORS + '''
+bool bMolten = Kind > 0.62 && Kind <= 0.75;
+bool bBark = Kind > 0.19 && Kind <= 0.38;
+float3 Held = Water.x > 0.0 ? MagicColors[1] : MagicColors[bMolten ? 4 : (bBark ? 3 : 0)];
+return lerp(Plain, Held, MagicView);
+'''
+
+# All that grows holds nature magic.
+LEAF_HELD = MAGIC_COLORS + '''
+return lerp(Plain, MagicColors[3], MagicView);
+'''
+
+# A body holds the magic of what it is made of: Magic is the number of its aspect plus how much it has of
+# what it can hold, see ObjectDraw in Engine/Render/SceneTypes.h.
+BODY_HELD = MAGIC_COLORS + '''
+return lerp(Plain, MagicColors[int(Magic)] * (frac(Magic) / 0.99), MagicView);
+'''
+
+
+def held_color(material, code, plain, others, x, y):
+    """What a material gives as its colour: its own, Plain, or in the magic view that of the magic it holds."""
+    node = custom_node(material, code, ('Plain', 'MagicView') + others, x, y)
+    link(plain, '', node, 'Plain')
+    link(scalar_parameter(material, 'MagicView', 0.0, x - 300, y + 100), '', node, 'MagicView')
+    return node
+
+
 # How the standalone game's Shaders/Surfaces.hlsli picks the ground's surfaces. Positions
 # come in centimetres with Y turned round, and go on in that game's metres and axes.
 SURFACE_WEIGHTS = '''
@@ -453,7 +493,10 @@ def make_terrain():
     link(scalar_parameter(material, 'WorldTime', 0.0, -1000, -100), '', glow, 'WorldTime')
     connect(glow, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
-    connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
+    held = held_color(material, TERRAIN_HELD, color, ('Kind', 'Water'), 0, 0)
+    link(kind, '', held, 'Kind')
+    link(water, '', held, 'Water')
+    connect(held, '', unreal.MaterialProperty.MP_BASE_COLOR)
     connect(normal, '', unreal.MaterialProperty.MP_NORMAL)
     connect(constant(material, 0.9, -300, 600), '', unreal.MaterialProperty.MP_ROUGHNESS)
     connect_sway(material, kind, -300, 900)
@@ -614,7 +657,7 @@ def make_leaf():
     link(color, '', through, 'Leaf')
     link(scalar_parameter(material, 'LeafThrough', 1.0, -800, 450), '', through, 'LeafThrough')
 
-    connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
+    connect(held_color(material, LEAF_HELD, color, (), 0, 0), '', unreal.MaterialProperty.MP_BASE_COLOR)
     connect(through, '', unreal.MaterialProperty.MP_SUBSURFACE_COLOR)
     connect(mask, '', unreal.MaterialProperty.MP_OPACITY_MASK)
     connect(constant(material, 0.75, -300, 500), '', unreal.MaterialProperty.MP_ROUGHNESS)
@@ -622,7 +665,8 @@ def make_leaf():
     finish(material)
 
 
-# A body fades in water as the bed does, see SURFACE_COLOR. Each instance is told the level of its water.
+# A body fades in water as the bed does, see SURFACE_COLOR. Each instance is told the level of its water,
+# and the magic it holds.
 BODY_COLOR = '''
 float Under = WaterLevel - World.z * 0.01;
 if (Under <= 0.0 || EyeUnder > 0.5)
@@ -652,7 +696,11 @@ def make_body():
     link(level, '', color, 'WaterLevel')
     link(scalar_parameter(material, 'EyeUnder', 0.0, -800, 450), '', color, 'EyeUnder')
 
-    connect(color, '', unreal.MaterialProperty.MP_BASE_COLOR)
+    held = held_color(material, BODY_HELD, color, ('Magic',), 0, 0)
+    magic = materials.create_material_expression(material, unreal.MaterialExpressionPerInstanceCustomData, -300, 200)
+    magic.set_editor_property('data_index', 1)
+    link(magic, '', held, 'Magic')
+    connect(held, '', unreal.MaterialProperty.MP_BASE_COLOR)
     connect(constant(material, 0.7, -300, 300), '', unreal.MaterialProperty.MP_ROUGHNESS)
     finish(material)
 
@@ -963,14 +1011,17 @@ if (Cover > 0.002)
 {
     // A drop is a little lens: it shows a bent glimpse of what is behind it, lighter, and of the sky over it.
     float3 Bent = SceneTextureLookup(ViewportUVToSceneTextureUV(Uv + float2(0.0, -0.012), 14), 14, true).rgb;
-    Color = lerp(Color, Bent * 1.3 + 0.03, Cover * 0.55);
+    // To the magic view a drop is the water magic it carries.
+    Color = lerp(Color, lerp(Bent * 1.3 + 0.03, float3(0.06, 0.28, 0.80), MagicView), Cover * 0.55);
 }
 return Color;
 '''
 
 
-# The standalone game's Shaders/Magic.hlsl and the magic part of its Tonemap.hlsl, in one
-# pass. The boxes of magic arrive as sheets of slices, and the rays run in that game's axes.
+# The standalone game's Shaders/Magic.hlsl, which finds where dense magic bends light, and its ShowMagic
+# in Shaders/Common.hlsli, which makes the magic view, in one pass. The boxes of magic arrive as sheets of
+# slices, and the rays run in that game's axes. It comes before the upscaler, where what the materials
+# wrote for it still lines up with the picture, and works in the light as the scene holds it.
 MAGIC_CODE = '''
 struct Sheets
 {
@@ -991,70 +1042,49 @@ struct Sheets
 Sheets Library;
 
 float2 ViewUv = GetViewportUV(Parameters);
+// The scene's light comes with the exposure in it, which is what the eye will see and what this works in.
+// What a pass before the tone curve gives back has the exposure put into it again, so it is taken out at the end.
 float3 Plain = SceneTextureLookup(ViewportUVToSceneTextureUV(ViewUv, 14), 14, false).rgb;
 if (MagicView <= 0.001 && MagicBends <= 0.0)
 {
-    return Plain;
+    return Plain * View.OneOverPreExposure;
 }
 
 float3 Direction = normalize(ViewForward.xyz + ViewRight.xyz * (ViewUv.x * 2.0 - 1.0) + ViewUp.xyz * (1.0 - ViewUv.y * 2.0));
 float SceneDistance = SceneTextureLookup(ViewportUVToSceneTextureUV(ViewUv, 1), 1, false).r * 0.01 / max(dot(Direction, ViewForward.xyz), 0.01);
-// The magic view sees 100 m, Sim::MagicSightRadius, right through whatever is in the way, and what is inside it.
-// Light that dense magic bends in plain sight, though, is only seen as far as what is in the way.
-float Limit = MagicBends > 0.0 ? 3500.0 : 100.0;
 
-float Near = 1.5;
-float Clear = 1.0;
-float3 Glow = float3(0.0, 0.0, 0.0);
+// Light that dense magic bends is seen as far as what is in the way.
 float Dense = 0.0;
-for (int Index = 0; Index < 44 && Near < Limit; ++Index)
+if (MagicBends > 0.0)
 {
-    float Far = min(Near * 1.19, Limit);
-    float Span = Far - Near;
-    float3 Relative = Direction * (0.5 * (Near + Far));
-
-    float3 NearUvw = (Relative - NearCorner.xyz) / NearSize.xyz;
-    float3 FromEdge = min(NearUvw, 1.0 - NearUvw);
-    float Inside = saturate(min(FromEdge.x, min(FromEdge.y, FromEdge.z)) * 14.0);
-
-    float4 Sampled = float4(0.0, 0.0, 0.0, 0.0);
-    if (Inside > 0.0)
+    float Limit = min(SceneDistance, 3500.0);
+    float Near = 1.5;
+    for (int Index = 0; Index < 44 && Near < Limit; ++Index)
     {
-        Sampled = Library.Read(NearAtlas, NearAtlasSampler, NearUvw, 8.0, 6.0, 48.0) * Inside;
-    }
-    if (Inside < 1.0)
-    {
-        float3 FarUvw = (Relative - FarCorner.xyz) / FarSize.xyz;
-        if (all(FarUvw >= 0.0) && all(FarUvw <= 1.0))
+        float Far = min(Near * 1.19, Limit);
+        float Span = Far - Near;
+        float3 Relative = Direction * (0.5 * (Near + Far));
+
+        float3 NearUvw = (Relative - NearCorner.xyz) / NearSize.xyz;
+        float3 FromEdge = min(NearUvw, 1.0 - NearUvw);
+        float Inside = saturate(min(FromEdge.x, min(FromEdge.y, FromEdge.z)) * 14.0);
+
+        float Density = 0.0;
+        if (Inside > 0.0)
         {
-            Sampled += Library.Read(FarAtlas, FarAtlasSampler, FarUvw, 4.0, 3.0, 12.0) * (1.0 - Inside);
+            Density = Library.Read(NearAtlas, NearAtlasSampler, NearUvw, 8.0, 6.0, 48.0).x * Inside;
         }
-    }
+        if (Inside < 1.0)
+        {
+            float3 FarUvw = (Relative - FarCorner.xyz) / FarSize.xyz;
+            if (all(FarUvw >= 0.0) && all(FarUvw <= 1.0))
+            {
+                Density += Library.Read(FarAtlas, FarAtlasSampler, FarUvw, 4.0, 3.0, 12.0).x * (1.0 - Inside);
+            }
+        }
 
-    float Density = Sampled.x;
-    if (Density > 0.0001)
-    {
-        // As Hiding in Shaders/Magic.hlsl, and bending from the dew point, Sim::MagicDewPoint, up.
-        float Taken = (1.0 - exp(-Density * 0.0035 / (1.0 + Density / 20.0) * Span)) * (1.0 - smoothstep(70.0, 100.0, Near));
-        Glow += Sampled.yzw / Density * Clear * Taken;
-        Clear *= 1.0 - Taken;
-        Dense += Near < SceneDistance ? saturate((Density - 30.0) / 13.6) * Span : 0.0;
-    }
-    Near = Far;
-}
-
-// The magic held inside things glows through them, as in the standalone game's Magic.hlsl.
-float4 GlowPoints[8] = { GlowPoint0, GlowPoint1, GlowPoint2, GlowPoint3, GlowPoint4, GlowPoint5, GlowPoint6, GlowPoint7 };
-float3 GlowColors[8] = { GlowColor0, GlowColor1, GlowColor2, GlowColor3, GlowColor4, GlowColor5, GlowColor6, GlowColor7 };
-for (int Held = 0; Held < 8; ++Held)
-{
-    float Radius = GlowPoints[Held].w;
-    float Along = dot(GlowPoints[Held].xyz, Direction);
-    float Off = dot(GlowPoints[Held].xyz, GlowPoints[Held].xyz) - Along * Along;
-    if (Radius > 0.0 && Along > 0.0 && Along < 100.0 && Off < Radius * Radius)
-    {
-        float Through = 1.0 - Off / (Radius * Radius);
-        Glow += GlowColors[Held].rgb * Through * 2.5;
+        Dense += saturate((Density - 30.0) / 13.6) * Span; // from the dew point, Sim::MagicDewPoint, up
+        Near = Far;
     }
 }
 
@@ -1068,11 +1098,17 @@ if (Shimmer > 0.0)
     Color = SceneTextureLookup(ViewportUVToSceneTextureUV(ViewUv + Offset * 0.006 * Shimmer, 14), 14, true).rgb;
 }
 
-float3 Linear = pow(max(Color, 0.0), 2.2);
-// The world goes grey and dim, and the magic glows in it by its own light, lighting nothing, as in the standalone game's Tonemap.hlsl.
-float Grey = dot(Linear, float3(0.2126, 0.7152, 0.0722)) * 0.3;
-Linear = lerp(Linear, float3(Grey, Grey, Grey) * (1.0 - 0.5 * (1.0 - Clear)) + Glow * 0.9, MagicView);
-return pow(max(Linear, 0.0), 1.0 / 2.2);
+// The world goes grey and dim, and each thing in it glows with the magic it holds, by its own light, out to
+// the 100 m the view sees, Sim::MagicSightRadius. The glow follows the light and dark of the thing a little,
+// or its shape would be lost in one flat colour. The grey is 0.3 where the standalone game has 0.2: the engine's
+// tone curve is the darker of the two in the darks.
+float Tone = dot(Color, float3(0.2126, 0.7152, 0.0722));
+Tone = Tone / (1.0 + Tone);
+float Seen = 1.0 - smoothstep(70.0, 100.0, SceneDistance);
+float3 Shown = Tone * 0.3 + Base.rgb * (0.55 * (0.7 + 0.6 * Tone) * Seen);
+// A flame is fire magic for all to see as it is. It is drawn into the custom depth to be known by here.
+float Flame = Own.r < Depth.r + 10.0 ? 1.0 : 0.0;
+return lerp(Color, lerp(Shown, Color, Flame), MagicView) * View.OneOverPreExposure;
 '''
 
 
@@ -1319,7 +1355,7 @@ def make_rain():
     material.set_editor_property('blendable_location', unreal.BlendableLocation.BL_SCENE_COLOR_AFTER_TONEMAPPING)
 
     # The standalone game's Shaders/Tonemap.hlsl: the rain falls only in front of whatever is further than it.
-    names = ('Rain', 'Slant', 'RainTime', 'Scene', 'Depth')
+    names = ('Rain', 'Slant', 'RainTime', 'MagicView', 'Scene', 'Depth')
     node = custom_node(material, RAIN_CODE, names, -300, 0)
     scene = materials.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, -100)
     scene.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
@@ -1331,6 +1367,7 @@ def make_rain():
     link(scalar_parameter(material, 'Rain', 0.0, -700, 100), '', node, 'Rain')
     link(scalar_parameter(material, 'Slant', 0.0, -700, 200), '', node, 'Slant')
     link(scalar_parameter(material, 'RainTime', 0.0, -700, 300), '', node, 'RainTime')
+    link(scalar_parameter(material, 'MagicView', 0.0, -700, 400), '', node, 'MagicView')
     connect(node, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     finish(material)
 
@@ -1338,21 +1375,19 @@ def make_rain():
 def make_magic():
     material = begin('M_Magic')
     material.set_editor_property('material_domain', unreal.MaterialDomain.MD_POST_PROCESS)
-    material.set_editor_property('blendable_location', unreal.BlendableLocation.BL_SCENE_COLOR_AFTER_TONEMAPPING)
+    material.set_editor_property('blendable_location', unreal.BlendableLocation.BL_SCENE_COLOR_BEFORE_DOF)
 
     scalars = ('MagicView', 'MagicBends', 'MagicTime')
-    vectors = ('NearCorner', 'NearSize', 'FarCorner', 'FarSize', 'ViewForward', 'ViewRight', 'ViewUp') \
-        + tuple('GlowPoint%d' % index for index in range(8)) + tuple('GlowColor%d' % index for index in range(8))
+    vectors = ('NearCorner', 'NearSize', 'FarCorner', 'FarSize', 'ViewForward', 'ViewRight', 'ViewUp')
     textures = ('NearAtlas', 'FarAtlas')
-    node = custom_node(material, MAGIC_CODE, scalars + vectors + textures + ('Scene', 'Depth'), -300, 0)
+    node = custom_node(material, MAGIC_CODE, scalars + vectors + textures + ('Scene', 'Depth', 'Base', 'Own'), -300, 0)
 
     row = -300
     for name in scalars:
         link(scalar_parameter(material, name, 0.0, -700, row), '', node, name)
         row += 100
     for name in vectors:
-        # Where held magic is takes its radius along in the fourth number.
-        link(vector_parameter(material, name, -700, row), 'RGBA' if name.startswith('GlowPoint') else '', node, name)
+        link(vector_parameter(material, name, -700, row), '', node, name)
         row += 100
     for name in textures:
         link(texture_parameter(material, name, -700, row), '', node, name)
@@ -1365,6 +1400,14 @@ def make_magic():
     depth.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_SCENE_DEPTH)
     link(scene, 'Color', node, 'Scene')
     link(depth, 'Color', node, 'Depth')
+
+    # What the materials wrote of the magic in things, and the flames, which draw themselves there to be told apart.
+    base = materials.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, row + 200)
+    base.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_BASE_COLOR)
+    own = materials.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, row + 300)
+    own.set_editor_property('scene_texture_id', unreal.SceneTextureId.PPI_CUSTOM_DEPTH)
+    link(base, 'Color', node, 'Base')
+    link(own, 'Color', node, 'Own')
 
     connect(node, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     finish(material)

@@ -250,7 +250,7 @@ namespace Teinora::Sim
 	/** Kilograms of inertia per kilogram of magic, in case a constant turns out to be needed here. */
 	inline constexpr double MagicInertia = 1.0;
 
-	/** How far the magic view sees, in metres. Also in Shaders/Magic.hlsl and Unreal/Scripts/make_content.py. */
+	/** How far the magic view sees, in metres. Also in Shaders/Common.hlsli and Unreal/Scripts/make_content.py. */
 	inline constexpr double MagicSightRadius = 100.0;
 
 	/** Metres over the ground where magic gives out. There is magic everywhere below that. */
@@ -297,6 +297,13 @@ namespace Teinora::Sim
 	 * depth of cloud, as the Cloud Cover setting would say it: 1 for the usual. Shaders/Clouds.hlsli's GetCover.
 	 */
 	double ShownCloudCover(double Gathered);
+
+	/**
+	 * How closed the sky is with cloud, from 0 to 1, for the same measure of what has gathered: open under
+	 * scattered cloud, and closed by the time it rains. Under a closed sky the suns cast no shadows, and their
+	 * light comes down grey from all over it.
+	 */
+	double GetOvercast(double Gathered);
 
 	/**
 	 * The weather under a cloud holding this much water magic and lightning, each in kg/m3: none under one that

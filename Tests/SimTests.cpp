@@ -1163,6 +1163,20 @@ namespace
 		Expect(GetWeather(MagicStormWater - 1.0, 0.0).Storm == 0.0 && GetWeather(MagicStormWater + 5.0, 0.0).Storm > 0.0, "and storms over 50");
 		Expect(CloudDepthFor(MagicCloudWater - 1.0) == 0.0 && CloudDepthFor(MagicStormWater) > 1000.0, "thin water magic makes no cloud, and a storm's is tall");
 
+		// The sky is open under scattered cloud and closed by the time it rains, which is what takes the suns' shadows away.
+		const double RainGathered = CloudDepthFor(MagicRainWater) / CloudDepthFor(MagicStormWater);
+		Expect(GetOvercast(0.3) == 0.0 && GetOvercast(RainGathered) > 0.7 && GetOvercast(0.6) == 1.0, "the sky is open under scattered cloud and closed where it rains");
+
+		// The eye takes some of the cast out of a coloured light, keeps grey as bright, and leaves the night alone.
+		const Vec3 BlueGreen{ 0.72, 1.78, 1.65 };
+		const Vec3 Gains = GetWhiteBalance(BlueGreen);
+		const auto GetGrey = [](const Vec3& Color) { return 0.2126 * Color.X + 0.7152 * Color.Y + 0.0722 * Color.Z; };
+		std::printf("       under the blue-green sun alone the eye shows red %.2f times as strong, and green %.2f\n", Gains.X, Gains.Y);
+		Expect(Gains.X > 1.1 && Gains.X < 1.5 && Gains.Y < 1.0, "the eye takes some of a coloured light's cast out, and not all");
+		Expect(std::fabs(GetGrey({ BlueGreen.X * Gains.X, BlueGreen.Y * Gains.Y, BlueGreen.Z * Gains.Z }) - GetGrey(BlueGreen)) < 1e-9, "and leaves it as bright");
+		const Vec3 AtNight = GetWhiteBalance({ 0.003, 0.005, 0.012 });
+		Expect(std::fabs(AtNight.X - 1.0) < 0.05 && std::fabs(AtNight.Z - 1.0) < 0.05, "in the dark it does not, and the night keeps its blue");
+
 		// The wind blows differently from place to place, so it runs things together.
 		const Vec3 Here = LargeWindAt(0.0, 0.0, 100.0, WorldSeed);
 		double Widest = 0.0;

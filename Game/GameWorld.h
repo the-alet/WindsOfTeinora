@@ -98,9 +98,6 @@ namespace Teinora
 		/** The puffs of steam and smoke nearest to Eye, nearest first. */
 		void CollectPuffs(const Vec3& Eye, std::vector<PuffDraw>& Out, std::size_t Most);
 
-		/** The magic held inside the bodies nearest to Eye, as it glows in the magic view, nearest first. */
-		void CollectHeldMagic(const Vec3& Eye, std::vector<MagicGlow>& Out, std::size_t Most) const;
-
 	private:
 		struct StaticSpawn
 		{

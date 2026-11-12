@@ -2,12 +2,12 @@
 
 struct TonemapConstants
 {
-	float4 Magic; // x how far the magic view has faded in, y 1 when dense magic bends light, zw a texel of its map
+	float4 Bend; // x 1 when dense magic bends light, yz a texel of its map
 };
 
 [[vk::push_constant]] ConstantBuffer<TonemapConstants> Push : register(b2);
 
-// Texture1 holds the haze of the magic view, this one where magic bends light.
+// Where dense magic bends light.
 [[vk::binding(2, 1)]] Texture2D<float4> BendMap : register(t2);
 [[vk::binding(3, 1)]] Texture2D<float> RainDepth : register(t3); // the scene's depth, for what the rain falls in front of
 
@@ -100,10 +100,10 @@ float4 PSMain(Varyings Input) : SV_Target
 	float2 Uv = Input.Uv;
 	float Shimmer = 0.0;
 
-	if (Push.Magic.y > 0.0)
+	if (Push.Bend.x > 0.0)
 	{
 		// Light bends along the slope of the optical path, which is what makes air shimmer.
-		const float2 Texel = Push.Magic.zw;
+		const float2 Texel = Push.Bend.yz;
 		const float Left = BendMap.SampleLevel(LinearClamp, Uv - float2(Texel.x, 0.0), 0.0).r;
 		const float Right = BendMap.SampleLevel(LinearClamp, Uv + float2(Texel.x, 0.0), 0.0).r;
 		const float Up = BendMap.SampleLevel(LinearClamp, Uv - float2(0.0, Texel.y), 0.0).r;
@@ -118,7 +118,8 @@ float4 PSMain(Varyings Input) : SV_Target
 		Shimmer = clamp(Here.r * 1.5, -0.14, 0.14) + 0.06 * saturate(Here.g);
 	}
 
-	float3 Color = Texture0.SampleLevel(LinearClamp, Uv, 0.0).rgb * Options.x * (1.0 + Shimmer);
+	// The eye gets half used to the colour of the light it is in, so one sun alone tints the world and does not dye it.
+	float3 Color = Texture0.SampleLevel(LinearClamp, Uv, 0.0).rgb * WhiteBalance.rgb * Options.x * (1.0 + Shimmer);
 
 	// Rain, in front of whatever is further than it. Under it everything is a little greyer and darker.
 	const float Rain = Weather.x;
@@ -143,23 +144,12 @@ float4 PSMain(Varyings Input) : SV_Target
 		{
 			// A drop is a little lens: it shows the light from a wide piece of the sky over it, and a bent glimpse of
 			// what is behind, so it is lighter than a dark ground and hardly shows against the sky.
-			const float3 Sky = (SkyZenith.rgb * 0.55 + SkyHorizon.rgb * 0.45 + PlanetColor.rgb * 0.15) * Options.x;
-			const float3 Bent = Texture0.SampleLevel(LinearClamp, Input.Uv + float2(0.0, -0.012), 0.0).rgb * Options.x;
-			Color = lerp(Color, Sky * 1.1 + Bent * 0.35, Cover * 0.55);
+			const float3 Open = SkyZenith.rgb * 0.55 + SkyHorizon.rgb * 0.45 + PlanetColor.rgb * 0.15;
+			const float3 Sky = lerp(Open, dot(Open, float3(0.2126, 0.7152, 0.0722)).xxx * 0.6, Shade.x) * Options.x; // a closed sky is grey
+			const float3 Bent = Texture0.SampleLevel(LinearClamp, Input.Uv + float2(0.0, -0.012), 0.0).rgb * WhiteBalance.rgb * Options.x;
+			// To the magic view a drop is the water magic it carries.
+			Color = lerp(Color, lerp(Sky * 1.1 + Bent * 0.35, MagicColors[WaterMagic], Weather.w), Cover * 0.55);
 		}
 	}
-	float3 Shown = Aces(Color);
-
-	const float View = Push.Magic.x;
-	if (View > 0.0)
-	{
-		// The world goes grey and dim, and the magic glows in it, through it, by its own light: it lights nothing,
-		// so the grey is only a little hidden behind it. This comes after the curve: before it, fire and all it
-		// lights are so bright that dimming them only takes them down to white.
-		const float4 Haze = Texture1.SampleLevel(LinearClamp, Input.Uv, 0.0);
-		const float Grey = dot(Shown, float3(0.2126, 0.7152, 0.0722)) * 0.3;
-		Shown = lerp(Shown, saturate(Grey.xxx * (1.0 - 0.5 * Haze.a) + Aces(Haze.rgb * 0.9)), View);
-	}
-
-	return float4(pow(Shown, 1.0 / 2.2), 1.0);
+	return float4(pow(Aces(Color), 1.0 / 2.2), 1.0);
 }

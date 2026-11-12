@@ -60,22 +60,25 @@ float4 PSMain(Varyings Input) : SV_Target
 	const float4 Far = mul(InverseViewProjection, float4(Input.Screen, 0.5, 1.0));
 	const float3 Direction = normalize(Far.xyz / Far.w);
 
-	float3 Color = SkyColor(Direction);
+	// Under a closed sky, what shows past the far clouds where they sink into the haze is that haze, grey, and
+	// no sun stands in it: the suns and all around them are behind cloud.
+	const float Open = 1.0 - Shade.x;
+	float3 Color = GetOvercastAir(SkyColor(Direction));
 
 	const float SunDot = dot(Direction, SunDirection.xyz);
-	Color += SunColor.rgb * smoothstep(0.99985, 0.99995, SunDot) * 12.0;
+	Color += SunColor.rgb * smoothstep(0.99985, 0.99995, SunDot) * 12.0 * Open;
 
 	// The blue-green sun in its own colour. As bright as the first it would burn out to white, as any sun does
 	// to an eye or a camera, and the two would look alike: a few times the sky around it keeps its hue.
 	const float Sun2Dot = dot(Direction, Sun2Direction.xyz);
 	const float3 Hue2 = pow(Sun2Color.rgb / max(max(Sun2Color.r, Sun2Color.g), max(Sun2Color.b, 1e-4)), 2.5); // deepened, or it reads as white
-	Color += Hue2 * (dot(Color, float3(0.3, 0.6, 0.1)) * 4.0 + 0.4) * smoothstep(0.99992, 0.99997, Sun2Dot);
+	Color += Hue2 * (dot(Color, float3(0.3, 0.6, 0.1)) * 4.0 + 0.4) * smoothstep(0.99992, 0.99997, Sun2Dot) * Open;
 
 	// Around each disc, the light it sends that the air scatters a little aside: the aureole. It outshines the
 	// corona by day and goes out with the disc, which is why the corona is only seen when the disc is covered.
-	Color += SunColor.rgb * pow(saturate(SunDot), 3000.0) * 2.0 + Sun2Color.rgb * pow(saturate(Sun2Dot), 3000.0) * 2.0;
-	Color += GetCorona(Direction, SunDirection.xyz, SunRadius, Coronas[0].rgb, 0.0);
-	Color += GetCorona(Direction, Sun2Direction.xyz, SecondSunRadius, Coronas[1].rgb, 2.7);
+	Color += (SunColor.rgb * pow(saturate(SunDot), 3000.0) * 2.0 + Sun2Color.rgb * pow(saturate(Sun2Dot), 3000.0) * 2.0) * Open;
+	Color += GetCorona(Direction, SunDirection.xyz, SunRadius, Coronas[0].rgb * Open, 0.0);
+	Color += GetCorona(Direction, Sun2Direction.xyz, SecondSunRadius, Coronas[1].rgb * Open, 2.7);
 
 	if (GetNight() > 0.0)
 	{
@@ -86,5 +89,5 @@ float4 PSMain(Varyings Input) : SV_Target
 
 	// A different start in every pixel turns the banding of the steps into fine grain.
 	const float Dither = frac(52.9829189 * frac(dot(Input.Clip.xy, float2(0.06711056, 0.00583715))));
-	return float4(AddClouds(Color, Direction, 40, Dither), 1.0);
+	return float4(ShowMagic(AddClouds(Color, Direction, 40, Dither), float3(0.0, 0.0, 0.0), 0.0), 1.0);
 }

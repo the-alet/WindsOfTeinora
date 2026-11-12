@@ -37,8 +37,7 @@
 	float4 Coronas[2];     // the light of each sun's corona, which the planet in front of a sun does not take away
 	float4 Weather;        // x how hard it rains, from 0 to 1, y how stormy, z how far the wind slants the rain across the screen, w how far the magic view has faded in
 	float4 Shade;          // x how overcast the sky around the camera is, from 0 for clear or scattered cloud to 1 under a closed sky
-	float4 GlowPoints[8];  // magic held inside things, relative to the camera; w the radius, 0 for none. MaxMagicGlows in Renderer.h
-	float4 GlowColors[8];  // and its colour and brightness
+	float4 WhiteBalance;   // what the eye, half used to the colour of the light, makes of colours: see GetWhiteBalance in SceneTypes.h
 	float4 CloudMapPlace;  // the cloud map's low corner relative to the camera in xy, z the size of its cells, w 1 when there is one
 	uint4 CloudMap[144];   // how much cloud the water magic up there makes, 48 by 48 bytes from 0 to 1.3, see StormField::WriteCloudMap
 };
@@ -93,6 +92,15 @@ float3 SkyColor(float3 Direction)
 	return lerp(Color, SkyHorizon.rgb * 0.75, saturate(-Direction.z * 6.0));
 }
 
+/**
+ * What the air far off looks like under a closed sky: no sun lights it, so it is as grey as the cloud over it,
+ * and a good deal darker than the bright horizon of a clear day.
+ */
+float3 GetOvercastAir(float3 Air)
+{
+	return lerp(Air, dot(Air, float3(0.2126, 0.7152, 0.0722)).xxx * float3(0.92, 0.98, 1.08) * 0.5, Shade.x);
+}
+
 float3 ApplyFog(float3 Color, float3 Relative)
 {
 	const float Distance = length(Relative);
@@ -107,12 +115,8 @@ float3 ApplyFog(float3 Color, float3 Relative)
 	// By day the air in front of a far hill glows as the sky does. At night the little light there is comes
 	// from the whole depth of the sky behind a hill, and the few kilometres of air in front of it hold far
 	// less: a hill stands against the night sky as a dark shape rather than fading into its glow.
-	float3 Air = SkyColor(float3(Direction.xy, max(Direction.z, 0.02))) * lerp(1.0, 0.35, Night);
-
-	// Under a closed sky no sun lights the haze: it is as grey as the cloud over it, and a good deal darker
-	// than the bright horizon of a clear day, so far hills sink into grey and not into white.
-	const float Overcast = Shade.x;
-	Air = lerp(Air, dot(Air, float3(0.2126, 0.7152, 0.0722)).xxx * float3(0.92, 0.98, 1.08) * 0.5, Overcast);
+	// Under a closed sky far hills sink into grey and not into white.
+	const float3 Air = GetOvercastAir(SkyColor(float3(Direction.xy, max(Direction.z, 0.02))) * lerp(1.0, 0.35, Night));
 	return lerp(Color, Air, Amount);
 }
 
@@ -146,6 +150,43 @@ float3 WaterNormal(float2 Position, float Time)
 		Slope += WaveScale * Waves[Index].xy * Waves[Index].z * cos(Phase);
 	}
 	return normalize(float3(-Slope * Conditions.y, 1.0));
+}
+
+// The colours of magic by its aspect, in the order of EMagicType in Game/TeinoraSim.h: MagicColors in Game/MagicField.cpp.
+static const float3 MagicColors[8] = {
+	float3(0.34, 0.17, 0.06), float3(0.06, 0.28, 0.80), float3(0.17, 0.85, 0.46), float3(0.05, 0.30, 0.09),
+	float3(1.00, 0.34, 0.04), float3(0.52, 0.42, 1.00), float3(1.00, 0.95, 0.80), float3(0.20, 0.20, 0.26) };
+static const int EarthMagic = 0;
+static const int WaterMagic = 1;
+static const int NatureMagic = 3;
+static const int FireMagic = 4;
+
+static const float MagicSightRadius = 100.0; // Sim::MagicSightRadius: the magic view sees only so far around the eye
+static const float MagicSightFade = 70.0;    // where it starts to give out
+static const float MagicViewGrey = 0.2;      // how bright the brightest of the world is to the magic view
+static const float MagicViewGlow = 0.55;     // and the magic in things, as a share of its colour
+
+/**
+ * The magic view: the world gone grey and dim, and each thing in it glowing with the magic it holds, in its own
+ * shape and in that magic's colour. Magic glows by its own light, the same by day and by night, and lights
+ * nothing. Takes what a surface looks like in plain sight and the colour of its magic, and gives what to draw.
+ */
+float3 ShowMagic(float3 Color, float3 Magic, float Distance)
+{
+	const float View = Weather.w;
+	if (View <= 0.0)
+	{
+		return Color;
+	}
+
+	// Worked out as bright as the eye will see it, and then taken back through the exposure: fire and all it
+	// lights are too bright for dimming them to do more than take them down to white.
+	const float Lit = dot(Color * WhiteBalance.rgb, float3(0.2126, 0.7152, 0.0722)) * Options.x;
+	const float Seen = 1.0 - smoothstep(MagicSightFade, MagicSightRadius, Distance);
+	const float Tone = Lit / (1.0 + Lit);
+	// The glow follows the light and dark of the thing a little, or its shape would be lost in one flat colour.
+	const float3 Shown = Tone * MagicViewGrey + Magic * (MagicViewGlow * (0.7 + 0.6 * Tone) * Seen);
+	return lerp(Color, Shown / (WhiteBalance.rgb * max(Options.x, 1e-5)), View);
 }
 
 #endif
