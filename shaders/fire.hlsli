@@ -32,17 +32,21 @@ void fireAt(float3 p, float s, out float3 emit, out float smoke) {
     const float t = fireTime();
     emit = 0;
     smoke = 0;
-    const float height = 1.35 * s, radius = 0.42 * sqrt(s);
+    // Up to the campfire's strength the flame shrinks as it dies down; a stronger fire (a burning tree) is the same
+    // flame scaled up, with as many tongues and no brighter per metre.
+    const float k = sqrt(max(s, 1.0));
+    const float height = 1.35 * min(s, 1.0) * pow(k, 1.5), radius = 0.42 * sqrt(min(s, 1.0)) * pow(k, 1.2);
     const float y = p.y / height;
     if (y > 0.0 && y < 1.15) {
         // A teardrop, licked upward by noise that rises through it.
+        const float3 q = p / k;
         const float w = radius * pow(saturate(1.0 - y), 0.65) * saturate(y * 6.0 + 0.25);
-        const float n = fireFbm(float3(p.x * 3.1, p.y * 2.2 - t * 3.4, p.z * 3.1));
-        const float d = length(p.xz + (n - 0.5) * 0.35 * y) / max(w, 1e-3);
-        const float body = saturate(1.0 - d) * smoothstep(0.32, 0.7, n + 0.55 * (1.0 - y));
+        const float n = fireFbm(float3(q.x * 3.1, q.y * 2.2 - t * 3.4, q.z * 3.1));
+        const float d = length(p.xz + (n - 0.5) * 0.35 * k * y) / max(w, 1e-3);
+        const float body = saturate(1.0 - d) * smoothstep(0.32 + 0.08 * (k - 1.0), 0.7, n + 0.55 * (1.0 - y));
         const float heat = saturate(1.15 - y * 1.1 - d * 0.35);  // hottest low and in the middle
         const float3 color = lerp(float3(1.0, 0.22, 0.03), float3(1.0, 0.8, 0.45), heat * heat);
-        emit = color * body * (2.0 + 22.0 * heat * heat) * s;
+        emit = color * body * (2.0 + 22.0 * heat * heat) * min(s, 1.0) / k;
     }
     // Smoke: a widening column above the flame, carried off by the wind as it rises.
     const float above = p.y - height * 0.8;
@@ -96,9 +100,10 @@ float steamAt(float3 p, float s) {
     if (p.y < 0.0 || p.y > 8.0) return 0.0;
     const float t = fireTime();
     const float2 q = p.xz - g_frame.fireInfo.yz * (p.y / 1.6);
-    const float rw = (0.7 + 0.3 * p.y) * sqrt(s);
-    const float n = fireFbm(float3(q.x * 1.2, p.y * 0.8 - t * 1.3, q.y * 1.2));
-    return saturate(1.0 - length(q) / rw) * smoothstep(0.25, 0.7, n) * 0.9 * s * saturate(1.0 - p.y / 8.0) * smoothstep(0.0, 0.25, p.y);
+    const float rw = (0.45 + 0.17 * p.y) * sqrt(s);
+    const float n = fireFbm(float3(q.x * 1.3, p.y * 0.8 - t * 1.3, q.y * 1.3));
+    const float fade = pow(saturate(1.0 - p.y / 7.5), 1.5);
+    return smoothstep(1.0, 0.35, length(q) / rw) * smoothstep(0.35, 0.75, n) * 0.6 * s * fade * smoothstep(0.0, 0.25, p.y);
 }
 
 // Through one steam column's box (base xyz relative to the camera, w its strength), like marchOneFire.
@@ -106,8 +111,8 @@ float4 marchSteam(float4 st, float3 origin, float3 dir, float maxT, float dim) {
     const float s = st.w;
     if (s <= 0.01) return float4(0, 0, 0, 1);
     const float3 drift = float3(g_frame.fireInfo.y, 0, g_frame.fireInfo.z) * 5.0;
-    const float3 lo = st.xyz + float3(-4.0, -0.1, -4.0) + min(drift, 0.0);
-    const float3 hi = st.xyz + float3(4.0, 8.2, 4.0) + max(drift, 0.0);
+    const float3 lo = st.xyz + float3(-4.5, -0.1, -4.5) + min(drift, 0.0);
+    const float3 hi = st.xyz + float3(4.5, 7.6, 4.5) + max(drift, 0.0);
     const float3 inv = 1.0 / select(abs(dir) > 1e-6, dir, 1e-6);
     const float3 ta = (lo - origin) * inv, tb = (hi - origin) * inv;
     const float t0 = max(max(max(min(ta.x, tb.x), min(ta.y, tb.y)), min(ta.z, tb.z)), 0.0);

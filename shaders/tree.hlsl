@@ -70,11 +70,7 @@ GBufferOut BarkPS(VSOut i) {
     GBufferOut o;
     o.albedo = float4(a.rgb, d.w);
     o.normal = float4(n, d.z);
-<<<<<<< Updated upstream
-    o.material = float4(0, 0.3, 0, 0);
-=======
     o.material = float4(0, 0.3, 0, packMagic(MAGIC_HELD_NATURE, 1.0 - i.charred, false));
->>>>>>> Stashed changes
     o.motion = 0;
     return o;
 }
@@ -100,11 +96,7 @@ GBufferOut LeafPS(VSOut i, bool front : SV_IsFrontFace) {
     GBufferOut o;
     o.albedo = float4(a.rgb, 1.0);
     o.normal = float4(N, d.z);
-<<<<<<< Updated upstream
-    o.material = float4(d.w, 0.35, 0, 0);  // translucency
-=======
     o.material = float4(d.w, 0.35, 0, packMagic(MAGIC_HELD_NATURE, 1.0 - i.charred, false));  // translucency
->>>>>>> Stashed changes
     o.motion = 0;
     return o;
 }

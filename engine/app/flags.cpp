@@ -71,6 +71,17 @@ bool parseFlags(int argc, wchar_t** argv, LaunchFlags& f, std::string& error) {
         } else if (key == "--clouds") {
             if (!toDouble(val, d) || d < 0 || d > 1) return bad();
             f.clouds = d;
+        } else if (key == "--inject") {
+            // aspect by name, then x, y (above the ground, or the water over a pond), z, kg/m3
+            const size_t comma = val.find(',');
+            if (comma == std::string::npos) return bad();
+            static const char* const names[] = {"earth", "water", "nature", "fire", "air", "lightning", "light", "neutral"};
+            const std::string name = val.substr(0, comma);
+            int aspect = -1;
+            for (int n = 0; n < 8; ++n)
+                if (name == names[n]) aspect = n;
+            if (aspect < 0 || !toList(val.substr(comma + 1), list) || list.size() != 4 || list[3] <= 0) return bad();
+            f.injects.push_back({aspect, list[0], list[1], list[2], list[3]});
         } else if (key == "--throws") {
             if (!toDouble(val, d) || d < 0) return bad();
             f.throws = int(d);

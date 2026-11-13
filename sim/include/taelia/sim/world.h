@@ -1,17 +1,20 @@
 // The world: seed, clock, settings, and the fixed step. No engine or graphics code here.
 #pragma once
 #include <cstdint>
+#include <map>
+#include <set>
+#include <memory>
+#include <vector>
 
+#include "taelia/shared_constants.h"
 #include "taelia/sim/clock.h"
 #include "taelia/sim/math.h"
 #include "taelia/sim/clouds.h"
-<<<<<<< Updated upstream
-=======
 #include "taelia/sim/magic.h"
 #include "taelia/sim/physics.h"
 #include "taelia/sim/plants.h"
->>>>>>> Stashed changes
 #include "taelia/sim/terrain.h"
+#include "taelia/sim/wind.h"
 
 namespace taelia {
 
@@ -27,11 +30,15 @@ struct WorldDesc {
     double startHour = 9.5;
     int64_t startDay = 0;
     WorldSettings settings;
+    MagicOptions magic;
 };
 
 class World {
 public:
     explicit World(const WorldDesc& d);
+    ~World();
+    World(const World&) = delete;  // the physics holds on to the terrain and the wind
+    World& operator=(const World&) = delete;
 
     // Runs the fixed steps owed for this much real time; returns how many ran.
     int advance(double realSeconds);
@@ -40,9 +47,6 @@ public:
     double groundHeight(double x, double z) const { return terrain_.height(x, z); }
     const Terrain& terrain() const { return terrain_; }
     const CloudMap& clouds() const { return clouds_; }
-<<<<<<< Updated upstream
-    dvec3 wind() const;                            // m/s at the camera (one vector until the magic field drives it)
-=======
     dvec3 wind() const;                            // m/s: the set wind, at WIND_REFERENCE_HEIGHT
     dvec3 windAt(const dvec3& p) const;            // the air at p, gusts and eddies included
 
@@ -68,8 +72,8 @@ public:
         double seconds = 0;
     };
     const std::vector<Strike>& strikes() const { return strikes_; }
-    // Steam and fire in plants (fire magic past the dew point): where steam rises now (and by how much fire is past
-    // the dew point), the trees burning (their base, how hard like the campfire's strength, how far they have burnt
+    // Steam and fire in plants (fire magic past the dew point): where steam rises now (how much fire was past the dew
+    // point there, thinning over STEAM_SECONDS once it is gone), the trees burning (their base, how hard like the campfire's strength, how far they have burnt
     // 0..1), the trees burnt (by tree cell), the grass burnt away (circles).
     struct Glow {
         dvec3 position;
@@ -96,7 +100,6 @@ public:
     MagicSample magicAt(const dvec3& p) const { return magic_->sample(p); }
     const MagicField& magic() const { return *magic_; }
     MagicField& magic() { return *magic_; }
->>>>>>> Stashed changes
 
     uint64_t seed() const { return seed_; }
     WorldClock& clock() { return clock_; }
@@ -112,8 +115,6 @@ private:
     WorldSettings settings_;
     Terrain terrain_;
     CloudMap clouds_;
-<<<<<<< Updated upstream
-=======
     WindField wind_;
     std::unique_ptr<Physics> physics_;
     std::unique_ptr<MagicField> magic_;
@@ -130,7 +131,6 @@ private:
     std::set<std::pair<int64_t, int64_t>> burnt_;
     std::vector<Glow> scorches_, steam_;
     void burnPlants();
->>>>>>> Stashed changes
 };
 
 }  // namespace taelia

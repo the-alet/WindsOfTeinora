@@ -47,6 +47,7 @@ Put this file in the root of the new project as `SPEC.md`. Each session: read "R
 ### Camera and controls
 - No player character yet: a free camera, speed fixed at 10 (no mouse wheel).
 - The eye's focus moves first and the camera follows it with damping: inside a neutral circle of 5% around the camera's direction it doesn't turn; past 80% of the field of view it is pulled hard toward the gaze. Field of view about 10% narrower than usual; a generous focus area.
+- Nothing about the camera is abrupt (the user): turns ease in and out, flight eases to its speed and to a stop, the mouse moves the gaze at a moderate rate.
 - Blur outside the focus: almost none at the focus edge, strong at the screen edge, with 5% darkening at the very edge.
 - Ball: thrown along the gaze. Holding LMB longer throws harder; a quick click drops it.
 - Esc: menu with graphics settings, a controls tab, exit. More polygons at the highest detail. `/`: world settings (wind, time speed and so on). `+`/`-`: time speed from x1/50 to x50; everything, magic and fire included, follows it. `M`: magic view.
@@ -59,6 +60,7 @@ Put this file in the root of the new project as `SPEC.md`. Each session: read "R
 ### Land, water, plants
 - Uneven generated terrain with normal maps and textures.
 - Water is a liquid in basins with a shaped bed, not a plane at height 0. Separate ponds have no waves.
+- Water is see-through, from above and from under its surface (the user): the bed shows a few metres off with sunlight playing on it, things fade into the water's colour with distance; from below the world above shows through a window overhead and past it the surface mirrors the water.
 - Realistic trees. Grass as blade models with a blade texture, not green-painted ground.
 - A campfire near the spawn point.
 

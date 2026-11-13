@@ -55,7 +55,7 @@ TEST(gaze_near_edge_is_pulled_hard) {
     mid.edge = 0.4;
     edge.circle = 1.6;
     edge.edge = 0.95;
-    CHECK(CameraRig::turnRate(edge) > 4.0 * CameraRig::turnRate(mid));
+    CHECK(CameraRig::turnRate(edge) > 3.0 * CameraRig::turnRate(mid));  // hard, but eased (the spring), not a snap
     GazeScreen inside;
     inside.circle = k::GAZE_NEUTRAL * 0.9;
     CHECK(CameraRig::turnRate(inside) == 0.0);
@@ -74,10 +74,37 @@ TEST(camera_moves_at_fixed_speed) {
     CameraInput in;
     in.forward = 1;
     in.right = 1;  // diagonal input is not faster
+    r.update(in, 1.0 / 120, kAspect);
+    CHECK(length(r.velocity) < 0.1 * k::CAMERA_SPEED);  // it eases into the flight, no sudden start
+    for (int i = 0; i < 360; ++i) r.update(in, 1.0 / 120, kAspect);
+    const dvec3 p0 = r.position;
     for (int i = 0; i < 120; ++i) r.update(in, 1.0 / 120, kAspect);
-    const dvec3 d = r.position - dvec3{0, 1.8, 0};
-    CHECK_NEAR(length(d), k::CAMERA_SPEED, 1e-6);
+    const dvec3 d = r.position - p0;
+    CHECK_NEAR(length(d), k::CAMERA_SPEED, 0.01 * k::CAMERA_SPEED);  // then holds the fixed speed
     CHECK(d.x > 0 && d.z < 0);  // forward +X, right -Z
+    // Letting go eases it to a stop.
+    r.update(CameraInput{}, 1.0 / 120, kAspect);
+    CHECK(length(r.velocity) > 0.9 * k::CAMERA_SPEED);
+    run(r, 3.0);
+    CHECK(length(r.velocity) == 0.0);
+}
+
+TEST(camera_eases_into_and_out_of_turns) {
+    CameraRig r = rigAt();
+    CameraInput in;
+    in.mouseDx = 0.3 / k::GAZE_MOUSE_RAD_PER_COUNT;
+    r.update(in, 1.0 / 120, kAspect);
+    const double firstRate = r.yawRate;
+    in.mouseDx = 0;
+    for (int i = 0; i < 12; ++i) r.update(in, 1.0 / 120, kAspect);
+    CHECK(firstRate > 0 && r.yawRate > 2.0 * firstRate);  // the turn builds up instead of starting at full speed
+    double peak = 0;
+    for (int i = 0; i < 600; ++i) {
+        r.update(in, 1.0 / 120, kAspect);
+        peak = std::max(peak, r.yawRate);
+        CHECK(wrapAngle(r.gazeYaw - r.yaw) > -1e-9);  // it never swings past the gaze
+    }
+    CHECK(std::fabs(r.yawRate) < 1e-3);  // and comes to rest
 }
 
 TEST(pitch_is_limited) {

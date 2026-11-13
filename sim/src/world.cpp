@@ -1,12 +1,39 @@
 #include "taelia/sim/world.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
+#include "taelia/shared_constants.h"
 #include "taelia/sim/hash.h"
+#include "taelia/sim/sky.h"
 
 namespace taelia {
 
-World::World(const WorldDesc& d) : seed_(d.seed), clock_(d.startHour, d.startDay), settings_(d.settings), terrain_(d.seed), clouds_(d.seed) {}
+namespace {
+
+MagicOptions magicOptions(const WorldDesc& d) {
+    MagicOptions o = d.magic;
+    o.seed = d.seed;
+    return o;
+}
+
+}  // namespace
+
+World::World(const WorldDesc& d)
+    : seed_(d.seed), clock_(d.startHour, d.startDay), settings_(d.settings), terrain_(d.seed), clouds_(d.seed),
+      wind_(hashCombine(d.seed, 0x77196)), physics_(std::make_unique<Physics>(&terrain_, &wind_, d.seed)),
+      magic_(std::make_unique<MagicField>(&terrain_, &wind_, magicOptions(d))) {
+    wind_.setMean(wind());
+    physics_->setMagicSampler([this](const dvec3& p, double& rho, dvec3& u, double& air) {
+        const MagicSample s = magic_->sample(p);
+        rho = s.rho.total();
+        u = s.u;
+        air = s.level >= 0 && rho > 1e-6 ? s.rho[Aspect::Air] / rho : 0.0;  // only where the field runs
+    });
+}
+
+World::~World() = default;
 
 int World::advance(double realSeconds) {
     const int n = clock_.advance(realSeconds);
@@ -17,12 +44,8 @@ int World::advance(double realSeconds) {
 void World::step() {
     clock_.onStep();
     clouds_.setOverride(settings_.cloudCover);
+    clouds_.setRain(settings_.rain);
     clouds_.step(WorldClock::stepSeconds(), wind(), clock_.seconds());
-<<<<<<< Updated upstream
-}
-
-
-=======
     wind_.setMean(wind());
     wind_.step(WorldClock::stepSeconds());
     physics_->step(WorldClock::stepSeconds(), clock_.seconds());
@@ -109,7 +132,10 @@ void World::step() {
 // Fire magic past the dew point: steam where it meets a pond, trees near it catch (and burn as hot things for a while,
 // then stand charred), the grass under it burns away.
 void World::burnPlants() {
-    steam_.clear();
+    // Steam keeps rising a while after the water was heated: it thins over STEAM_SECONDS.
+    const double thin = std::exp(-WorldClock::stepSeconds() / k::STEAM_SECONDS);
+    for (Glow& g : steam_) g.strength *= thin;
+    std::erase_if(steam_, [](const Glow& g) { return g.strength < 1.0; });
     const double now = clock_.seconds();
     for (auto it = burning_.begin(); it != burning_.end();) {
         if (now >= it->second.until) {
@@ -122,7 +148,13 @@ void World::burnPlants() {
     std::vector<TreeInstance> near;
     for (const HotSpot& h : magic_->hotSpots()) {
         if (h.water) {
-            steam_.push_back({h.position, h.fire - k::MAGIC_FIRE_STEAM});
+            // One column per couple of metres of water surface, as strong as the fire is past the dew point.
+            const double strength = h.fire - k::MAGIC_FIRE_STEAM;
+            Glow* column = nullptr;
+            for (Glow& g : steam_)
+                if (std::hypot(g.position.x - h.position.x, g.position.z - h.position.z) < 2.0) column = &g;
+            if (column) column->strength = std::max(column->strength, strength);
+            else if (steam_.size() < 64) steam_.push_back({h.position, strength});
             continue;
         }
         const double ground = terrain_.height(h.position.x, h.position.z);
@@ -167,7 +199,6 @@ dvec3 World::windAt(const dvec3& p) const {
     return air + (m.u - air) * (double(k::MAGIC_WIND_SHARE) * m.rho[Aspect::Air] / rho);
 }
 
->>>>>>> Stashed changes
 dvec3 World::wind() const {
     // Blows toward the opposite of where it comes from.
     const double to = (settings_.windFromDeg + 180.0) * kDegToRad;
@@ -187,8 +218,6 @@ uint64_t World::stateHash() const {
     h = hashCombine(h, bits(settings_.windFromDeg));
     h = hashCombine(h, bits(clouds_.displacement().x));
     h = hashCombine(h, bits(clouds_.displacement().z));
-<<<<<<< Updated upstream
-=======
     h = hashCombine(h, physics_->stateHash());
     h = hashCombine(h, wind_.stateHash());
     h = hashCombine(h, magic_->stateHash());
@@ -199,7 +228,6 @@ uint64_t World::stateHash() const {
     h = hashCombine(h, bits(fire_));
     for (const auto& [id, held] : held_) h = hashCombine(hashCombine(h, id), bits(held));
     for (const Manifestation& m : magic_->manifestations()) h = hashCombine(hashCombine(h, m.id), bits(m.held));
->>>>>>> Stashed changes
     return h;
 }
 

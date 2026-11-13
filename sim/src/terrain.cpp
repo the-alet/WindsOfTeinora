@@ -30,11 +30,17 @@ struct PondCache {
 };
 
 PondCache& pondCache(uint64_t seed) {
+    // Entries live for the program's life, so each thread may keep the last one it found without locking again.
+    thread_local uint64_t lastSeed = 0;
+    thread_local PondCache* last = nullptr;
+    if (last && lastSeed == seed) return *last;
     static std::mutex registryMutex;
     static std::unordered_map<uint64_t, PondCache*> registry;
     std::lock_guard<std::mutex> lock(registryMutex);
     PondCache*& c = registry[seed];
     if (!c) c = new PondCache();  // one per world seed, kept for the program's life
+    lastSeed = seed;
+    last = c;
     return *c;
 }
 

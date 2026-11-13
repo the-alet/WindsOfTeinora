@@ -106,7 +106,7 @@ TEST(clouds_follow_the_wind_and_the_weather) {
     const dvec3 wind{5, 0, 0};
     const CloudSample before = m.sample(1000, 0);
     for (int i = 0; i < 600; ++i) m.step(1.0 / 60.0, wind, 0.0);  // 10 s at 5 m/s: carried 50 m east
-    CHECK_NEAR(m.sample(1050, 0).coverage, before.coverage, 1e-9);
+    CHECK_NEAR(m.sample(1050, 0).coverage, before.coverage, 1e-3);  // the cloud water's grid interpolates the cover
     m.setOverride(0.0);
     int any = 0;
     for (int i = 0; i < 200; ++i) any += m.sample(i * 337.0, i * 113.0).coverage > 0.01;

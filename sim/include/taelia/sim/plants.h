@@ -49,6 +49,9 @@ TreeSkeleton growTree(TreeKind kind, uint64_t seed);
 
 inline constexpr int kTreeVariants = 4;  // skeletons per species; instances pick one and vary scale and turn
 
+// The seed each skeleton grows from: the renderer and the physics must grow the same trees.
+inline uint64_t treeSkeletonSeed(TreeKind kind, int variant) { return uint64_t(variant) * 977 + uint64_t(kind) * 13 + 7; }
+
 struct TreeInstance {
     dvec3 position;   // trunk base on the ground
     float yaw = 0;    // radians

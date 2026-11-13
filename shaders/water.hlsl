@@ -4,6 +4,10 @@
 #include "sky.hlsli"
 #include "rt.hlsli"
 #include "clouds.hlsli"
+#include "ball.hlsli"
+#include "magic.hlsli"
+#include "fire.hlsli"
+#include "water_optics.hlsli"
 
 struct Pond {
     float4 centerLevel;  // xz: centre relative to the camera, y: level relative to the camera, w: mean radius
@@ -71,7 +75,8 @@ float rippleHeight(float2 xz) {
 }
 
 // What the calm surface mirrors: the sky, or (ray traced) the land and trees around the pond as dim silhouettes.
-float3 reflectedColor(float3 origin, float3 R) {
+float3 reflectedScene(float3 origin, float3 R, out float hitT) {
+    hitT = 1e5;
     const float3 sky = skyColor(R);
     if (!rtEnabled()) return sky;
     RayDesc ray;
@@ -87,6 +92,16 @@ float3 reflectedColor(float3 origin, float3 R) {
             q.CommitNonOpaqueTriangleHit();
     }
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return sky;
+    hitT = q.CommittedRayT();
+    if (q.CommittedInstanceID() == BALL_INSTANCE) {
+        // A ball: its panels by the hit point on the unit sphere, lit by the suns and the sky.
+        const float3 local = normalize(q.CommittedObjectRayOrigin() + q.CommittedObjectRayDirection() * q.CommittedRayT());
+        const float3 bn = normalize(mul(q.CommittedObjectToWorld3x4(), float4(local, 0)));
+        float3 light = skyAmbient(bn);
+        [unroll] for (uint b = 0; b < 2; ++b)
+            light += g_frame.sunLight[b].rgb * (1.0 - g_frame.suns[b].w) * sunTransmittance(g_frame.suns[b].xyz) * saturate(dot(bn, g_frame.suns[b].xyz));
+        return applyHaze(ballAlbedo(local, 0.01).rgb * light, R * q.CommittedRayT());
+    }
     const bool land = q.CommittedInstanceID() == TERRAIN_INSTANCE;
     const float3 base = land ? float3(0.065, 0.085, 0.035) : float3(0.030, 0.055, 0.020);
     float3 sunsUp = 0;
@@ -94,6 +109,53 @@ float3 reflectedColor(float3 origin, float3 R) {
         sunsUp += g_frame.sunLight[s].rgb * (1.0 - g_frame.suns[s].w) * sunTransmittance(g_frame.suns[s].xyz) * saturate(g_frame.suns[s].y);
     const float3 lit = base * (skyAmbient(float3(0, 1, 0)) + sunsUp * 0.3);
     return applyHaze(lit, R * q.CommittedRayT());
+}
+
+// What the surface mirrors, with the campfire in front of it (fire is reflected in water).
+float3 reflectedColor(float3 origin, float3 R) {
+    float hitT;
+    const float3 c = reflectedScene(origin, R, hitT);
+    const float4 f = marchFire(origin + float3(0, 0.03, 0), R, hitT, 1.0);
+    return c * f.a + f.rgb;
+}
+
+// The scene's colour in a direction from the eye (the frame before the water), or the sky where that leaves the screen.
+// `onScreen`: how much of it came from the screen (fading out toward the edges, so nothing ends in a seam).
+float3 sceneToward(float3 from, float3 dir, float reach, out float onScreen) {
+    const float4 c = mul(g_frame.viewProj, float4(from + dir * reach, 1));
+    onScreen = 0;
+    if (c.w <= 1e-4) return 0;
+    const float2 ndc = c.xy / c.w;
+    onScreen = saturate((0.995 - max(abs(ndc.x), abs(ndc.y))) / 0.2);
+    if (onScreen <= 0.0) return 0;
+    return g_tex2D[g_push.sceneColor].SampleLevel(s_linearClamp, ndc * float2(0.5, -0.5) + 0.5, 0).rgb;
+}
+
+// The surface from under the water: inside Snell's window the world above, squeezed into a cone round the vertical;
+// past the critical angle the surface mirrors the water below. All of it through the water between it and the eye.
+float4 seenFromBelow(VSOut i, float3 n, float3 V, float dist) {
+    const float3 down = -n;                   // the side facing the eye
+    const float3 d = -V;                      // the view ray, going up
+    const float3 T = refract(d, down, 1.333); // into the air; zero past the critical angle
+    float F = 1.0;
+    float3 above = 0;
+    if (dot(T, T) > 0.5) {
+        F = 0.02 + 0.98 * pow(1.0 - saturate(dot(T, n)), 5.0);
+        float onScreen;
+        above = sceneToward(i.rel, T, 400.0, onScreen);
+        above = lerp(skyColor(T), above, onScreen);
+    }
+    // The mirrored water: the bed where it shows, else the water's own colour.
+    float bedOnScreen;
+    float3 below = sceneToward(i.rel, reflect(d, down), 25.0, bedOnScreen);
+    const float depth = waterSurfaceAbove();
+    below = lerp(waterGlow(depth), below, bedOnScreen);
+    float3 color = throughWater(lerp(above, below, F), dist, depth * 0.5);
+    if (magicView()) {
+        const float3 glow = magicSurfaceGlow(packMagic(MAGIC_HELD_WATER, 1.0, false), down, V, dist);
+        color = magicDim(color) + glow + magicFreeGlow(-V, dist, i.pos.xy);
+    }
+    return float4(color, 1);
 }
 
 float4 PSMain(VSOut i) : SV_Target0 {
@@ -116,15 +178,21 @@ float4 PSMain(VSOut i) : SV_Target0 {
     const float sceneDist = sceneDepth > 0 ? (g_frame.cameraUp.w / sceneDepth) / max(dot(dir, g_frame.cameraForward.xyz), 1e-3) : 1e4;
     const float thickness = max(sceneDist - dist, 0.0);
 
-    const float2 refrUv = screenUv + n.xz * 0.04 * saturate(thickness);
-    float3 behind = g_tex2D[g_push.sceneColor].SampleLevel(s_linearClamp, refrUv, 0).rgb;
-    const float3 absorb = float3(1.1, 0.55, 0.5);                // per metre: pond water is murky, red goes first
-    const float3 trans = exp(-absorb * thickness);
-    float3 sunsAbove = 0;
-    [unroll] for (uint s = 0; s < 2; ++s) sunsAbove += g_frame.sunLight[s].rgb * (1.0 - g_frame.suns[s].w) * sunTransmittance(g_frame.suns[s].xyz);
-    const float3 inscatter = float3(0.020, 0.028, 0.016) * (skyAmbient(float3(0, 1, 0)) + sunsAbove * 0.1);
-    const float3 refracted = behind * trans + inscatter * (1.0 - trans.g);
+    if (i.rel.y > 0.0) return seenFromBelow(i, n, V, dist);
 
+    const float2 refrUv = screenUv + n.xz * 0.04 * saturate(thickness);
+    const float3 behind = g_tex2D[g_push.sceneColor].SampleLevel(s_linearClamp, refrUv, 0).rgb;
+    // The bed lies this deep: the daylight reaching it crossed that much water first.
+    const float3 bed = dir * min(sceneDist, dist + 60.0);
+    const float bedDepth = max(i.rel.y - bed.y, 0.0);
+    const float3 refracted = throughWater(behind * waterDepthLight(bedDepth) * waterCaustics(bed, bedDepth), thickness, bedDepth * 0.5);
+
+    if (magicView()) {  // no reflections; the water glows with the magic it holds, the free magic in front of it
+        const float dist = length(i.rel);
+        const float3 glow = magicSurfaceGlow(packMagic(MAGIC_HELD_WATER, 1.0, false), n, V, dist);
+        const float4 f = marchFire(0, -V, dist, K_MAGIC_VIEW_DIM);
+        return float4((magicDim(refracted) + glow + magicFreeGlow(-V, dist, i.pos.xy)) * f.a + f.rgb, 1);
+    }
     const float3 R = reflect(-V, n);
     float3 reflected = reflectedColor(i.rel, R);
     const float F = 0.02 + 0.98 * pow(1.0 - saturate(dot(n, V)), 5.0);
@@ -141,5 +209,6 @@ float4 PSMain(VSOut i) : SV_Target0 {
     }
     float3 color = lerp(refracted, reflected, F) + glints;
     color = applyHaze(color, i.rel);
-    return float4(color, 1);
+    const float4 f = marchFire(0, -V, length(i.rel), 1.0);  // the campfire between us and the water
+    return float4(color * f.a + f.rgb, 1);
 }

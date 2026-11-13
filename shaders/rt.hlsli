@@ -1,26 +1,19 @@
 // Shared ray-tracing helpers: the scene TLAS (frame constants scene.x) and the leaf alpha test.
-<<<<<<< Updated upstream
-// Tree instances carry customIndex = entry in the alpha table (scene.y: first leaf index, leaf texture);
-// terrain instances are 0xFFFFFF and opaque.
-=======
 // Tree instances carry customIndex = entry in the alpha table (scene.y: first leaf index, leaf texture), and in bits
 // 16-22 how far fire has charred the tree;
 // terrain instances are 0xFFFFFF, the campfire 0xFFFFFE, balls 0xFFFFFD: all opaque, never in the alpha table.
->>>>>>> Stashed changes
 #ifndef TAELIA_RT_HLSLI
 #define TAELIA_RT_HLSLI
 
 #include "common.hlsli"
 
 static const uint TERRAIN_INSTANCE = 0xFFFFFF;
+static const uint CAMPFIRE_INSTANCE = 0xFFFFFE;
+static const uint BALL_INSTANCE = 0xFFFFFD;
+static const uint FIRST_PROP_INSTANCE = 0xFFFFF0;  // ids from here up are opaque props, not tree entries
 
 bool rtEnabled() { return g_frame.flags.w != 0 && g_frame.scene.x != 0; }
 
-<<<<<<< Updated upstream
-// True if the leaf card triangle is solid at the hit point (its texture's alpha).
-bool leafAlphaHit(uint entry, uint prim, float2 bc) {
-    if (entry == TERRAIN_INSTANCE) return true;
-=======
 // True if the leaf card triangle is solid at the hit point (its texture's alpha). A tree's id carries in bits 16-22 how
 // far fire has charred it: its leaves burn away as tree.hlsl's LeafPS shows them.
 bool leafAlphaHit(uint id, uint prim, float2 bc) {
@@ -28,7 +21,6 @@ bool leafAlphaHit(uint id, uint prim, float2 bc) {
     const uint entry = id & 0xFFFFu;
     const float charred = float((id >> 16) & 127u) / 127.0;
     if (charred >= 0.999) return false;
->>>>>>> Stashed changes
     const uint2 info = g_buffers[g_frame.scene.y].Load2(entry * 8);
     const uint3 tri = g_buffers[g_frame.scene.w].Load3((info.x + prim * 3) * 4);
     ByteAddressBuffer vb = g_buffers[g_frame.scene.z];

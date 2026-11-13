@@ -13,7 +13,21 @@ void CameraRig::place(const dvec3& pos, double yawRad, double pitchRad) {
     position = pos;
     yaw = gazeYaw = wrapAngle(yawRad);
     pitch = gazePitch = clampd(pitchRad, -maxPitch, maxPitch);
+    yawRate = pitchRate = 0;
+    velocity = {};
 }
+
+namespace {
+
+// One implicit step of a damped spring pulling an angle toward its target (stable for any step): stiffness from the
+// follow rate (a critically damped spring with this natural frequency settles about as fast as a plain exponential
+// follow at `rate`), damping never below the stop rate so a turn always eases to rest.
+double springRate(double rate, double error, double angleRate, double dt) {
+    const double w = 2.15 * rate, stop = 2.0 * std::max(w, double(k::GAZE_STOP_RATE));
+    return (angleRate + dt * w * w * error) / (1.0 + dt * stop + dt * dt * w * w);
+}
+
+}  // namespace
 
 dvec3 CameraRig::right() const { return {std::cos(yaw), 0.0, -std::sin(yaw)}; }
 dvec3 CameraRig::up() const { return cross(forward(), right()); }
@@ -51,17 +65,28 @@ void CameraRig::update(const CameraInput& in, double dt, double aspect) {
     if (dpitch > limY) pitch = gazePitch - limY;
     if (dpitch < -limY) pitch = gazePitch + limY;
 
-    // 2. The camera follows with damping.
+    // 2. The camera follows with damping, easing into and out of the turn.
     if (dt > 0) {
-        const double k = 1.0 - std::exp(-turnRate(gazeOnScreen(aspect)) * dt);
-        yaw = wrapAngle(yaw + wrapAngle(gazeYaw - yaw) * k);
-        pitch = clampd(pitch + (gazePitch - pitch) * k, -maxPitch, maxPitch);
+        const double rate = turnRate(gazeOnScreen(aspect));
+        yawRate = springRate(rate, wrapAngle(gazeYaw - yaw), yawRate, dt);
+        pitchRate = springRate(rate, gazePitch - pitch, pitchRate, dt);
+        yaw = wrapAngle(yaw + yawRate * dt);
+        pitch = pitch + pitchRate * dt;
+        if (std::fabs(pitch) > maxPitch) {
+            pitch = clampd(pitch, -maxPitch, maxPitch);
+            pitchRate = 0;
+        }
     }
 
-    // 3. Fixed-speed flight along the camera's axes.
+    // 3. Flight along the camera's axes at a fixed speed, easing to it and to a stop.
     dvec3 move = forward() * in.forward + right() * in.right + dvec3{0, 1, 0} * in.up;
     const double len = length(move);
-    if (len > 1e-9 && dt > 0) position += move * (k::CAMERA_SPEED * dt / std::max(len, 1.0));
+    const dvec3 want = len > 1e-9 ? move * (k::CAMERA_SPEED / std::max(len, 1.0)) : dvec3{};
+    if (dt > 0) {
+        velocity += (want - velocity) * (1.0 - std::exp(-dt / k::CAMERA_EASE_SECONDS));
+        if (len <= 1e-9 && length(velocity) < 0.01) velocity = {};
+        position += velocity * dt;
+    }
 }
 
 }  // namespace taelia

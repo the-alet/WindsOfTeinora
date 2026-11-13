@@ -35,6 +35,8 @@ public:
     void jumpDays(int days);
 
     double timeSpeed() const { return speed_; }
+    // How far into the next step the leftover real time reaches (0..1), for drawing between steps.
+    double stepFraction() const { return accumulator_ / stepSeconds(); }
     void setTimeSpeed(double s);
     // The +/- ladder from x1/50 to x50.
     void faster();

@@ -5,6 +5,9 @@
 #include "rt.hlsli"
 #include "skybodies.hlsli"
 #include "clouds.hlsli"
+#include "magic.hlsli"
+#include "fire.hlsli"
+#include "water_optics.hlsli"
 
 struct LightPush {
     uint albedo, normal, material, depth;
@@ -12,15 +15,15 @@ struct LightPush {
 };
 [[vk::push_constant]] ConstantBuffer<LightPush> g_push : register(b1, space0);
 
-float sunVisibility(float3 rel, float3 n, float3 L) {
-    if (!rtEnabled()) return L.y < -0.05 ? 0.0 : 1.0;
+// Whether the light from direction L reaches rel (no farther than maxT): ray traced when possible.
+float rayVisibility(float3 rel, float3 n, float3 L, float maxT) {
+    if (!rtEnabled()) return 1.0;
     const uint tlas = g_frame.scene.x;
-    if (g_frame.flags.w == 0 || tlas == 0 || L.y < -0.05) return L.y < -0.05 ? 0.0 : 1.0;
     RayDesc ray;
     ray.Origin = rel + n * (0.02 + 0.0004 * length(rel));
     ray.Direction = L;
     ray.TMin = 0.01;
-    ray.TMax = 6000.0;
+    ray.TMax = maxT;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(g_tlas[tlas], RAY_FLAG_NONE, 0xFF, ray);
     while (q.Proceed()) {
@@ -29,6 +32,11 @@ float sunVisibility(float3 rel, float3 n, float3 L) {
             q.CommitNonOpaqueTriangleHit();
     }
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
+}
+
+float sunVisibility(float3 rel, float3 n, float3 L) {
+    if (L.y < -0.05) return 0.0;
+    return rayVisibility(rel, n, L, 6000.0);
 }
 
 float D_GGX(float NoH, float a) {
@@ -49,6 +57,8 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         float through;
         const float3 bodies = skyBodies(dir, through);
         color = skyRadiance(dir) + bodies;  // the air in front of everything out there scatters its own light
+        if (magicView()) color = magicDim(color) + magicFreeGlow(dir, 1e9, float2(id.xy));
+        else color += magicDewTint(dir, 1e9);
     } else {
         const float viewZ = g_frame.cameraUp.w / depth;
         const float3 rel = dir * (viewZ / dot(dir, g_frame.cameraForward.xyz));
@@ -76,9 +86,30 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
             const float F = 0.04 + 0.96 * pow(1.0 - VoH, 5.0);
             glint += sun * saturate(NoL) * D_GGX(NoH, rough * rough) * F * 0.25 / max(saturate(dot(n, V)) * saturate(NoL), 0.1);
         }
+        // The campfire's flickering light, shadowed.
+        const float3 fl = fireLight(rel, n);
+        if (fl.r > 1e-5) {
+            const float3 toFire = g_frame.fire.xyz + float3(0, 0.6 * fireStrength(), 0) - rel;
+            const float dFire = length(toFire);
+            direct += fl * rayVisibility(rel, n, toFire / dFire, max(dFire - 0.35, 0.05));
+        }
+        direct += otherFlamesLight(rel, n);
+        direct += float3(0.7, 0.74, 1.0) * 0.5 * g_frame.weather.z * saturate(n.y * 0.5 + 0.5);  // a lightning flash, from above
         const float3 diffuse = albedo * (direct + skyIrradiance(n) * ao + back * translucency * 0.6);
         color = diffuse + glint * specular;
-        color = aerialPerspective(color, rel);
+        const float dist = length(rel);
+        if (cameraUnderwater() && rel.y < waterSurfaceAbove()) {
+            // Seen from under a pond's surface: lit by the daylight the water above lets through, seen through the
+            // water between (the straight line from the eye stays under the surface).
+            const float depthHere = waterSurfaceAbove() - rel.y;
+            color = throughWater(color * waterDepthLight(depthHere) * waterCaustics(rel, depthHere), dist, waterSurfaceAbove() - rel.y * 0.5);
+        } else {
+            color = aerialPerspective(color, rel);
+        }
+        if (magicView()) color = magicDim(color) + magicSurfaceGlow(m.a, n, V, dist) + magicFreeGlow(dir, dist, float2(id.xy));
+        else color += magicDewTint(dir, dist);
+        const float4 f = marchFire(0, dir, dist, magicView() ? K_MAGIC_VIEW_DIM : 1.0);  // in front of the surface
+        color = color * f.a + f.rgb;
     }
     g_rwTex2D[g_push.outUav][id.xy] = float4(color, 1);
 }

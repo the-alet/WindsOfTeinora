@@ -52,8 +52,6 @@ struct FrameConstants {
     uint4 atmosphere;       // bindless: x transmittance LUT, y multiple scattering LUT, z sky view LUT, w aerial perspective volume
     uint4 atmosphere2;      // bindless: x sky irradiance, y cloud shadow map, z cloud map, w clouds (colour + transmittance)
     uint4 scene;            // x: TLAS bindless index, y: sky texture, z, w: unused
-<<<<<<< Updated upstream
-=======
     float4 magicWindow[2];  // the magic volumes (L0, L1): xyz the window's min corner relative to the camera (m), w: cell width (m)
     float4 magicInfo;       // x: L0 cell height, y: L1 cell height (m), z: view reach (m), w: 1 if the volumes hold the field
     uint4 magicVolume;      // bindless: x L0 volume, y L1 volume (rgb: colour x density, a: total density, kg/m3)
@@ -66,7 +64,7 @@ struct FrameConstants {
     float4 bolt[2];         // the last strike: [0] xyz where it hit (relative to the camera), w seed bits; [1] xyz the cloud base above it, w its age (s, < 0: none)
     float4 steam[2];        // steam where fire past the dew point meets water: xyz its base on the surface relative to the camera (m), w strength (0: none)
     float4 scorch[8];       // grass burnt away: xyz the circle's centre on the ground relative to the camera (m), w its radius (0: none)
->>>>>>> Stashed changes
+    float4 underwater;      // x: 1 if the eye is under a pond's surface, y: how far that surface is above it (m), zw: unused
 };
 
 

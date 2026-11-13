@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 #include "app/flags.h"
 #include "no_dialogs.h"
@@ -72,6 +73,12 @@ public:
 private:
     void placeCamera(const LaunchFlags& f);
     void handleKeys();
+    // LMB (interactive only): press starts the charge, release throws along the gaze (a quick click drops).
+    void handleThrowButton();
+    // --throws=N: one ball every 20 frames from frame 2, deterministic speeds and spread.
+    void scriptedThrows(const LaunchFlags& f);
+    // A ball from the hand (in front of the camera, a little low and to the right) at `velocity`.
+    void throwFromHand(const dvec3& velocity);
     RenderView makeView(double aspect, double realSeconds) const;
 
     std::filesystem::path dir_;
@@ -88,6 +95,11 @@ private:
     bool automated_ = false;
     int appliedDetail_ = -1;
     uint64_t frame_ = 0;
+    bool charging_ = false;
+    bool injected_ = false;
+    std::chrono::steady_clock::time_point chargeStart_;
+    dvec3 cameraVelocity_, lastCameraPos_;  // m/s, from the rig's last move
+    std::vector<BallPose> ballPoses_;
 };
 
 void App::placeCamera(const LaunchFlags& f) {
@@ -113,6 +125,46 @@ void App::handleKeys() {
     if (w.keyPressed('M')) magicView_ = !magicView_;
 }
 
+void App::throwFromHand(const dvec3& velocity) {
+    dvec3 from = rig_.position + rig_.forward() * 0.35 - rig_.up() * 0.15 + rig_.right() * 0.12;
+    from.y = std::max(from.y, world_->groundHeight(from.x, from.z) + k::BALL_RADIUS + 0.05);
+    world_->throwBall(from, velocity);
+}
+
+void App::handleThrowButton() {
+    Window& w = window_;
+    // Only with the mouse captured and no menu: a click that focuses the window or works a menu throws nothing.
+    if (!w.mouseCaptured() || ui_.menu != Menu::None) {
+        charging_ = false;
+        return;
+    }
+    if (w.mousePressed(0)) {
+        charging_ = true;
+        chargeStart_ = std::chrono::steady_clock::now();
+    }
+    if (charging_ && w.mouseReleased(0)) {
+        charging_ = false;
+        const double held = std::chrono::duration<double>(std::chrono::steady_clock::now() - chargeStart_).count();
+        if (held < k::DROP_CLICK_SECONDS) {
+            throwFromHand(cameraVelocity_);
+        } else {
+            const double speed = k::THROW_SPEED_MIN + (k::THROW_SPEED_MAX - k::THROW_SPEED_MIN) *
+                                                          smoothstep(k::DROP_CLICK_SECONDS, k::THROW_CHARGE_SECONDS, held);
+            throwFromHand(rig_.gazeDirection() * speed + cameraVelocity_);
+        }
+    }
+}
+
+void App::scriptedThrows(const LaunchFlags& f) {
+    if (frame_ < 2 || (frame_ - 2) % 20 != 0) return;
+    const uint64_t i = (frame_ - 2) / 20;
+    if (i >= uint64_t(f.throws)) return;
+    const double speed = k::THROW_SPEED_MIN + (k::THROW_SPEED_MAX - k::THROW_SPEED_MIN) * double(i % 4) / 3.0;
+    const double yaw = rig_.gazeYaw + double(int(i * 3 % 5) - 2) * 3.0 * kDegToRad;  // -6..+6 degrees
+    const double pitch = rig_.gazePitch + (8.0 + 4.0 * double(i * 7 % 4)) * kDegToRad;  // +8..+20 degrees
+    throwFromHand(directionFromAngles(yaw, pitch) * speed + cameraVelocity_);
+}
+
 RenderView App::makeView(double aspect, double realSeconds) const {
     RenderView v;
     v.cameraPos = rig_.position;
@@ -135,8 +187,6 @@ RenderView App::makeView(double aspect, double realSeconds) const {
     v.sky = Sky::at(world_->clock().seconds());
     v.seed = world_->seed();
     v.frame = frame_;
-<<<<<<< Updated upstream
-=======
     v.balls = &ballPoses_;
     v.magic = &world_->magic();
     v.campfire = world_->campfireCore() - dvec3{0, 0.4, 0};
@@ -154,7 +204,6 @@ RenderView App::makeView(double aspect, double realSeconds) const {
         v.strike = world_->strikes().back().position;
         v.strikeAge = world_->clock().seconds() - world_->strikes().back().seconds;
     }
->>>>>>> Stashed changes
     return v;
 }
 
@@ -269,16 +318,32 @@ int App::run(const LaunchFlags& f) {
                 dt = std::min(std::chrono::duration<double>(now - last).count(), 0.25);
                 last = now;
                 handleKeys();
+                handleThrowButton();
                 window_.setMouseCaptured(window_.focused() && ui_.menu == Menu::None);
             }
         }
         const double aspect = double(outW) / double(outH);
         const double realSeconds = automated ? frame_ * (1.0 / 60.0) : std::chrono::duration<double>(clock::now() - start).count();
 
+        if (automated && f.throws > 0) scriptedThrows(f);
+        // --inject: dense magic for checks, once the field runs.
+        if (!injected_ && world_->magic().started()) {
+            for (const LaunchFlags::Injection& in : f.injects) {
+                // Above the ground, or above the water over a pond.
+                const TerrainSample s = world_->terrain().sample(in.x, in.z);
+                const double base = s.underwater() ? s.waterLevel : s.height;
+                world_->magic().addDensity({in.x, base + in.y, in.z}, Aspect(in.aspect), in.kg);
+            }
+            injected_ = true;
+        }
+        world_->setFocus(rig_.position);
         world_->advance(dt);
         device_->latencyMarker(rhi::LatencyMarker::SimulationEnd);
         if (!automated) rig_.update(readCameraInput(window_), dt, aspect);
         else rig_.update(CameraInput{}, dt, aspect);
+        if (frame_ > 0 && dt > 0) cameraVelocity_ = (rig_.position - lastCameraPos_) * (1.0 / dt);
+        lastCameraPos_ = rig_.position;
+        world_->ballPoses(ballPoses_);
 
         // In automated runs the UI is laid out at the frame size; it never reads the real mouse.
         ui_.newFrame(outW, outH, dt, automated || window_.mouseCaptured());

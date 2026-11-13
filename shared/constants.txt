@@ -16,11 +16,13 @@ CAMERA_SPEED                float   10.0        # m/s, fixed, no mouse wheel
 CAMERA_FOV_V_DEG            float   54.0        # about 10% narrower than the usual 60 deg
 CAMERA_NEAR                 float   0.05
 CAMERA_SPAWN                float3  0.0,1.8,0.0 # spawn point, metres (y up)
-GAZE_MOUSE_RAD_PER_COUNT    float   0.0021      # how far one mouse count moves the gaze
+GAZE_MOUSE_RAD_PER_COUNT    float   0.0012      # how far one mouse count moves the gaze (moderate: the camera was too twitchy)
 GAZE_NEUTRAL                float   0.05        # inside this circle around the camera's direction it doesn't turn
 GAZE_PULL_HARD              float   0.80        # past this the camera is pulled hard toward the gaze
-GAZE_FOLLOW_RATE            float   1.4         # 1/s, damping of the follow between the two
-GAZE_HARD_RATE              float   14.0        # 1/s, the hard pull at the edge
+GAZE_FOLLOW_RATE            float   1.4         # 1/s, how fast the camera follows between the two (it eases into and out of turns)
+GAZE_HARD_RATE              float   5.0         # 1/s, the hard pull at the edge
+GAZE_STOP_RATE              float   4.0         # 1/s, how soon a turn eases to rest once the gaze is back in the neutral circle
+CAMERA_EASE_SECONDS         float   0.3         # s: flight eases to its speed and to a stop over about this long
 GAZE_MAX_PITCH_DEG          float   86.0
 
 # ---- focus blur (screen space; radii are fractions of the half screen height, measured from the gaze point)
@@ -59,8 +61,6 @@ PLANET_SPIN_DAYS            double  9.7         # turns very slowly on its own a
 PLANET_PRECESSION_DAYS      double  63.0        # its tilted rings open and close over the days
 PLANET_RING_TILT_DEG        float   24.0
 STAR_COUNT                  int     7000
-<<<<<<< Updated upstream
-=======
 
 # ---- physics (step 4)
 BALL_RADIUS                 float   0.08        # m: a hand-sized ball
@@ -105,6 +105,9 @@ MAGIC_FIRE_TO_LIGHTNING     float   675.0
 MAGIC_FIRE_TO_LIGHT         float   1100.0      # lightning turns to light at the same pressure (825 kg/m3 of lightning)
 MAGIC_CONVERT_TAU           float   0.05        # s: conversion keeps mass, runs before condensation
 MAGIC_FIRE_STEAM            float   30.0        # fire magic past this (the dew point) makes steam over water and sets plants burning
+STEAM_SECONDS               float   4.0         # s: steam keeps rising this long (1/e) after the water was heated
+WATER_EXTINCTION            float3  0.42,0.14,0.11  # per metre: pond water takes red first; the bed shows a few metres off
+WATER_COLOR                 float3  0.018,0.034,0.030  # the water's own glow per unit of daylight falling on it
 MAGIC_THETA_TAU             float   8.0         # s: Theta relaxes to THETA0, its energy goes into the air
 MAGIC_AIR_T_TAU             float   30.0        # s: the air's temperature offset relaxes
 MAGIC_AIR_HEAT_CAPACITY     float   1206.0      # J/(m3 K): air, to turn the motes' energy into a temperature offset
@@ -220,4 +223,3 @@ PLANT_BURN_SECONDS          float   90.0        # s: a tree burns this long, the
 PLANT_BURN_HEAT             float   1.2         # a burning tree is a hot thing this strong (a campfire is 1)
 PLANT_BURN_REACH            float   2.5         # m: fire past the threshold this near a tree's trunk or crown sets it alight
 GRASS_SCORCH_RADIUS         float   1.6         # m of grass a patch of such fire burns away
->>>>>>> Stashed changes

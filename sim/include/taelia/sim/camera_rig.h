@@ -1,5 +1,7 @@
 // The free camera and the eye's focus: the mouse moves the gaze first, the camera follows it with damping.
 // Inside a neutral circle around the camera's direction it doesn't turn; near the screen edge it is pulled hard.
+// Nothing is abrupt: turns ease in and out (a critically damped spring toward the gaze), flight eases to its fixed
+// speed and to a stop.
 // Engine-free so every front end (our renderer, the Unreal port) shares it.
 #pragma once
 #include "taelia/sim/math.h"
@@ -22,6 +24,8 @@ public:
     dvec3 position{0, 1.8, 0};
     double yaw = 0, pitch = 0;          // camera direction, radians
     double gazeYaw = 0, gazePitch = 0;  // the eye's focus, radians
+    double yawRate = 0, pitchRate = 0;  // how fast the camera turns now, rad/s
+    dvec3 velocity;                     // how fast it flies now, m/s
 
     void place(const dvec3& pos, double yawRad, double pitchRad);
     // Real-time update (the camera ignores the world's time speed).
