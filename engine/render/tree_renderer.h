@@ -5,6 +5,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -23,13 +24,22 @@ struct TreeVertexOut {  // 32 bytes, read by tree.hlsl
     uint32_t pad;
 };
 
+// Trees fire has reached, by tree cell (sim/plants.h kTreeCell): those burnt through, and those on fire with how far
+// each has burnt (0 as it catches .. 1 charred: dark bark, no leaves).
+struct TreeCharring {
+    const std::set<std::pair<int64_t, int64_t>>* burnt = nullptr;
+    std::vector<std::pair<std::pair<int64_t, int64_t>, float>> burning;
+    bool empty() const { return (!burnt || burnt->empty()) && burning.empty(); }
+    float at(const dvec3& treePosition) const;
+};
+
 class TreeRenderer {
 public:
     ~TreeRenderer();
     bool init(rhi::Device* device, const Terrain* terrain, int detail, std::string* error);
     void shutdown();
     // Picks the trees around the camera (`wait`: block until every forest chunk in reach is generated).
-    void select(const dvec3& camera, const Frustum& frustum, bool wait);
+    void select(const dvec3& camera, const Frustum& frustum, bool wait, const TreeCharring& charring);
     // Inside the G-buffer pass. textures: bark albedo, bark detail, leaf albedo, leaf detail (per species).
     void draw(rhi::CommandList* cmd, const rhi::Transient& frameConstants, const uint32_t barkTex[2][3], const uint32_t leafTex[2][3]);
     uint32_t drawnTrees() const { return drawn_; }
@@ -59,7 +69,7 @@ private:
     };
     struct InstanceGpu {
         float posScale[4];  // camera-relative base, scale
-        float rot[4];       // cos yaw, sin yaw, sway phase, unused
+        float rot[4];       // cos yaw, sin yaw, sway phase, how far fire has charred it (0..1)
     };
 
     void buildMeshes();
@@ -87,6 +97,7 @@ private:
     struct RtTree {
         float transform[12];
         uint32_t entry;
+        uint32_t charred;  // 0..127 (rt.hlsli: customIndex bits 16-22)
     };
     std::vector<RtTree> rtTrees_;  // the trees selected this frame, for addInstances
 

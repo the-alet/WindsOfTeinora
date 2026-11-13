@@ -18,6 +18,12 @@ struct ImDrawData;
 
 namespace taelia {
 
+// A spot of steam or fire, or a burnt circle: where, and how strong (or its radius).
+struct RenderSpot {
+    dvec3 position;
+    double strength = 0;
+};
+
 struct RenderView {
     dvec3 cameraPos;
     dvec3 forward{0, 0, 1}, right{1, 0, 0}, up{0, 1, 0};
@@ -32,6 +38,20 @@ struct RenderView {
     SkyState sky;                     // suns, planet, stars for this moment (sim/sky.h)
     uint64_t seed = 1;                // the world seed (the star catalogue, the galaxy)
     uint64_t frame = 0;
+<<<<<<< Updated upstream
+=======
+    const std::vector<BallPose>* balls = nullptr;  // thrown balls to draw (World::ballPoses)
+    const MagicField* magic = nullptr;              // the magic field (World::magic)
+    dvec3 campfire;                                 // the campfire's bed
+    double campfireStrength = 0;                    // 0: out, 1: as it starts
+    double rain = 0, storm = 0;                     // the weather over the camera
+    dvec3 strike;                                   // the last lightning strike's ground point
+    double strikeAge = -1;                          // seconds since it (< 0: none lately)
+    std::vector<RenderSpot> steam;     // steam over water: its base on the surface, fire there past the dew point (kg/m3)
+    std::vector<RenderSpot> burning;   // trees on fire: their base, flame strength like the campfire's
+    std::vector<RenderSpot> scorches;  // grass burnt away: the circle's centre on the ground, its radius (m)
+    TreeCharring charring;             // the trees fire has reached, and how far each has burnt
+>>>>>>> Stashed changes
 };
 
 class Renderer {
@@ -51,6 +71,7 @@ private:
     bool upscaleFailed_ = false;
     rhi::Pipeline* postPipeline(rhi::Format format);
     void fillFrameConstants(const RenderView& v, uint32_t outW, uint32_t outH, rhi::Transient& t, Frustum& frustum);
+    void fireFrameData(gpu::FrameConstants& fc, const RenderView& v);
     void generateTextures(rhi::CommandList* cmd);
 
     rhi::Device* device_ = nullptr;

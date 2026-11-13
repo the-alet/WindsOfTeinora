@@ -146,6 +146,10 @@ GBufferOut PSMain(VSOut i) {
     const float wet = i.extra.y;
     albedo *= lerp(1.0, 0.55, wet);
     rough = lerp(rough, 0.35, wet);
+    // Ash where fire burnt the grass away.
+    const float ash = scorchAt(i.rel) * (1.0 - wet);
+    albedo = lerp(albedo, float3(0.034, 0.031, 0.028) * lerp(0.75, 1.25, L[0].height), ash);
+    rough = lerp(rough, 0.95, ash);
 
     GBufferOut o;
     o.albedo = float4(albedo, ao);

@@ -63,4 +63,41 @@ uint pcgHash(uint v) {
     return (word >> 22u) ^ word;
 }
 
+// A burning tree loses its leaves where this falls below how far it has charred (p: the tree mesh's own space, so the
+// G-buffer and the shadow rays agree). 0.05..0.95, patches about a metre across.
+float leafBurnNoise(float3 p) {
+    const float3 q = p * 1.1;
+    const float3 i = floor(q), f = q - i, u = f * f * (3.0 - 2.0 * f);
+    const int3 c = int3(i);
+    float v[8];
+    [unroll] for (uint k = 0; k < 8; ++k) {
+        const int3 o = int3(k & 1u, (k >> 1) & 1u, (k >> 2) & 1u);
+        v[k] = float(pcgHash(uint(c.x + o.x) * 73856093u ^ uint(c.y + o.y) * 19349663u ^ uint(c.z + o.z) * 83492791u) & 1023u) / 1023.0;
+    }
+    const float n = lerp(lerp(lerp(v[0], v[1], u.x), lerp(v[2], v[3], u.x), u.y), lerp(lerp(v[4], v[5], u.x), lerp(v[6], v[7], u.x), u.y), u.z);
+    return 0.05 + 0.9 * n;
+}
+
+// Where fire burnt the grass away (frame constants scorch): 1 inside a circle, fading to 0 over a ragged edge.
+// rel: a point on the ground relative to the camera.
+float scorchAt(float3 rel) {
+    if (g_frame.scorch[0].w <= 0.0) return 0.0;
+    // A ragged edge: value noise on the world position, about 0.7 m across.
+    const float2 q = (g_frame.cameraWrap.xz + rel.xz) * 1.4;
+    const float2 i = floor(q), f = q - i, u = f * f * (3.0 - 2.0 * f);
+    const int2 c = int2(i);
+    const float n = lerp(lerp(float(pcgHash(uint(c.x) * 73856093u ^ uint(c.y) * 19349663u) & 1023u),
+                              float(pcgHash(uint(c.x + 1) * 73856093u ^ uint(c.y) * 19349663u) & 1023u), u.x),
+                         lerp(float(pcgHash(uint(c.x) * 73856093u ^ uint(c.y + 1) * 19349663u) & 1023u),
+                              float(pcgHash(uint(c.x + 1) * 73856093u ^ uint(c.y + 1) * 19349663u) & 1023u), u.x), u.y) / 1023.0;
+    float burnt = 0.0;
+    [unroll] for (uint k = 0; k < 8; ++k) {
+        const float4 s = g_frame.scorch[k];
+        if (s.w <= 0.0) break;
+        const float d = length(rel.xz - s.xz) + (n - 0.5) * 0.6 * s.w;
+        burnt = max(burnt, saturate((s.w - d) / 0.5));
+    }
+    return burnt;
+}
+
 #endif

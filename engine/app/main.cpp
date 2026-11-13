@@ -135,6 +135,26 @@ RenderView App::makeView(double aspect, double realSeconds) const {
     v.sky = Sky::at(world_->clock().seconds());
     v.seed = world_->seed();
     v.frame = frame_;
+<<<<<<< Updated upstream
+=======
+    v.balls = &ballPoses_;
+    v.magic = &world_->magic();
+    v.campfire = world_->campfireCore() - dvec3{0, 0.4, 0};
+    v.campfireStrength = world_->campfireStrength();
+    for (const World::Glow& s : world_->steam()) v.steam.push_back({s.position, s.strength});
+    for (const World::Glow& s : world_->scorches()) v.scorches.push_back({s.position, s.strength});
+    v.charring.burnt = &world_->burntTrees();
+    for (const World::BurningTree& b : world_->burningTrees()) {
+        v.burning.push_back({b.position, b.strength});
+        v.charring.burning.push_back({{int64_t(std::floor(b.position.x / kTreeCell)), int64_t(std::floor(b.position.z / kTreeCell))}, float(b.burnt)});
+    }
+    v.rain = world_->rainAt(v.cameraPos);
+    v.storm = world_->stormAt(v.cameraPos);
+    if (!world_->strikes().empty()) {
+        v.strike = world_->strikes().back().position;
+        v.strikeAge = world_->clock().seconds() - world_->strikes().back().seconds;
+    }
+>>>>>>> Stashed changes
     return v;
 }
 

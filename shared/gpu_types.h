@@ -52,6 +52,21 @@ struct FrameConstants {
     uint4 atmosphere;       // bindless: x transmittance LUT, y multiple scattering LUT, z sky view LUT, w aerial perspective volume
     uint4 atmosphere2;      // bindless: x sky irradiance, y cloud shadow map, z cloud map, w clouds (colour + transmittance)
     uint4 scene;            // x: TLAS bindless index, y: sky texture, z, w: unused
+<<<<<<< Updated upstream
+=======
+    float4 magicWindow[2];  // the magic volumes (L0, L1): xyz the window's min corner relative to the camera (m), w: cell width (m)
+    float4 magicInfo;       // x: L0 cell height, y: L1 cell height (m), z: view reach (m), w: 1 if the volumes hold the field
+    uint4 magicVolume;      // bindless: x L0 volume, y L1 volume (rgb: colour x density, a: total density, kg/m3)
+    float4 fire;            // the campfire: xyz its bed relative to the camera (m), w: how strongly it burns (0: out)
+    float4 fireInfo;        // x: seconds (wrapped hourly), yz: the wind 2 m up (m/s, x and z), w: unused
+    float4 flames[3];       // fire condensed elsewhere: xyz relative to the camera (m), w strength like the campfire's (0: none)
+    float4 denseLo;         // magic past the dew point: its box relative to the camera (xyz), w 1 if there is any
+    float4 denseHi;
+    float4 weather;         // x: rain here (0..1), y: storm (0..1), z: lightning flash (0..1), w: unused
+    float4 bolt[2];         // the last strike: [0] xyz where it hit (relative to the camera), w seed bits; [1] xyz the cloud base above it, w its age (s, < 0: none)
+    float4 steam[2];        // steam where fire past the dew point meets water: xyz its base on the surface relative to the camera (m), w strength (0: none)
+    float4 scorch[8];       // grass burnt away: xyz the circle's centre on the ground relative to the camera (m), w its radius (0: none)
+>>>>>>> Stashed changes
 };
 
 

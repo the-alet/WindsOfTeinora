@@ -104,7 +104,7 @@ Describe magic by the kinetic theory of gases. Work it as a continuous field on 
 - Fire magic comes from hot things: more for more volume and more heat (campfires, lava). Ground heated by the suns counts; the suns themselves don't.
 - It heats the air (instead of modelling heat transfer) and rises a little, enough to make streams of air magic. Around a fire it is thinner farther out.
 - Air magic around a fire: if fire magic outweighs it, the wind feeds the fire like oxygen; otherwise it blows the fire magic away and the fire slowly dies down.
-- Steam and burning plants need dense fire magic. The user set 8.5 before the dew point existed: ask which holds.
+- Steam and burning plants need dense fire magic: past the dew point, 30 kg/m³ (the user's answer; 8.5 no longer holds).
 - Under pressure fire magic turns to lightning, under more pressure to light (first numbers: 675 and 1100).
 - Lightning comes from friction of mixed water and air magic in clouds. A strike sets off nothing by script: whatever it causes comes through the fire magic it leaves.
 

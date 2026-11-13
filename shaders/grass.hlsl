@@ -61,9 +61,12 @@ void GenMain(uint3 id : SV_DispatchThreadID) {
         const float density = m.x * (0.35 + 0.65 * meadow) * (1.0 - wet);
         if (rand01(pcgHash(h + 3)) > density) continue;
 
-        // Shorter toward the edge of the radius, so the field fades into the ground colour instead of ending in a line.
-        const float height = lerp(0.22, 0.85, meadow) * (0.65 + 0.7 * rand01(pcgHash(h + 4))) * smoothstep(1.0, 0.55, far);
         const float3 base = float3(g_push.cornerRel.x + local.x, (hgt - g_frame.cameraPosHigh.y) - g_frame.cameraPosLow.y, g_push.cornerRel.y + local.y);
+        // Fire burnt the grass away here: none inside, short and charred at the edge.
+        const float burnt = scorchAt(base);
+        if (burnt > 0.85) continue;
+        // Shorter toward the edge of the radius, so the field fades into the ground colour instead of ending in a line.
+        const float height = lerp(0.22, 0.85, meadow) * (0.65 + 0.7 * rand01(pcgHash(h + 4))) * smoothstep(1.0, 0.55, far) * (1.0 - 0.8 * burnt);
         const float4 clip = mul(g_frame.viewProj, float4(base + float3(0, height * 0.5, 0), 1));
         const float margin = clip.w * 0.1 + height;
         if (clip.w <= 0 || abs(clip.x) > clip.w + margin || abs(clip.y) > clip.w + margin) continue;
@@ -73,7 +76,8 @@ void GenMain(uint3 id : SV_DispatchThreadID) {
         if (index >= g_push.maxBlades) return;
         const float4 a = float4(base, height);
         const float4 b = float4(rand01(pcgHash(h + 5)) * 6.2831853, (0.010 + 0.008 * rand01(pcgHash(h + 6))) * widen,
-                                0.3 + 0.7 * rand01(pcgHash(h + 7)), rand01(pcgHash(h + 8)) * 0.6 + wet * 0.0 + (1.0 - meadow) * 0.4);
+                                0.3 + 0.7 * rand01(pcgHash(h + 7)),
+                                lerp(rand01(pcgHash(h + 8)) * 0.6 + (1.0 - meadow) * 0.4, 2.0, burnt));  // w: dry 0..1, charred 1..2
         g_rwBuffers[g_push.bladesUav].Store4(index * 32, asuint(a));
         g_rwBuffers[g_push.bladesUav].Store4(index * 32 + 16, asuint(b));
     }
@@ -122,6 +126,7 @@ GBufferOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     const float4 c = g_tex2D[g_push.bladeAlbedo].Sample(s_linearClamp, i.uvAo.xy);
     const float4 d = g_tex2D[g_push.bladeDetail].Sample(s_linearClamp, i.uvAo.xy);
     float3 albedo = lerp(c.rgb, float3(0.17, 0.15, 0.07), saturate(i.dry));
+    albedo = lerp(albedo, float3(0.025, 0.021, 0.018), saturate(i.dry - 1.0));  // charred at a burnt patch's edge
     const float3 n = normalize(i.normal) * (front ? 1.0 : -1.0);
     GBufferOut o;
     o.albedo = float4(albedo, i.uvAo.z);

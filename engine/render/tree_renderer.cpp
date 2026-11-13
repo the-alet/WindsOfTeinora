@@ -211,7 +211,15 @@ void TreeRenderer::workerLoop() {
     }
 }
 
-void TreeRenderer::select(const dvec3& cam, const Frustum& f, bool wait) {
+float TreeCharring::at(const dvec3& p) const {
+    const std::pair<int64_t, int64_t> key{int64_t(std::floor(p.x / kTreeCell)), int64_t(std::floor(p.z / kTreeCell))};
+    if (burnt && burnt->count(key)) return 1.0f;
+    for (const auto& [k, amount] : burning)
+        if (k == key) return amount;
+    return 0.0f;
+}
+
+void TreeRenderer::select(const dvec3& cam, const Frustum& f, bool wait, const TreeCharring& charring) {
     ++frame_;
     const double reach = lodDistance_[kLods - 1];
     const int64_t x0 = int64_t(std::floor((cam.x - reach) / kChunk)), x1 = int64_t(std::floor((cam.x + reach) / kChunk));
@@ -269,6 +277,7 @@ void TreeRenderer::select(const dvec3& cam, const Frustum& f, bool wait) {
                     g.rot[0] = std::cos(t.yaw);
                     g.rot[1] = std::sin(t.yaw);
                     g.rot[2] = float(std::fmod(t.position.x * 0.37 + t.position.z * 0.23, 6.2831853));
+                    g.rot[3] = charring.empty() ? 0.0f : charring.at(t.position);
                     buckets_[mesh * kLods + size_t(lod)].push_back(g);
                     if (dist < rtDistance_) {
                         RtTree rt{};
@@ -276,6 +285,7 @@ void TreeRenderer::select(const dvec3& cam, const Frustum& f, bool wait) {
                         const float xf[12] = {rc, 0, rs, float(rel.x), 0, t.scale, 0, float(rel.y), -rs, 0, rc, float(rel.z)};
                         std::memcpy(rt.transform, xf, sizeof xf);
                         rt.entry = uint32_t(mesh * kLods + size_t(lod));
+                        rt.charred = uint32_t(std::lround(std::clamp(g.rot[3], 0.0f, 1.0f) * 127.0f));
                         rtTrees_.push_back(rt);
                     }
                     ++drawn_;
@@ -386,7 +396,7 @@ void TreeRenderer::addInstances(std::vector<rhi::TlasInstance>& out, double) con
         if (!blas_[t.entry]) continue;
         rhi::TlasInstance inst;
         std::memcpy(inst.transform, t.transform, sizeof inst.transform);
-        inst.customIndex = t.entry;
+        inst.customIndex = t.entry | (t.charred << 16);  // rt.hlsli: a charred tree's leaves are gone
         inst.doubleSided = true;
         inst.blas = blas_[t.entry].get();
         out.push_back(inst);

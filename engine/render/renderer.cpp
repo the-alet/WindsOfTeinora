@@ -339,6 +339,49 @@ void Renderer::drawWater(rhi::CommandList* cmd, const RenderView& v, const rhi::
     cmd->endMarker();
 }
 
+// Fires other than the campfire, steam and burnt grass for the frame constants: what is nearest the camera fills the
+// slots there are.
+void Renderer::fireFrameData(gpu::FrameConstants& fc, const RenderView& v) {
+    const auto nearestFirst = [&](std::vector<RenderSpot>& spots) {
+        std::sort(spots.begin(), spots.end(), [&](const RenderSpot& a, const RenderSpot& b) {
+            return dot(a.position - v.cameraPos, a.position - v.cameraPos) < dot(b.position - v.cameraPos, b.position - v.cameraPos);
+        });
+    };
+    const auto put = [&](gpu::float4& slot, const RenderSpot& s, double w) {
+        const dvec3 rel = s.position - v.cameraPos;
+        slot = {float(rel.x), float(rel.y), float(rel.z), float(w)};
+    };
+    // Flames: where fire condensed (a strength like the campfire's, about 1 where it condensed past its threshold by 20)
+    // and trees on fire.
+    std::vector<RenderSpot> spots = v.burning;
+    if (v.magic)
+        for (const Flame& f : v.magic->flames()) spots.push_back({f.position, std::min(f.strength / 20.0, 1.5)});
+    nearestFirst(spots);
+    for (size_t i = 0; i < 3; ++i) fc.flames[i] = {0, 0, 0, 0};
+    for (size_t i = 0; i < spots.size() && i < 3; ++i) put(fc.flames[i], spots[i], spots[i].strength);
+    // Steam: hot spots over water, gathered into columns (each within 5 m of the first spot it joins).
+    spots = v.steam;
+    nearestFirst(spots);
+    std::vector<RenderSpot> columns;
+    for (const RenderSpot& s : spots) {
+        size_t k = 0;
+        while (k < columns.size() && std::hypot(s.position.x - columns[k].position.x, s.position.z - columns[k].position.z) > 5.0) ++k;
+        if (k == columns.size()) {
+            if (columns.size() == 2) continue;
+            columns.push_back({s.position, 0});
+        }
+        // Strength: about 1 for one spot 30 past the dew point, more for more of them, up to 2.5.
+        columns[k].strength += s.strength / 30.0;
+    }
+    for (size_t i = 0; i < 2; ++i) fc.steam[i] = {0, 0, 0, 0};
+    for (size_t i = 0; i < columns.size(); ++i) put(fc.steam[i], columns[i], std::clamp(0.5 + 0.5 * columns[i].strength, 0.0, 2.5));
+    // Burnt grass: the nearest circles.
+    spots = v.scorches;
+    nearestFirst(spots);
+    for (size_t i = 0; i < 8; ++i) fc.scorch[i] = {0, 0, 0, 0};
+    for (size_t i = 0; i < spots.size() && i < 8; ++i) put(fc.scorch[i], spots[i], spots[i].strength);
+}
+
 void Renderer::fillFrameConstants(const RenderView& v, uint32_t outW, uint32_t outH, rhi::Transient& t, Frustum& frustum) {
     gpu::FrameConstants fc{};
     const double aspect = double(outW) / double(outH);
@@ -445,6 +488,29 @@ void Renderer::fillFrameConstants(const RenderView& v, uint32_t outW, uint32_t o
     fc.atmosphere = {atmosphere_.transmittanceLut(), atmosphere_.multiScatteringLut(), atmosphere_.skyViewLut(),
                      atmosphere_.aerialPerspectiveVolume()};
     fc.atmosphere2 = {atmosphere_.skyIrradiance(), cloudRenderer_.shadowMap(), cloudRenderer_.mapTexture(), cloudRenderer_.result()};
+<<<<<<< Updated upstream
+=======
+    magic_.frameData(fc, v.cameraPos);
+    manifest_.frameData(fc, v.magic, v.cameraPos);
+    fireFrameData(fc, v);
+    {
+        // The flash: bright at once, fading over a fifth of a second with a flicker.
+        const double age = v.strikeAge;
+        const double flash = age >= 0.0 && age < 0.25 ? (1.0 - age / 0.25) * (0.7 + 0.3 * std::cos(age * 90.0)) : 0.0;
+        fc.weather = {float(v.rain), float(v.storm), float(flash), 0.0f};
+        const dvec3 g = v.strike - v.cameraPos;
+        uint32_t seed = uint32_t(int64_t(std::floor(v.strike.x)) * 73856093 ^ int64_t(std::floor(v.strike.z)) * 19349663);
+        float seedBits;
+        std::memcpy(&seedBits, &seed, 4);
+        fc.bolt[0] = {float(g.x), float(g.y), float(g.z), seedBits};
+        fc.bolt[1] = {float(g.x), float(g.y + 1500.0), float(g.z), float(age)};
+    }
+    {
+        const dvec3 bed = v.campfire - v.cameraPos;
+        fc.fire = {float(bed.x), float(bed.y), float(bed.z), float(v.campfireStrength)};
+        fc.fireInfo = {float(std::fmod(v.simSeconds, 3600.0)), float(v.wind.x * 0.7), float(v.wind.z * 0.7), 0.0f};
+    }
+>>>>>>> Stashed changes
     fc.wind = f4(v.wind.x, v.wind.y, v.wind.z, 0);
     fc.flags = {v.magicView ? 1u : 0u, uint32_t(v.frame), 0u, 0u};
     auto wrap = [](double x, double period) { return float(x - std::floor(x / period) * period); };
@@ -494,7 +560,13 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
 
     // Terrain tiles for this camera (automated runs wait for all of them, so frames repeat exactly).
     terrain_.select(v.cameraPos, frustum, v.waitForStreaming);
+<<<<<<< Updated upstream
     trees_.select(v.cameraPos, frustum, v.waitForStreaming);
+=======
+    trees_.select(v.cameraPos, frustum, v.waitForStreaming, v.charring);
+    balls_.update(v.balls, v.cameraPos, frustum);
+    manifest_.update(v.magic, v.cameraPos);
+>>>>>>> Stashed changes
     terrain_.upload(cmd);
     grass_.generate(cmd, terrain_, v.cameraPos, fc);
     buildScene(cmd, fc);

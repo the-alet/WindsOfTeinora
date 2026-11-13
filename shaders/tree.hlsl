@@ -15,6 +15,8 @@ struct VSOut {
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
     float3 rel : TEXCOORD1;
+    float3 local : TEXCOORD2;                  // the mesh position (leaves burn away by it)
+    nointerpolation float charred : TEXCOORD3;  // how far fire has charred this tree (0..1)
 };
 
 VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
@@ -47,14 +49,18 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     VSOut o;
     o.rel = ps.xyz + wp;
     o.pos = mul(g_frame.viewProj, float4(o.rel, 1));
+    if ((info & 256u) && rot.w >= 0.999) o.pos = float4(-2, -2, 0, 1);  // burnt through: no leaves left (culled)
     o.normal = wn;
     o.uv = uv;
+    o.local = p;
+    o.charred = rot.w;
     return o;
 }
 
 GBufferOut BarkPS(VSOut i) {
     const float2 uv = i.uv * g_push.uvScale;
-    const float4 a = g_tex2D[g_push.albedo].Sample(s_anisoWrap, uv) * float4(g_push.tint.xxx, 1);
+    float4 a = g_tex2D[g_push.albedo].Sample(s_anisoWrap, uv) * float4(g_push.tint.xxx, 1);
+    a.rgb = lerp(a.rgb, a.rgb * 0.1 + 0.01, i.charred);  // charcoal
     const float4 d = g_tex2D[g_push.detail].Sample(s_anisoWrap, uv);
     const float3 N = normalize(i.normal);
     const float3 T = normalize(cross(float3(0, 1, 0), N) + float3(1e-4, 0, 0));
@@ -64,7 +70,11 @@ GBufferOut BarkPS(VSOut i) {
     GBufferOut o;
     o.albedo = float4(a.rgb, d.w);
     o.normal = float4(n, d.z);
+<<<<<<< Updated upstream
     o.material = float4(0, 0.3, 0, 0);
+=======
+    o.material = float4(0, 0.3, 0, packMagic(MAGIC_HELD_NATURE, 1.0 - i.charred, false));
+>>>>>>> Stashed changes
     o.motion = 0;
     return o;
 }
@@ -76,6 +86,12 @@ GBufferOut LeafPS(VSOut i, bool front : SV_IsFrontFace) {
     const float lod = tex.CalculateLevelOfDetail(s_linearClamp, i.uv);
     a.a *= 1.0 + 0.3 * max(lod, 0.0);
     if (a.a < 0.5) discard;
+    // Fire takes the leaves patch by patch, browning them first (rt.hlsli does the same for shadows).
+    if (i.charred > 0.0) {
+        const float n = leafBurnNoise(i.local);
+        if (i.charred > n) discard;
+        a.rgb = lerp(a.rgb, float3(0.13, 0.075, 0.03), saturate((i.charred - n + 0.3) / 0.3));
+    }
     const float4 d = g_tex2D[g_push.detail].Sample(s_linearClamp, i.uv);
     float3 N = normalize(i.normal) * (front ? 1.0 : -1.0);
     const float2 xy = d.xy * 2.0 - 1.0;
@@ -84,7 +100,11 @@ GBufferOut LeafPS(VSOut i, bool front : SV_IsFrontFace) {
     GBufferOut o;
     o.albedo = float4(a.rgb, 1.0);
     o.normal = float4(N, d.z);
+<<<<<<< Updated upstream
     o.material = float4(d.w, 0.35, 0, 0);  // translucency
+=======
+    o.material = float4(d.w, 0.35, 0, packMagic(MAGIC_HELD_NATURE, 1.0 - i.charred, false));  // translucency
+>>>>>>> Stashed changes
     o.motion = 0;
     return o;
 }
