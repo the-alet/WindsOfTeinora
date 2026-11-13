@@ -1,0 +1,145 @@
+// Ponds: liquid at each pond's own level over its irregular shore shape (out to the footprint, where the bank keeps
+// the land above the water). Calm: no waves, only faint wind ripples. Light through the water is absorbed by depth.
+#include "common.hlsli"
+#include "sky.hlsli"
+#include "rt.hlsli"
+#include "clouds.hlsli"
+
+struct Pond {
+    float4 centerLevel;  // xz: centre relative to the camera, y: level relative to the camera, w: mean radius
+    float4 shape;        // three phases (0..1) of the shore harmonics, w: footprint (normalized distance)
+};
+
+struct WaterPush {
+    uint pondsSrv;
+    uint pondsOffset;
+    uint sceneColor;  // lit scene before the water (refraction)
+    uint depth;
+    float2 invSize;   // 1 / render size
+    float2 pad;
+};
+[[vk::push_constant]] ConstantBuffer<WaterPush> g_push : register(b1, space0);
+
+static const uint SEGMENTS = 96;
+static const uint RINGS = 10;
+
+// Must match Pond::shoreRadius in sim/src/terrain.cpp.
+float shoreRadius(Pond p, float angle) {
+    const float u1 = p.shape.x, u2 = p.shape.y, u3 = p.shape.z;
+    return p.centerLevel.w * (1.0 + 0.22 * sin(angle + u1 * 6.2832) + 0.14 * sin(2.0 * angle + u2 * 6.2832) +
+                              0.08 * sin(3.0 * angle + u3 * 6.2832) + 0.04 * sin(5.0 * angle + u1 * 9.1));
+}
+
+struct VSOut {
+    float4 pos : SV_Position;
+    float3 rel : TEXCOORD0;
+};
+
+VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
+    Pond p = g_buffers[g_push.pondsSrv].Load<Pond>(g_push.pondsOffset + iid * 32);
+    // Triangle list over a polar grid: each quad = 6 vertices.
+    const uint quad = vid / 6, corner = vid % 6;
+    const uint seg = quad % SEGMENTS, ring = quad / SEGMENTS;
+    const uint2 offs[6] = {uint2(0, 0), uint2(1, 0), uint2(1, 1), uint2(0, 0), uint2(1, 1), uint2(0, 1)};
+    const uint s = seg + offs[corner].x, r = ring + offs[corner].y;
+    const float angle = float(s % SEGMENTS) * (6.2831853 / SEGMENTS);
+    const float rn = float(r) / RINGS * p.shape.w;
+    const float radius = shoreRadius(p, angle) * rn;
+    VSOut o;
+    o.rel = float3(p.centerLevel.x + cos(angle) * radius, p.centerLevel.y, p.centerLevel.z + sin(angle) * radius);
+    o.pos = mul(g_frame.viewProj, float4(o.rel, 1));
+    return o;
+}
+
+float rippleNoise(float2 p, int period) {
+    // Value noise on a lattice that wraps every `period` cells (the cells divide 256 m, so the camera wrap stays seamless).
+    float2 i = floor(p), f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    int2 c = ((int2(i) % period) + period) % period;
+    int2 d = (c + 1) % period;
+    float a = float(pcgHash(uint(c.x) + pcgHash(uint(c.y))) & 0xffffu) / 65535.0;
+    float b = float(pcgHash(uint(d.x) + pcgHash(uint(c.y))) & 0xffffu) / 65535.0;
+    float e = float(pcgHash(uint(c.x) + pcgHash(uint(d.y))) & 0xffffu) / 65535.0;
+    float g = float(pcgHash(uint(d.x) + pcgHash(uint(d.y))) & 0xffffu) / 65535.0;
+    return lerp(lerp(a, b, f.x), lerp(e, g, f.x), f.y);
+}
+
+float rippleHeight(float2 xz) {
+    // Faint, irregular cat's-paws drifting downwind; xz is world position modulo 256 m.
+    const float2 drift = g_frame.wind.xz * g_frame.time.z * 0.15;
+    return rippleNoise((xz - drift) * 2.0, 512) + 0.5 * rippleNoise((xz - drift * 1.3) * 4.0, 1024);
+}
+
+// What the calm surface mirrors: the sky, or (ray traced) the land and trees around the pond as dim silhouettes.
+float3 reflectedColor(float3 origin, float3 R) {
+    const float3 sky = skyColor(R);
+    if (!rtEnabled()) return sky;
+    RayDesc ray;
+    ray.Origin = origin + float3(0, 0.03, 0);
+    ray.Direction = R;
+    ray.TMin = 0.05;
+    ray.TMax = 4000.0;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(g_tlas[g_frame.scene.x], RAY_FLAG_NONE, 0xFF, ray);
+    while (q.Proceed()) {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            leafAlphaHit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return sky;
+    const bool land = q.CommittedInstanceID() == TERRAIN_INSTANCE;
+    const float3 base = land ? float3(0.065, 0.085, 0.035) : float3(0.030, 0.055, 0.020);
+    float3 sunsUp = 0;
+    [unroll] for (uint s = 0; s < 2; ++s)
+        sunsUp += g_frame.sunLight[s].rgb * (1.0 - g_frame.suns[s].w) * sunTransmittance(g_frame.suns[s].xyz) * saturate(g_frame.suns[s].y);
+    const float3 lit = base * (skyAmbient(float3(0, 1, 0)) + sunsUp * 0.3);
+    return applyHaze(lit, R * q.CommittedRayT());
+}
+
+float4 PSMain(VSOut i) : SV_Target0 {
+    const float2 screenUv = i.pos.xy * g_push.invSize;
+    const float3 V = -normalize(i.rel);
+    const float dist = length(i.rel);
+
+    // Ripples: barely there in calm air, a touch more with wind, gone with distance.
+    const float2 xz = g_frame.cameraWrap.xz + i.rel.xz;
+    const float e = 0.05;
+    const float strength = 0.012 + 0.02 * saturate(length(g_frame.wind.xz) / 8.0);
+    const float fade = saturate(1.0 - dist / 90.0);
+    const float hx = rippleHeight(xz + float2(e, 0)) - rippleHeight(xz - float2(e, 0));
+    const float hz = rippleHeight(xz + float2(0, e)) - rippleHeight(xz - float2(0, e));
+    const float3 n = normalize(float3(-hx * strength * fade / (2 * e), 1.0, -hz * strength * fade / (2 * e)));
+
+    // How much water the light crosses before reaching the bed behind this pixel.
+    const float sceneDepth = g_tex2D[g_push.depth].SampleLevel(s_pointClamp, screenUv, 0).r;
+    const float3 dir = -V;
+    const float sceneDist = sceneDepth > 0 ? (g_frame.cameraUp.w / sceneDepth) / max(dot(dir, g_frame.cameraForward.xyz), 1e-3) : 1e4;
+    const float thickness = max(sceneDist - dist, 0.0);
+
+    const float2 refrUv = screenUv + n.xz * 0.04 * saturate(thickness);
+    float3 behind = g_tex2D[g_push.sceneColor].SampleLevel(s_linearClamp, refrUv, 0).rgb;
+    const float3 absorb = float3(1.1, 0.55, 0.5);                // per metre: pond water is murky, red goes first
+    const float3 trans = exp(-absorb * thickness);
+    float3 sunsAbove = 0;
+    [unroll] for (uint s = 0; s < 2; ++s) sunsAbove += g_frame.sunLight[s].rgb * (1.0 - g_frame.suns[s].w) * sunTransmittance(g_frame.suns[s].xyz);
+    const float3 inscatter = float3(0.020, 0.028, 0.016) * (skyAmbient(float3(0, 1, 0)) + sunsAbove * 0.1);
+    const float3 refracted = behind * trans + inscatter * (1.0 - trans.g);
+
+    const float3 R = reflect(-V, n);
+    float3 reflected = reflectedColor(i.rel, R);
+    const float F = 0.02 + 0.98 * pow(1.0 - saturate(dot(n, V)), 5.0);
+
+    // The sun's glint on calm water.
+    // The suns' glints on calm water (each through the air, past the planet and the clouds).
+    float3 glints = 0;
+    [unroll] for (uint s = 0; s < 2; ++s) {
+        const float3 L = g_frame.suns[s].xyz, H = normalize(L + V);
+        const float a = 0.02, a2 = a * a, NoH = saturate(dot(n, H));
+        const float d = NoH * NoH * (a2 - 1.0) + 1.0;
+        const float glint = a2 / (3.14159 * d * d) * F * 0.25 * saturate(dot(n, L));
+        glints += g_frame.sunLight[s].rgb * (1.0 - g_frame.suns[s].w) * sunTransmittance(L) * cloudShadow(s, i.rel) * min(glint, 60.0);
+    }
+    float3 color = lerp(refracted, reflected, F) + glints;
+    color = applyHaze(color, i.rel);
+    return float4(color, 1);
+}

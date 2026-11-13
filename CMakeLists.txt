@@ -1,176 +1,173 @@
-cmake_minimum_required(VERSION 3.24)
-
-# The static CRT means the game needs no Visual C++ runtime on the target machine.
-# It is the release one in every configuration, to match the PhysX libraries.
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
-
-project(WindsOfTeinora VERSION 0.2.0 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.28)
+project(WondersOfTaelia LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)  # no C++20 modules here: skip the dependency scan
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(LOCAL ${CMAKE_SOURCE_DIR}/.local)
+set(GEN_DIR ${CMAKE_BINARY_DIR}/generated)
 
-set(WOT_LOCAL_DIR "${CMAKE_SOURCE_DIR}/.local")
+add_compile_options(/utf-8 /Zc:__cplusplus /Zc:preprocessor /permissive- /EHsc)
+add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS UNICODE _UNICODE)
 
-add_library(TeinoraWarnings INTERFACE)
-target_compile_options(TeinoraWarnings INTERFACE /W4 /WX /utf-8 /permissive- /Zi /FS)
-target_compile_definitions(TeinoraWarnings INTERFACE _CRT_SECURE_NO_WARNINGS)
-target_link_options(TeinoraWarnings INTERFACE /DEBUG /OPT:REF /OPT:ICF)
+# ---------------------------------------------------------------- shared numbers (one source)
 
-# ---------------------------------------------------------------- simulation
-# No OS or graphics dependencies, so the tests run headless.
-set(WOT_PHYSX_DIR "${WOT_LOCAL_DIR}/physx-sdk/static")
-if(NOT EXISTS "${WOT_PHYSX_DIR}/lib/PhysX_static_64.lib")
-    message(FATAL_ERROR "PhysX is not built. Run tools/build-physx.ps1.")
-endif()
+set(SHARED_OUT ${GEN_DIR}/taelia/shared_constants.h ${GEN_DIR}/shaders/shared_constants.hlsli ${GEN_DIR}/unreal/shared_constants.py)
+add_custom_command(OUTPUT ${SHARED_OUT}
+  COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/shared/constants.txt -DOUT=${GEN_DIR} -P ${CMAKE_SOURCE_DIR}/.utilities/gen_constants.cmake
+  DEPENDS ${CMAKE_SOURCE_DIR}/shared/constants.txt ${CMAKE_SOURCE_DIR}/.utilities/gen_constants.cmake
+  COMMENT "Generating shared constants")
+add_custom_target(shared_constants DEPENDS ${SHARED_OUT})
 
-add_library(TeinoraPhysics STATIC Engine/Physics/Physics.cpp)
-target_include_directories(TeinoraPhysics PUBLIC Engine)
-target_include_directories(TeinoraPhysics SYSTEM PRIVATE "${WOT_PHYSX_DIR}/include")
-target_compile_definitions(TeinoraPhysics PRIVATE PX_PHYSX_STATIC_LIB DISABLE_CUDA_PHYSX $<$<CONFIG:Debug>:NDEBUG>) # its libraries are release builds
-target_link_libraries(TeinoraPhysics PRIVATE TeinoraWarnings)
-foreach(WOT_LIB PhysX PhysXCommon PhysXFoundation PhysXExtensions PhysXCooking PhysXPvdSDK)
-    target_link_libraries(TeinoraPhysics PUBLIC "${WOT_PHYSX_DIR}/lib/${WOT_LIB}_static_64.lib")
-endforeach()
+# ---------------------------------------------------------------- simulation library (no engine or graphics code)
+file(GLOB_RECURSE SIM_SRC CONFIGURE_DEPENDS sim/src/*.cpp sim/include/*.h)
+add_library(taelia_sim STATIC ${SIM_SRC})
+target_include_directories(taelia_sim PUBLIC sim/include ${GEN_DIR} shared)
+target_compile_options(taelia_sim PRIVATE /W4 /WX)
+add_dependencies(taelia_sim shared_constants)
 
-add_library(TeinoraSim STATIC Game/Liquid.cpp Game/MagicField.cpp Game/MagicShows.cpp Game/Plants.cpp Game/StarMap.cpp Game/Storms.cpp Game/SurfaceTextures.cpp Game/TeinoraSim.cpp Game/WorldMap.cpp)
-target_include_directories(TeinoraSim PUBLIC Engine Game)
-target_link_libraries(TeinoraSim PRIVATE TeinoraWarnings)
-
-# ------------------------------------------------------------------- shaders
-# One HLSL source per pass, compiled for both backends at build time and embedded.
-set(WOT_DXC "${WOT_LOCAL_DIR}/dxc/bin/x64/dxc.exe")
-set(WOT_SHADER_SOURCE_DIR "${CMAKE_SOURCE_DIR}/Shaders")
-set(WOT_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
-file(MAKE_DIRECTORY "${WOT_SHADER_OUTPUT_DIR}")
-
-set(WOT_SHADERS
-    "TerrainVS Terrain.hlsl VSMain vs_6_0"
-    "TerrainPS Terrain.hlsl PSMain ps_6_0"
-    "TerrainRayPS Terrain.hlsl PSMain ps_6_5 RAY_TRACED"
-    "FoliagePS Terrain.hlsl PSMain ps_6_0 FOLIAGE"
-    "FoliageRayPS Terrain.hlsl PSMain ps_6_5 RAY_TRACED FOLIAGE"
-    "FoliageShadowPS Terrain.hlsl ShadowMain ps_6_0 FOLIAGE"
-    "ObjectVS Object.hlsl VSMain vs_6_0"
-    "ObjectPS Object.hlsl PSMain ps_6_0"
-    "ObjectRayPS Object.hlsl PSMain ps_6_5 RAY_TRACED"
-    "FullscreenVS Fullscreen.hlsl VSMain vs_6_0"
-    "SkyPS Sky.hlsl PSMain ps_6_0"
-    "StarVS Stars.hlsl VSMain vs_6_0"
-    "StarPS Stars.hlsl PSMain ps_6_0"
-    "WaterVS Water.hlsl VSMain vs_6_0"
-    "WaterPS Water.hlsl PSMain ps_6_0"
-    "WaterRayPS Water.hlsl PSMain ps_6_5 RAY_TRACED"
-    "BoltVS Bolts.hlsl VSMain vs_6_0"
-    "BoltPS Bolts.hlsl PSMain ps_6_0"
-    "FlameVS Flames.hlsl VSMain vs_6_0"
-    "FlamePS Flames.hlsl PSMain ps_6_0"
-    "PuffVS Puffs.hlsl VSMain vs_6_0"
-    "PuffPS Puffs.hlsl PSMain ps_6_0"
-    "UnderwaterPS Underwater.hlsl PSMain ps_6_0"
-    "CopyPS Underwater.hlsl CopyMain ps_6_0"
-    "MagicBendPS Magic.hlsl BendMain ps_6_0"
-    "TonemapPS Tonemap.hlsl PSMain ps_6_0"
-    "BlurPS Blur.hlsl PSMain ps_6_0"
-    "MotionPS Motion.hlsl PSMain ps_6_0"
-    "FinalPS Fxaa.hlsl PSMain ps_6_0"
-    "UiVS Ui.hlsl VSMain vs_6_0"
-    "UiPS Ui.hlsl PSMain ps_6_0")
-
-file(GLOB WOT_SHADER_HEADERS CONFIGURE_DEPENDS "${WOT_SHADER_SOURCE_DIR}/*.hlsli")
-set(WOT_SHADER_OUTPUTS "")
-set(WOT_SHADER_INCLUDES "")
-set(WOT_SHADER_LIST "")
-
-foreach(WOT_SHADER IN LISTS WOT_SHADERS)
-    separate_arguments(WOT_PARTS UNIX_COMMAND "${WOT_SHADER}")
-    list(GET WOT_PARTS 0 WOT_NAME)
-    list(GET WOT_PARTS 1 WOT_FILE)
-    list(GET WOT_PARTS 2 WOT_ENTRY)
-    list(GET WOT_PARTS 3 WOT_PROFILE)
-
-    set(WOT_DXIL "${WOT_SHADER_OUTPUT_DIR}/${WOT_NAME}.dxil.h")
-    set(WOT_SPIRV "${WOT_SHADER_OUTPUT_DIR}/${WOT_NAME}.spirv.h")
-    set(WOT_COMMON_FLAGS -nologo -Zpr -O3 -E ${WOT_ENTRY} -T ${WOT_PROFILE} -I "${WOT_SHADER_SOURCE_DIR}")
-    list(LENGTH WOT_PARTS WOT_PART_COUNT)
-    if(WOT_PART_COUNT GREATER 4)
-        list(SUBLIST WOT_PARTS 4 -1 WOT_DEFINES)
-        foreach(WOT_DEFINE IN LISTS WOT_DEFINES)
-            list(APPEND WOT_COMMON_FLAGS -D ${WOT_DEFINE}=1)
-        endforeach()
-    endif()
-
-    add_custom_command(OUTPUT "${WOT_DXIL}" "${WOT_SPIRV}"
-        COMMAND "${WOT_DXC}" ${WOT_COMMON_FLAGS} -Wno-ignored-attributes
-            -Vn g_${WOT_NAME}_Dxil -Fh "${WOT_DXIL}" "${WOT_SHADER_SOURCE_DIR}/${WOT_FILE}"
-        COMMAND "${WOT_DXC}" ${WOT_COMMON_FLAGS} -spirv -fspv-target-env=vulkan1.3 -fspv-entrypoint-name=main
-            -Vn g_${WOT_NAME}_Spirv -Fh "${WOT_SPIRV}" "${WOT_SHADER_SOURCE_DIR}/${WOT_FILE}"
-        DEPENDS "${WOT_SHADER_SOURCE_DIR}/${WOT_FILE}" ${WOT_SHADER_HEADERS}
-        COMMENT "Compiling shader ${WOT_NAME}"
-        VERBATIM)
-
-    list(APPEND WOT_SHADER_OUTPUTS "${WOT_DXIL}" "${WOT_SPIRV}")
-    string(APPEND WOT_SHADER_INCLUDES "#include \"${WOT_NAME}.dxil.h\"\n#include \"${WOT_NAME}.spirv.h\"\n")
-    string(APPEND WOT_SHADER_LIST "TEINORA_SHADER(${WOT_NAME})\n")
-endforeach()
-
-file(CONFIGURE OUTPUT "${WOT_SHADER_OUTPUT_DIR}/ShaderIncludes.inc" CONTENT "${WOT_SHADER_INCLUDES}" @ONLY)
-file(CONFIGURE OUTPUT "${WOT_SHADER_OUTPUT_DIR}/ShaderList.inc" CONTENT "${WOT_SHADER_LIST}" @ONLY)
-add_custom_target(TeinoraShaders DEPENDS ${WOT_SHADER_OUTPUTS})
-
-# -------------------------------------------------------------------- engine
-add_library(TeinoraEngine STATIC
-    Engine/Core/Png.cpp
-    Engine/Platform/Window.cpp
-    Engine/Render/Renderer.cpp
-    Engine/Render/Shaders.cpp
-    Engine/Rhi/Rhi.cpp
-    Engine/Rhi/RhiD3D12.cpp
-    Engine/Rhi/RhiVulkan.cpp
-    Engine/Rhi/Streamline.cpp)
-target_include_directories(TeinoraEngine
-    PUBLIC Engine
-    PRIVATE "${WOT_SHADER_OUTPUT_DIR}" SYSTEM "${WOT_LOCAL_DIR}/vulkan-headers/include")
-target_link_libraries(TeinoraEngine PRIVATE TeinoraWarnings d3d12 dxgi dxguid user32 gdi32 dbghelp)
-add_dependencies(TeinoraEngine TeinoraShaders)
-
-# ---------------------------------------------------------------------- game
-add_executable(WindsOfTeinora WIN32
-    Game/ChunkBuffers.cpp
-    Game/GameWorld.cpp
-    Game/Main.cpp
-    Game/Menu.cpp
-    Game/Settings.cpp)
-target_link_libraries(WindsOfTeinora PRIVATE TeinoraEngine TeinoraPhysics TeinoraSim TeinoraWarnings)
-target_link_options(WindsOfTeinora PRIVATE /ENTRY:mainCRTStartup)
-
-# ---------------------------------------------------------------- nvidia, optional
-# Present only after tools/bootstrap.ps1 -WithNvidia. At run time the game also works
-# with these DLLs missing or on a GPU from another vendor.
-option(WOT_WITH_STREAMLINE "Use the Streamline SDK when it is in .local" ON)
-set(WOT_STREAMLINE_DIR "${WOT_LOCAL_DIR}/streamline")
-if(WOT_WITH_STREAMLINE AND EXISTS "${WOT_STREAMLINE_DIR}/include/sl.h")
-    message(STATUS "NVIDIA Streamline: enabled")
-    target_compile_definitions(TeinoraEngine PRIVATE TEINORA_WITH_STREAMLINE=1)
-    target_include_directories(TeinoraEngine SYSTEM PRIVATE "${WOT_STREAMLINE_DIR}/include")
-    target_link_libraries(TeinoraEngine PRIVATE wintrust crypt32)
-
-    foreach(WOT_DLL sl.interposer sl.common sl.dlss sl.reflex sl.pcl nvngx_dlss NvLowLatencyVk)
-        add_custom_command(TARGET WindsOfTeinora POST_BUILD
-            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "${WOT_STREAMLINE_DIR}/bin/x64/${WOT_DLL}.dll" "$<TARGET_FILE_DIR:WindsOfTeinora>"
-            VERBATIM)
-    endforeach()
-endif()
-
-# --------------------------------------------------------------------- tests
 enable_testing()
+file(GLOB TEST_SRC CONFIGURE_DEPENDS tests/*.cpp tests/*.h)
+add_executable(taelia_tests ${TEST_SRC})
+target_link_libraries(taelia_tests PRIVATE taelia_sim)
+target_compile_options(taelia_tests PRIVATE /W4 /WX)
+add_test(NAME sim COMMAND taelia_tests)
 
-add_executable(TeinoraSimTests Tests/SimTests.cpp)
-target_link_libraries(TeinoraSimTests PRIVATE TeinoraSim TeinoraWarnings)
-add_test(NAME TeinoraSimTests COMMAND TeinoraSimTests)
+# ---------------------------------------------------------------- third party (fetched into .local by .utilities/bootstrap.py)
+add_library(imgui STATIC
+  ${LOCAL}/imgui/imgui.cpp ${LOCAL}/imgui/imgui_draw.cpp ${LOCAL}/imgui/imgui_tables.cpp
+  ${LOCAL}/imgui/imgui_widgets.cpp ${LOCAL}/imgui/backends/imgui_impl_win32.cpp)
+target_include_directories(imgui PUBLIC ${LOCAL}/imgui ${LOCAL}/imgui/backends)
 
-add_executable(TeinoraPhysicsTests Tests/PhysicsTests.cpp)
-target_link_libraries(TeinoraPhysicsTests PRIVATE TeinoraPhysics TeinoraSim TeinoraWarnings)
-add_test(NAME TeinoraPhysicsTests COMMAND TeinoraPhysicsTests)
+add_library(volk STATIC ${LOCAL}/volk/volk.c)
+target_include_directories(volk PUBLIC ${LOCAL}/volk ${LOCAL}/vulkan-headers/include)
+target_compile_definitions(volk PUBLIC VK_NO_PROTOTYPES VK_USE_PLATFORM_WIN32_KHR)
+
+add_library(d3d12ma STATIC ${LOCAL}/d3d12ma/src/D3D12MemAlloc.cpp)
+target_include_directories(d3d12ma PUBLIC ${LOCAL}/d3d12ma/include ${LOCAL}/agility/include)
+
+add_library(thirdparty_headers INTERFACE)
+target_include_directories(thirdparty_headers INTERFACE ${LOCAL}/vma/include ${LOCAL}/stb ${LOCAL}/agility/include)
+
+# ---------------------------------------------------------------- shaders: HLSL -> DXIL and SPIR-V
+set(DXC ${LOCAL}/dxc/bin/x64/dxc.exe)
+set(SHADER_OUT ${CMAKE_BINARY_DIR}/bin/shaders)
+set(SHADER_LINES)
+if(EXISTS ${CMAKE_SOURCE_DIR}/shaders/shaders.txt)
+  file(STRINGS shaders/shaders.txt SHADER_LINES)
+endif()
+file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS shaders/*.hlsli shared/*.h)
+set(SHADER_BINS)
+foreach(line IN LISTS SHADER_LINES)
+  string(STRIP "${line}" line)
+  if(line STREQUAL "" OR line MATCHES "^#")
+    continue()
+  endif()
+  separate_arguments(parts UNIX_COMMAND "${line}")
+  list(GET parts 0 sfile)
+  list(GET parts 1 entry)
+  list(GET parts 2 profile)
+  get_filename_component(sname ${sfile} NAME_WE)
+  set(src ${CMAKE_SOURCE_DIR}/shaders/${sfile})
+  set(common -E ${entry} -T ${profile} -HV 2021 -enable-16bit-types -I ${CMAKE_SOURCE_DIR}/shaders -I ${CMAKE_SOURCE_DIR}/shared -I ${GEN_DIR}/shaders -WX)
+  set(dxil ${SHADER_OUT}/${sname}.${entry}.dxil)
+  set(spv ${SHADER_OUT}/${sname}.${entry}.spv)
+  add_custom_command(OUTPUT ${dxil}
+    COMMAND ${DXC} ${common} -O3 -Wno-ignored-attributes -Qstrip_debug -Qstrip_reflect -Fo ${dxil} ${src}
+    DEPENDS ${src} ${SHADER_INCLUDES} ${SHARED_OUT} VERBATIM)
+  add_custom_command(OUTPUT ${spv}
+    COMMAND ${DXC} ${common} -O3 -spirv -fspv-target-env=vulkan1.3 -fvk-use-dx-layout -Fo ${spv} ${src}
+    DEPENDS ${src} ${SHADER_INCLUDES} ${SHARED_OUT} VERBATIM)
+  list(APPEND SHADER_BINS ${dxil} ${spv})
+endforeach()
+add_custom_target(shaders ALL DEPENDS ${SHADER_BINS})
+
+# ---------------------------------------------------------------- the renderer front end
+file(READ ${LOCAL}/agility/version.txt AGILITY_VERSION)
+string(STRIP "${AGILITY_VERSION}" AGILITY_VERSION)
+string(REGEX REPLACE "^1[.]([0-9]+)[.].*$" "\\1" AGILITY_SDK_VERSION "${AGILITY_VERSION}")
+
+# RHI: common part, then one library per backend so each builds on its own.
+add_library(taelia_rhi STATIC engine/rhi/rhi.h engine/rhi/backends.h engine/rhi/rhi_common.cpp engine/rhi/rhi_factory.cpp
+  engine/rhi/streamline.h engine/rhi/streamline.cpp)
+target_include_directories(taelia_rhi PUBLIC ${LOCAL}/streamline/include)  # the backends use it too
+target_include_directories(taelia_rhi PUBLIC engine shared ${GEN_DIR})
+target_compile_options(taelia_rhi PRIVATE /W4)
+
+file(GLOB RHI_D3D12_SRC CONFIGURE_DEPENDS engine/rhi/d3d12/*.cpp engine/rhi/d3d12/*.h)
+if(RHI_D3D12_SRC)
+  add_library(taelia_rhi_d3d12 STATIC ${RHI_D3D12_SRC})
+  target_link_libraries(taelia_rhi_d3d12 PUBLIC taelia_rhi d3d12ma thirdparty_headers d3d12 dxgi dxguid)
+  target_compile_options(taelia_rhi_d3d12 PRIVATE /W4)
+endif()
+
+file(GLOB RHI_VULKAN_SRC CONFIGURE_DEPENDS engine/rhi/vulkan/*.cpp engine/rhi/vulkan/*.h)
+if(RHI_VULKAN_SRC)
+  add_library(taelia_rhi_vulkan STATIC ${RHI_VULKAN_SRC})
+  target_link_libraries(taelia_rhi_vulkan PUBLIC taelia_rhi volk thirdparty_headers)
+  target_compile_options(taelia_rhi_vulkan PRIVATE /W4)
+endif()
+
+# Runtime files next to the exes: the Agility SDK (D3D12 + debug layer) and, if built, the Vulkan validation layer.
+set(BIN ${CMAKE_BINARY_DIR}/bin)
+set(RUNTIME_STAMP ${CMAKE_BINARY_DIR}/runtime.stamp)
+set(RUNTIME_CMDS
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BIN}/D3D12
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LOCAL}/agility/bin/x64/D3D12Core.dll ${LOCAL}/agility/bin/x64/d3d12SDKLayers.dll ${BIN}/D3D12/)
+# NVIDIA Streamline (DLSS, Reflex): the signed production DLLs next to the exe.
+set(SL_BIN ${LOCAL}/streamline/bin/x64)
+list(APPEND RUNTIME_CMDS COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SL_BIN}/sl.interposer.dll ${SL_BIN}/sl.common.dll
+  ${SL_BIN}/sl.dlss.dll ${SL_BIN}/sl.reflex.dll ${SL_BIN}/sl.pcl.dll ${SL_BIN}/nvngx_dlss.dll ${SL_BIN}/NvLowLatencyVk.dll ${BIN}/)
+if(EXISTS ${LOCAL}/vulkan-layers/bin/VkLayer_khronos_validation.dll)
+  list(APPEND RUNTIME_CMDS
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BIN}/vulkan-layers
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LOCAL}/vulkan-layers/bin/VkLayer_khronos_validation.dll ${LOCAL}/vulkan-layers/bin/VkLayer_khronos_validation.json ${BIN}/vulkan-layers/)
+endif()
+add_custom_command(OUTPUT ${RUNTIME_STAMP} ${RUNTIME_CMDS} COMMAND ${CMAKE_COMMAND} -E touch ${RUNTIME_STAMP})
+add_custom_target(runtime_files DEPENDS ${RUNTIME_STAMP})
+
+# Headless smoke tests, one per backend (each links only its own backend).
+if(RHI_D3D12_SRC)
+  add_executable(rhi_smoke_d3d12 tests/rhi/rhi_smoke.cpp)
+  target_link_libraries(rhi_smoke_d3d12 PRIVATE taelia_rhi_d3d12)
+  target_compile_definitions(rhi_smoke_d3d12 PRIVATE SMOKE_D3D12 TAELIA_AGILITY_SDK_VERSION=${AGILITY_SDK_VERSION})
+  add_dependencies(rhi_smoke_d3d12 shaders runtime_files)
+  add_test(NAME rhi_smoke_d3d12 COMMAND rhi_smoke_d3d12)
+endif()
+if(RHI_VULKAN_SRC)
+  add_executable(rhi_smoke_vulkan tests/rhi/rhi_smoke.cpp)
+  target_link_libraries(rhi_smoke_vulkan PRIVATE taelia_rhi_vulkan)
+  target_compile_definitions(rhi_smoke_vulkan PRIVATE SMOKE_VULKAN)
+  add_dependencies(rhi_smoke_vulkan shaders runtime_files)
+  add_test(NAME rhi_smoke_vulkan COMMAND rhi_smoke_vulkan)
+endif()
+
+file(GLOB_RECURSE GAME_SRC CONFIGURE_DEPENDS engine/platform/*.cpp engine/platform/*.h engine/render/*.cpp engine/render/*.h engine/app/*.cpp engine/app/*.h)
+if(NOT GAME_SRC)
+  return()
+endif()
+# The game's own code as objects, so it compiles (and can be checked) before both backends exist.
+add_library(taelia_game_objs OBJECT ${GAME_SRC})
+target_include_directories(taelia_game_objs PUBLIC engine shared ${GEN_DIR})
+target_link_libraries(taelia_game_objs PUBLIC taelia_sim taelia_rhi imgui thirdparty_headers)
+target_compile_options(taelia_game_objs PRIVATE /W4)
+target_compile_definitions(taelia_game_objs PRIVATE TAELIA_AGILITY_SDK_VERSION=${AGILITY_SDK_VERSION})
+add_dependencies(taelia_game_objs shared_constants)
+if(NOT RHI_D3D12_SRC OR NOT RHI_VULKAN_SRC)
+  return()
+endif()
+add_executable(WondersOfTaelia WIN32 $<TARGET_OBJECTS:taelia_game_objs>)
+target_link_libraries(WondersOfTaelia PRIVATE taelia_game_objs taelia_sim taelia_rhi_d3d12 taelia_rhi_vulkan imgui
+  user32 gdi32 shell32 ole32 winmm)
+add_dependencies(WondersOfTaelia shaders runtime_files)
+# The game itself, headless, on both APIs with the debug layers: a frame must come out with no debug messages.
+foreach(api d3d12 vulkan)
+  add_test(NAME game_frame_${api} COMMAND WondersOfTaelia --api=${api} --gpu-debug --frames=3 --size=640x360 --menu=graphics
+           --shot=${CMAKE_BINARY_DIR}/test_frames/${api}.png)
+endforeach()
+# The windowed path (swapchain present, resize) on a window that is never shown.
+foreach(api d3d12 vulkan)
+  add_test(NAME game_swapchain_${api} COMMAND WondersOfTaelia --api=${api} --gpu-debug --frames=40 --size=800x450 --hidden-window)
+endforeach()

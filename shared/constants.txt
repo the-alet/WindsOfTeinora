@@ -1,0 +1,61 @@
+# The one source of numbers shared by C++, HLSL and the Unreal Python (SPEC.md, architecture).
+# Generated into build/<preset>/generated/{taelia/shared_constants.h, shaders/shared_constants.hlsli, unreal/shared_constants.py}.
+# Format: NAME  type  value[,value...]  # comment.   Types: int uint float double float2 float3 float4
+
+# ---- simulation clock
+SIM_STEP_HZ                 int     60          # fixed simulation steps per simulated second
+TIME_SPEED_MIN              float   0.02        # x1/50
+TIME_SPEED_MAX              float   50.0        # x50
+HOURS_PER_DAY               int     28          # time units: whole numbers, <= 30 h a day
+MINUTES_PER_HOUR            int     48          # > 40
+SECONDS_PER_MINUTE          int     64          # > 50; one second is the physics second
+DEFAULT_HOUR                float   11.5        # start of a new world (morning: the yellow-orange sun is up)
+
+# ---- free camera and the eye's focus (fractions are of the half field of view, centre = 0, edge = 1)
+CAMERA_SPEED                float   10.0        # m/s, fixed, no mouse wheel
+CAMERA_FOV_V_DEG            float   54.0        # about 10% narrower than the usual 60 deg
+CAMERA_NEAR                 float   0.05
+CAMERA_SPAWN                float3  0.0,1.8,0.0 # spawn point, metres (y up)
+GAZE_MOUSE_RAD_PER_COUNT    float   0.0021      # how far one mouse count moves the gaze
+GAZE_NEUTRAL                float   0.05        # inside this circle around the camera's direction it doesn't turn
+GAZE_PULL_HARD              float   0.80        # past this the camera is pulled hard toward the gaze
+GAZE_FOLLOW_RATE            float   1.4         # 1/s, damping of the follow between the two
+GAZE_HARD_RATE              float   14.0        # 1/s, the hard pull at the edge
+GAZE_MAX_PITCH_DEG          float   86.0
+
+# ---- focus blur (screen space; radii are fractions of the half screen height, measured from the gaze point)
+FOCUS_RADIUS                float   0.42        # generous focus area: no blur inside
+FOCUS_BLUR_MAX              float   0.018       # blur radius at the screen edge, fraction of screen height
+FOCUS_BLUR_POWER            float   1.6         # almost none at the focus edge, strong at the screen edge
+VIGNETTE_EDGE               float   0.05        # darkening at the very edge
+
+# ---- GPU layout
+FRAME_CONSTANTS_BYTES       int     8192        # the first attempt outgrew 4 KB
+PUSH_CONSTANTS_BYTES        int     128
+
+# ---- terrain (quadtree of tiles, CDLOD)
+TERRAIN_GRID                int     32          # quads per tile side (33 vertices)
+TERRAIN_VERTEX_BYTES        int     16          # height, normal, materials, extra
+TERRAIN_ROOT_SIZE           float   4096.0      # metres, the coarsest tile
+TERRAIN_FOG_DENSITY         float   0.00011     # haze over distance, per metre
+
+# ---- sky: a world of radius WORLD_RADIUS_KM; suns and the planet ride a sky sphere SKY_SPHERE_KM from its centre
+WORLD_RADIUS_KM             double  40000.0     # the sky's axis is this far below the ground
+SKY_SPHERE_KM               double  99000.0     # the suns sit this far out
+OBSERVER_LATITUDE_DEG       double  35.0        # where the spawn point lies on the world
+SUN_A_PERIOD_DAYS           double  30.0        # yellow-orange sun, prograde
+SUN_B_PERIOD_DAYS           double  45.0        # blue-green sun, its own period: both behind the planet every 90 days
+SUN_TILT_DEG                double  5.0         # orbits tilted opposite ways (+ for A, - for B)
+DOUBLE_ECLIPSE_DAY          double  15.5        # first double eclipse (noon of day 15); then every 90 days
+SUN_A_RADIUS_DEG            float   0.42        # apparent radius (kept constant on the sky)
+SUN_B_RADIUS_DEG            float   0.36
+SUN_A_COLOR                 float3  1.0,0.78,0.52   # yellow-orange
+SUN_B_COLOR                 float3  0.55,0.95,0.85  # blue-green
+SUN_A_INTENSITY             float   1.0
+SUN_B_INTENSITY             float   1.15        # slightly brighter
+PLANET_RADIUS_DEG           float   1.1         # small on the sky, but larger than a sun: it can hide one (eclipses last hours)
+PLANET_ALBEDO               float   0.12        # reflects 10-15% of the suns' light
+PLANET_SPIN_DAYS            double  9.7         # turns very slowly on its own axis
+PLANET_PRECESSION_DAYS      double  63.0        # its tilted rings open and close over the days
+PLANET_RING_TILT_DEG        float   24.0
+STAR_COUNT                  int     7000

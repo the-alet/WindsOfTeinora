@@ -1,9 +1,9 @@
 .local/
+build/
+out/
+*.user
 .vs/
-*.png
-UE_5.8/
-Unreal/Binaries/
-Unreal/Content/
-Unreal/DerivedDataCache/
-Unreal/Intermediate/
-Unreal/Saved/
+.vscode/
+shots/
+__pycache__/
+CMakeUserPresets.json

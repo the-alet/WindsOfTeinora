@@ -1,35 +1,26 @@
 {
-	"version": 6,
-	"cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
-	"configurePresets": [
-		{
-			"name": "release",
-			"displayName": "Release (MSVC in .local)",
-			"generator": "Ninja",
-			"binaryDir": "${sourceDir}/.local/build/release",
-			"toolchainFile": "${sourceDir}/cmake/msvc-local.cmake",
-			"cacheVariables": {
-				"CMAKE_BUILD_TYPE": "Release",
-				"CMAKE_MAKE_PROGRAM": "${sourceDir}/.local/ninja/ninja.exe"
-			}
-		},
-		{
-			"name": "debug",
-			"displayName": "Debug (MSVC in .local)",
-			"inherits": "release",
-			"binaryDir": "${sourceDir}/.local/build/debug",
-			"cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
-		}
-	],
-	"buildPresets": [
-		{ "name": "release", "configurePreset": "release" },
-		{ "name": "debug", "configurePreset": "debug" }
-	],
-	"testPresets": [
-		{
-			"name": "release",
-			"configurePreset": "release",
-			"output": { "outputOnFailure": true }
-		}
-	]
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "${sourceDir}/.local/toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_MAKE_PROGRAM": "${sourceDir}/.local/ninja/ninja.exe",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    { "name": "debug",   "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } }
+  ],
+  "buildPresets": [
+    { "name": "debug",   "configurePreset": "debug" },
+    { "name": "release", "configurePreset": "release" }
+  ],
+  "testPresets": [
+    { "name": "debug",   "configurePreset": "debug",   "output": { "outputOnFailure": true } },
+    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } }
+  ]
 }
