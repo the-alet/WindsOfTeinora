@@ -51,7 +51,7 @@ void TreeRenderer::buildMeshes() {
     meshes_.assign(size_t(TreeKind::Count) * kTreeVariants, Mesh{});
     for (int k = 0; k < int(TreeKind::Count); ++k)
         for (int var = 0; var < kTreeVariants; ++var) {
-            const TreeSkeleton sk = growTree(TreeKind(k), uint64_t(var) * 977 + uint64_t(k) * 13 + 7);
+            const TreeSkeleton sk = growTree(TreeKind(k), treeSkeletonSeed(TreeKind(k), var));
             Mesh& m = meshes_[size_t(k) * kTreeVariants + var];
             m.height = sk.height;
             m.radius = std::max(sk.crownRadius, sk.height * 0.25f);

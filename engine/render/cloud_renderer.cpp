@@ -106,10 +106,11 @@ CloudRenderer::MapJob CloudRenderer::buildMap(double u0, double v0, double secon
     m.seconds = seconds;
     m.texels.resize(size_t(kMapSize) * kMapSize * 4);
     const uint16_t one = toHalf(1.0f);
+    const std::shared_ptr<const CloudWater> water = clouds_->water();  // the weather's own cloud water (one map feeds both)
     for (uint32_t j = 0; j < kMapSize; ++j)
         for (uint32_t i = 0; i < kMapSize; ++i) {
             const double u = u0 + (i + 0.5) * kMapTexel, v = v0 + (j + 0.5) * kMapTexel;
-            const double c = clouds_->coverageAt(u, v, seconds);
+            const double c = clouds_->coverageAt(u, v, seconds, water.get());
             uint16_t* t = &m.texels[(size_t(j) * kMapSize + i) * 4];
             t[0] = toHalf(float(c));
             t[1] = toHalf(float(clouds_->baseAt(u, v)));

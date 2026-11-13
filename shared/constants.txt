@@ -59,3 +59,156 @@ PLANET_SPIN_DAYS            double  9.7         # turns very slowly on its own a
 PLANET_PRECESSION_DAYS      double  63.0        # its tilted rings open and close over the days
 PLANET_RING_TILT_DEG        float   24.0
 STAR_COUNT                  int     7000
+
+# ---- physics (step 4)
+BALL_RADIUS                 float   0.08        # m: a hand-sized ball
+BALL_MASS                   float   0.32        # kg (floats: about 150 kg/m3)
+BALL_MAX                    int     48          # balls kept in the world; the oldest goes first
+THROW_SPEED_MIN             float   4.0         # m/s, the softest throw
+THROW_SPEED_MAX             float   24.0        # m/s, LMB held for the full charge
+THROW_CHARGE_SECONDS        float   1.2         # holding LMB this long gives the hardest throw
+DROP_CLICK_SECONDS          float   0.18        # a click shorter than this drops the ball
+PHYSICS_SUBSTEPS            int     2           # PhysX steps per simulation step
+WIND_REFERENCE_HEIGHT       float   10.0        # m: the set wind is measured this high above the ground
+
+# ---- magic (step 5): a weightless gas of motes, kinetic theory in SI units (SPEC.md, Magic; .local/step5_design.json)
+# Aspect order everywhere: earth water nature fire air lightning light neutral. Mote masses in MAGIC_MU.
+MAGIC_MU                    double  1e-6        # kg: the unit of mote mass
+MAGIC_MASS_EARTH            float   1024.0      # mote mass, MAGIC_MU: earth heaviest ...
+MAGIC_MASS_WATER            float   256.0
+MAGIC_MASS_NATURE           float   64.0
+MAGIC_MASS_FIRE             float   16.0
+MAGIC_MASS_AIR              float   4.0
+MAGIC_MASS_LIGHTNING        float   12.0        # > 9.8 so 675 of fire turned to lightning stays under the light threshold
+MAGIC_MASS_LIGHT            float   1.0         # ... light lightest
+MAGIC_MASS_NEUTRAL          float   4.0         # like air
+MAGIC_THETA0                double  8.533333333333333e-5  # J: ambient magic temperature 256 mu/3 (v = 16/sqrt(m/mu) m/s)
+MAGIC_FIRE_BIRTH_THETA      float   3.0         # fire magic is born at this many THETA0
+MAGIC_GAMMA                 float   1.6666667   # monatomic: speed of sound sqrt(gamma Theta/m)
+# Manifestation thresholds (kg/m3, own aspect). Mote diameters follow from n*b = 1/3 here (van der Waals b = 2/3 pi d^3).
+MAGIC_SHOW_EARTH            float   50.0
+MAGIC_SHOW_WATER            float   40.0
+MAGIC_SHOW_NATURE           float   38.0
+MAGIC_SHOW_FIRE             float   45.0
+MAGIC_SHOW_AIR              float   35.0
+MAGIC_SHOW_LIGHTNING        float   40.0        # only sets its diameter: lightning does not condense
+MAGIC_SHOW_LIGHT            float   40.0
+MAGIC_DEW_POINT             float   30.0        # total density: magic becomes visible, bends light
+MAGIC_EFFECT_THRESHOLD      float   50.0        # total density: direct force on things only above this
+MAGIC_D_MAX                 float   2.0         # m2/s: collisions with the air's molecules cap diffusion in thin magic
+MAGIC_AMBIENT_FREE          float   1.0         # kg/m3 of free magic (half air, half neutral) up to MAGIC_FREE_TOP0
+MAGIC_TAU_INERTIA_AIR       float   0.1         # s: drag toward the air (weak streams: magic flows with the air); tau_a = this * sqrt(m_a / m_air)
+# Changes under pressure: own partial pressure against these densities of fire at THETA0 (3600 Pa and 5867 Pa)
+MAGIC_FIRE_TO_LIGHTNING     float   675.0
+MAGIC_FIRE_TO_LIGHT         float   1100.0      # lightning turns to light at the same pressure (825 kg/m3 of lightning)
+MAGIC_CONVERT_TAU           float   0.05        # s: conversion keeps mass, runs before condensation
+MAGIC_FIRE_STEAM            float   45.0        # steam and burning plants: the user's answer is pending (8.5, 30 or 45)
+MAGIC_THETA_TAU             float   8.0         # s: Theta relaxes to THETA0, its energy goes into the air
+MAGIC_AIR_T_TAU             float   30.0        # s: the air's temperature offset relaxes
+MAGIC_AIR_HEAT_CAPACITY     float   1206.0      # J/(m3 K): air, to turn the motes' energy into a temperature offset
+MAGIC_AIR_T_REF             float   288.0       # K: buoyancy g*T/MAGIC_AIR_T_REF
+MAGIC_WIND_SHARE            float   0.5         # how much air magic moves the wind
+# The field: three rings of 8^3 bricks around the focus, columns follow the ground, layers align in absolute height.
+MAGIC_BRICK                 int     8
+MAGIC_COLUMNS               int     64          # columns per ring side, every level
+MAGIC_L0_CELL               float   2.0         # m: 64x64x16, 128 m across, 32 m up
+MAGIC_L0_CELL_Y             float   2.0
+MAGIC_L0_LAYERS             int     16
+MAGIC_L1_CELL               float   8.0         # m: 512 m across
+MAGIC_L1_CELL_Y             float   8.0
+MAGIC_L1_LAYERS             int     32          # 256 m up (the design's 16 left as little as 8 m of it under L2's 128 m layers)
+MAGIC_L2_CELL               float   64.0        # m: 4096 m across
+MAGIC_L2_CELL_Y             float   128.0       # 16 layers reach 2048 m
+MAGIC_L2_LAYERS             int     16
+MAGIC_FIRECORE_CELL         float   0.5         # m: 16x16x24 on each hot source (later)
+MAGIC_FIRECORE_DIMS         float3  16,24,16
+MAGIC_L0_EVERY              int     2           # world steps per level tick
+MAGIC_L1_EVERY              int     8
+MAGIC_L1_OFFSET             int     1
+MAGIC_L2_EVERY              int     32
+MAGIC_L2_OFFSET             int     3
+MAGIC_CFL                   float   0.5         # sub-steps keep (|u| + c) dt / dx under this
+MAGIC_DIFFUSION_LIMIT       float   0.9         # ... and 6 D dt / dx^2 under this
+MAGIC_MAX_SUBSTEPS          int     8
+MAGIC_QUIET_RHO             float   0.02        # kg/m3 from the baseline: a quiet brick is skipped (never snapped)
+MAGIC_QUIET_U               float   0.02        # m/s from the air
+# Baseline (target of the taking rule and fill of new bricks)
+MAGIC_EARTH_GROUND          float   2.5         # kg/m3 at the ground, times 0.9 + 0.3 (rock + sand)
+MAGIC_EARTH_SCALE           float   1.5         # m
+MAGIC_WATER_NEAR            float   2.5         # kg/m3 at a pond's surface (and inside the water)
+MAGIC_WATER_SCALE           float   1.5         # m
+MAGIC_NATURE_MEADOW         float   0.4         # kg/m3 times the meadow
+MAGIC_NATURE_SCALE          float   3.0         # m
+MAGIC_NATURE_CROWN          float   0.4         # kg/m3 inside a tree crown
+MAGIC_FREE_TOP0             float   1800.0      # m: free magic tapers to 0 between these heights
+MAGIC_FREE_TOP1             float   2200.0
+MAGIC_TAKE_TAU_EARTH        float   20.0        # s: neutral takes an aspect toward its baseline (and gives it back above)
+MAGIC_TAKE_TAU_WATER        float   20.0
+MAGIC_TAKE_TAU_NATURE       float   60.0
+MAGIC_TAKE_TAU_AIR          float   10.0
+
+# ---- the magic view (step 5c): SPEC "Aspects and colours" (linear rgb)
+MAGIC_COLOR_EARTH           float3  0.45,0.25,0.10  # brown
+MAGIC_COLOR_WATER           float3  0.30,0.62,1.00  # light blue ...
+MAGIC_COLOR_WATER_DEEP      float3  0.04,0.14,0.62  # ... to deep blue as it thickens
+MAGIC_COLOR_NATURE          float3  0.06,0.32,0.09  # dark green
+MAGIC_COLOR_FIRE            float3  1.00,0.42,0.06  # orange
+MAGIC_COLOR_AIR             float3  0.22,0.85,0.68  # green-turquoise
+MAGIC_COLOR_LIGHTNING       float3  0.55,0.20,1.00  # violet
+MAGIC_COLOR_LIGHT           float3  1.00,1.00,1.00  # white
+MAGIC_COLOR_NEUTRAL         float3  0.30,0.30,0.32  # no colour of its own: a faint grey
+MAGIC_VIEW_REACH            float   100.0       # m: the magic view reaches this far
+MAGIC_VIEW_LAYERS           int     32          # layers of each uploaded window (absolute heights around the camera)
+MAGIC_VIEW_DIM              float   0.15        # the world goes grey and dim
+MAGIC_VIEW_EXPOSURE         float   1.0         # fixed: magic glows the same by day and by night
+MAGIC_SURFACE_GLOW          float   0.35        # a thing's glow at its full share of held magic
+MAGIC_FREE_GLOW             float   0.001       # free magic: glow per metre per kg/m3, times 1 + rho/4 (dense magic shows)
+
+# ---- fire (step 5d): hot things hold a hot core of fire magic and send more up on the air they heat
+MAGIC_TAKE_TAU_FIRE         float   6.0         # s: free fire magic loses its aspect away from hot things
+MAGIC_FIRE_CORE             float   55.0        # kg/m3: a campfire's core at full strength (its peak, finer than a cell)
+MAGIC_FIRE_CORE_SIGMA       float   0.6         # m
+MAGIC_FIRE_HOLD_TAU         float   0.5         # s: a hot thing makes its fire magic this fast
+MAGIC_FIRE_EMIT             float   2.5         # kg/m3/s of free fire magic rising from a fire at full strength
+MAGIC_FIRE_HEAT             float   25.0        # K/s: a fire at full strength heats the air of its cell
+MAGIC_UPDRAFT               float   0.05        # m/s per K: warm air rises and carries the magic up
+MAGIC_UPDRAFT_MAX           float   2.5         # m/s: a campfire's plume rises no faster
+CAMPFIRE_FEED               float   0.01        # 1/s: the wind feeds a fire whose fire magic outweighs the air magic at its bed
+CAMPFIRE_DIE_TAU            float   120.0       # s: a fire the air magic outweighs dies down
+CAMPFIRE_MAX                float   1.5         # the strongest a fed fire burns (1: as it starts)
+
+# ---- light drops, nature, objects holding magic (step 5e)
+MAGIC_DROPS                 float   3.0         # drops per second from each sun at full light (fewer through cloud, none in eclipse)
+MAGIC_PLANET_REFLECT        float   0.05        # the planet sends back this share of the drops that hit it
+MAGIC_DROP_PATH             float   300.0       # m: a drop's mean free path in ambient magic (shorter in denser)
+MAGIC_DROP_LIGHT            float   0.4         # kg/m3 of light magic a drop leaves where it stops
+MAGIC_DROP_KICK             float   0.6         # m/s: the eddy it stirs (a small vortex around its path)
+MAGIC_DROP_GROWTH           float   0.2         # kg/m3: nature magic a drop makes grow where nature absorbs it
+MAGIC_TAKE_TAU_LIGHT        float   3.0         # s: light magic turns back to neutral
+MAGIC_NATURE_DRINK          float   0.002       # 1/(kg/m3 s): nature absorbs water magic at this * nature * water
+MAGIC_HELD                  float   3.0         # kg/m3 of its own aspect every object holds
+MAGIC_HELD_TAU              float   600.0       # s: what it holds evens out with the magic around it
+MAGIC_FALL_APART            float   0.05        # below this share of what it should hold, it falls apart
+
+# ---- condensation and manifestations (step 5f)
+MAGIC_CONDENSE_TAU          float   0.1         # s: the excess past an aspect's threshold condenses (fast, like dew)
+MAGIC_EVAPORATE_TAU         float   2.0         # s: its manifestation evaporates back when the surroundings thin
+MAGIC_SPAWN_KG              float   40.0        # kg of earth (nature) condensate in a cell grows a mineral (a sprout) that stays
+MAGIC_MINERAL_VOLUME        float   0.12        # m3: one mineral cluster
+MAGIC_SPROUT_VOLUME         float   0.04        # m3: one sprout
+MAGIC_FIREFLY_MERGE         int     10          # fireflies together merge into a big one ...
+MAGIC_FIREFLY_WAVE          float   1.0         # ... that sends out waves of light magic of this density ...
+MAGIC_FIREFLY_WAVE_EVERY    float   2.0         # ... this often (s)
+MAGIC_WHIRL                 float   0.08        # m/s of swirl per kg/m3 of air condensate
+MAGIC_PUSH                  float   1.0         # past the effect threshold: drag of dense magic on things, per kg/m3 over it
+
+# ---- weather (step 5g): the one cloud map
+WEATHER_RAIN                float   30.0        # kg/m3 of cloud water past which it rains (under a closed sky)
+WEATHER_STORM               float   50.0        # past this, where clouds run into each other during rain, a storm starts
+WEATHER_RAIN_TAKE           float   0.002       # kg/m3 per second the heaviest rain takes from its cloud
+WEATHER_FRONT               float   0.004       # kg/m3 per m: clouds running into each other (the cloud water's slope)
+WEATHER_CHARGE              float   0.05        # lightning magic per second per kg/m3 past the storm line, at a front
+WEATHER_STRIKE              float   60.0        # lightning magic a strike carries down
+WEATHER_STRIKE_FIRE         float   60.0        # kg/m3 of fire magic a strike leaves where it hits (what burns, burns from that)
+MAGIC_RAIN_DROPS            float   6.0         # rain: drops per second at full rain that carry water magic down (around the camera)
+MAGIC_RAIN_WATER            float   0.4         # kg/m3 of water magic each leaves where it lands

@@ -3,6 +3,7 @@
 // Density = the simulation's map (coverage, base, thickness) x 3D noise (shape, detail), carried by the wind.
 #include "atmosphere.hlsli"
 #include "clouds.hlsli"
+#include "fire.hlsli"
 
 // tex/size/offset per kernel:
 //   ShapeNoise/DetailNoise  tex0.x out uav, size.x edge
@@ -257,6 +258,8 @@ bool layerSegment(float3 dir, out float t0, out float t1) {
                 const float powder = lerp(1.0 - 0.35 * exp(-sig * 150.0), 1.0, saturate(sunC[i] * 0.5 + 0.5));
                 light += sunL[i] * scatterLight(od, sunC[i]) * powder;
             }
+            // A storm's clouds are heavy and dark; a lightning flash lights them from inside.
+            light = light * (1.0 - 0.6 * g_frame.weather.y) + float3(0.75, 0.78, 1.0) * 4.0 * g_frame.weather.z;
             const float ts = exp(-sig * dt);
             S += T * light * (1.0 - ts);
             tw += t * T * (1.0 - ts);
@@ -319,15 +322,29 @@ bool layerSegment(float3 dir, out float t0, out float t1) {
         const float cloudDist = g_tex2D[g_push.tex0.w].SampleLevel(s_pointClamp, uvHalf, 0).r;
         if (sceneDist < cloudDist) return;
     }
-    const float4 c = g_tex2D[g_push.tex0.z].SampleLevel(s_linearClamp, uvHalf, 0);
-    if (c.a > 0.9999) return;
+    float4 c = g_tex2D[g_push.tex0.z].SampleLevel(s_linearClamp, uvHalf, 0);
+    // The campfire in front of the sky goes over the clouds (surfaces got it in the lighting pass).
+    float4 fire = float4(0, 0, 0, 1);
+    if (depth <= 0) fire = marchFire(0, viewRay((float2(id.xy) + 0.5) / float2(g_push.size.xy)), 1e5, g_frame.flags.x != 0 ? K_MAGIC_VIEW_DIM : 1.0);
+    if (c.a > 0.9999) {
+        if (fire.a < 1.0 || fire.r > 0.0) {
+            const float4 s0 = g_rwTex2D[g_push.tex0.x][id.xy];
+            g_rwTex2D[g_push.tex0.x][id.xy] = float4(s0.rgb * fire.a + fire.rgb, s0.a);
+        }
+        return;
+    }
+    if (g_frame.flags.x != 0) c.rgb = dot(c.rgb, float3(0.2126, 0.7152, 0.0722)) * K_MAGIC_VIEW_DIM;  // magic view: grey, dim
     const float T = c.a * smoothstep(0.0, 0.12, c.a);  // thick cloud hides the discs and stars completely
     const float4 scene = g_rwTex2D[g_push.tex0.x][id.xy];
+    if (g_frame.flags.x != 0) {  // the free magic glows in front of far clouds: they only add a dim grey
+        g_rwTex2D[g_push.tex0.x][id.xy] = float4((scene.rgb + c.rgb) * fire.a + fire.rgb, scene.a);
+        return;
+    }
     // Through cloud, the discs and their glow fade to no more than the cloud's own brightness.
     float3 through = scene.rgb * T;
     const float own = max(max(max(c.r, c.g), c.b) / max(1.0 - c.a, 1e-3), 1e-3);
     const float cap = exp2(lerp(log2(1e4), log2(own), smoothstep(0.0, 0.2, 1.0 - c.a)));
     const float peak = max(max(through.r, through.g), through.b);
     if (peak > cap) through *= cap / peak;
-    g_rwTex2D[g_push.tex0.x][id.xy] = float4(through + c.rgb, scene.a);
+    g_rwTex2D[g_push.tex0.x][id.xy] = float4((through + c.rgb) * fire.a + fire.rgb, scene.a);
 }

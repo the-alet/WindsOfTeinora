@@ -41,3 +41,10 @@ clouds.hlsl     CompositeMain cs_6_6
 stars.hlsl      VSMain      vs_6_6
 stars.hlsl      PSMain      ps_6_6
 adapt.hlsl      CSMain      cs_6_6
+ball.hlsl       VSMain      vs_6_6
+ball.hlsl       PSMain      ps_6_6
+manifest.hlsl   VSMain      vs_6_6
+manifest.hlsl   PSMain      ps_6_6
+manifest.hlsl   FireflyVS   vs_6_6
+manifest.hlsl   FireflyPS   ps_6_6
+weather.hlsl    CSMain      cs_6_6

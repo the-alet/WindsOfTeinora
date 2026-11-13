@@ -150,7 +150,7 @@ GBufferOut PSMain(VSOut i) {
     GBufferOut o;
     o.albedo = float4(albedo, ao);
     o.normal = float4(n, rough);
-    o.material = float4(0, 0.5, wet, 0);
+    o.material = float4(0, 0.5, wet, packMagic(MAGIC_HELD_EARTH, 0.5, false));  // the ground glows softer than what grows on it
     o.motion = 0;
     return o;
 }

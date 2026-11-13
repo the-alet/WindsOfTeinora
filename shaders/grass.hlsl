@@ -126,7 +126,7 @@ GBufferOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     GBufferOut o;
     o.albedo = float4(albedo, i.uvAo.z);
     o.normal = float4(normalize(n + float3(0, 0.6, 0) * (front ? 0 : 1)), d.z);
-    o.material = float4(0.45, 0.3, 0, 0);
+    o.material = float4(0.45, 0.3, 0, packMagic(MAGIC_HELD_NATURE, 1.0, false));
     o.motion = 0;
     return o;
 }

@@ -140,7 +140,12 @@ bool Renderer::init(rhi::Device* device, const Terrain* terrain, const CloudMap*
     if (!trees_.init(device_, terrain, detail, error)) return false;
     trees_.setRockTextures(groundAlbedo_[2]->srv(), groundDetail_[2]->srv());
     if (!grass_.init(device_, detail, error)) return false;
+    if (!balls_.init(device_, detail, error)) return false;
+    if (!manifest_.init(device_, error)) return false;
     if (!atmosphere_.init(device_, error) || !cloudRenderer_.init(device_, clouds, error)) return false;
+    if (!magic_.init(device_, error)) return false;
+    weatherPipe_ = device_->createComputePipeline({"weather.CSMain", "weather"}, error);
+    if (!weatherPipe_) return false;
     if (device_->rayTracingSupported()) tlas_ = device_->createTlas(kMaxInstances, "scene.tlas");
     texturesReady_ = false;
     terrainSim_ = terrain;
@@ -165,8 +170,12 @@ void Renderer::shutdown() {
     terrain_.shutdown();
     trees_.shutdown();
     grass_.shutdown();
+    balls_.shutdown();
+    manifest_.shutdown();
     atmosphere_.shutdown();
     cloudRenderer_.shutdown();
+    magic_.shutdown();
+    weatherPipe_.reset();
     tlas_.reset();
     treetex_.reset();
     for (int k = 0; k < 3; ++k) {
@@ -445,6 +454,25 @@ void Renderer::fillFrameConstants(const RenderView& v, uint32_t outW, uint32_t o
     fc.atmosphere = {atmosphere_.transmittanceLut(), atmosphere_.multiScatteringLut(), atmosphere_.skyViewLut(),
                      atmosphere_.aerialPerspectiveVolume()};
     fc.atmosphere2 = {atmosphere_.skyIrradiance(), cloudRenderer_.shadowMap(), cloudRenderer_.mapTexture(), cloudRenderer_.result()};
+    magic_.frameData(fc, v.cameraPos);
+    manifest_.frameData(fc, v.magic, v.cameraPos);
+    {
+        // The flash: bright at once, fading over a fifth of a second with a flicker.
+        const double age = v.strikeAge;
+        const double flash = age >= 0.0 && age < 0.25 ? (1.0 - age / 0.25) * (0.7 + 0.3 * std::cos(age * 90.0)) : 0.0;
+        fc.weather = {float(v.rain), float(v.storm), float(flash), 0.0f};
+        const dvec3 g = v.strike - v.cameraPos;
+        uint32_t seed = uint32_t(int64_t(std::floor(v.strike.x)) * 73856093 ^ int64_t(std::floor(v.strike.z)) * 19349663);
+        float seedBits;
+        std::memcpy(&seedBits, &seed, 4);
+        fc.bolt[0] = {float(g.x), float(g.y), float(g.z), seedBits};
+        fc.bolt[1] = {float(g.x), float(g.y + 1500.0), float(g.z), float(age)};
+    }
+    {
+        const dvec3 bed = v.campfire - v.cameraPos;
+        fc.fire = {float(bed.x), float(bed.y), float(bed.z), float(v.campfireStrength)};
+        fc.fireInfo = {float(std::fmod(v.simSeconds, 3600.0)), float(v.wind.x * 0.7), float(v.wind.z * 0.7), 0.0f};
+    }
     fc.wind = f4(v.wind.x, v.wind.y, v.wind.z, 0);
     fc.flags = {v.magicView ? 1u : 0u, uint32_t(v.frame), 0u, 0u};
     auto wrap = [](double x, double period) { return float(x - std::floor(x / period) * period); };
@@ -489,12 +517,15 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
 
     rhi::Transient fc = device_->allocTransient(sizeof(gpu::FrameConstants));
     Frustum frustum;
+    magic_.update(v.magic, v.cameraPos);
     fillFrameConstants(v, outW, outH, fc, frustum);
     if (!texturesReady_) generateTextures(cmd);
 
     // Terrain tiles for this camera (automated runs wait for all of them, so frames repeat exactly).
     terrain_.select(v.cameraPos, frustum, v.waitForStreaming);
     trees_.select(v.cameraPos, frustum, v.waitForStreaming);
+    balls_.update(v.balls, v.cameraPos, frustum);
+    manifest_.update(v.magic, v.cameraPos);
     terrain_.upload(cmd);
     grass_.generate(cmd, terrain_, v.cameraPos, fc);
     buildScene(cmd, fc);
@@ -528,6 +559,8 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
     }
     trees_.draw(cmd, fc, barkTex, leafTex);
     grass_.draw(cmd, fc);
+    balls_.draw(cmd, fc);
+    manifest_.draw(cmd, fc);
     cmd->endRenderPass();
     cmd->endMarker();
 
@@ -545,6 +578,20 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
     drawStars(cmd, v, fc);
     cloudRenderer_.render(cmd, fc, sceneHdr_.get(), depth_.get());
     drawWater(cmd, v, fc);
+    manifest_.drawFireflies(cmd, fc, sceneHdr_.get(), depth_.get());
+    if (weatherPipe_ && (v.rain > 0.001 || (v.strikeAge >= 0.0 && v.strikeAge < 0.3))) {
+        cmd->beginMarker("weather");
+        cmd->barrier(sceneHdr_.get(), rhi::State::UnorderedAccess);
+        cmd->barrier(depth_.get(), rhi::State::ShaderRead);
+        cmd->setPipeline(weatherPipe_.get());
+        cmd->setFrameConstants(fc);
+        const struct {
+            uint32_t hdr, depth, width, height;
+        } wp{sceneHdr_->uav(0), depth_->srv(), sceneHdr_->width(), sceneHdr_->height()};
+        cmd->pushConstants(&wp, sizeof wp);
+        cmd->dispatch((sceneHdr_->width() + 7) / 8, (sceneHdr_->height() + 7) / 8);
+        cmd->endMarker();
+    }
     upscaleOrCopy(cmd, v, fc);
 
     // Blur pyramid.
@@ -619,6 +666,8 @@ void Renderer::setDetail(const Terrain* terrain, int detail) {
     trees_.setRockTextures(groundAlbedo_[2]->srv(), groundDetail_[2]->srv());
     grass_.shutdown();
     grass_.init(device_, detail, &err);
+    balls_.shutdown();
+    balls_.init(device_, detail, &err);
 }
 
 }  // namespace taelia
@@ -632,8 +681,12 @@ void Renderer::buildScene(rhi::CommandList* cmd, const rhi::Transient& fc) {
     uint32_t leafSrv[3];
     for (int k = 0; k < 3; ++k) leafSrv[k] = leafAlbedo_[k]->srv();
     trees_.buildStructures(cmd, leafSrv);
+    balls_.buildStructures(cmd);
+    manifest_.buildStructures(cmd);
     instances_.clear();
     terrain_.addInstances(instances_);
+    balls_.addInstances(instances_);  // before the trees, so a full table never drops them
+    manifest_.addInstances(instances_);
     trees_.addInstances(instances_, 350.0);
     if (instances_.empty()) return;
     const uint32_t count = std::min<uint32_t>(uint32_t(instances_.size()), kMaxInstances);
@@ -661,7 +714,7 @@ void Renderer::upscaleOrCopy(rhi::CommandList* cmd, const RenderView& v, const r
     cmd->barrier(motion_.get(), rhi::State::UnorderedAccess);
     cmd->setPipeline(motionPipe_.get());
     cmd->setFrameConstants(fc);
-    const uint32_t mp[4] = {depth_->srv(), motion_->uav(0), motion_->width(), motion_->height()};
+    const uint32_t mp[8] = {depth_->srv(), motion_->uav(0), motion_->width(), motion_->height(), gbMotion_->srv(), gbMaterial_->srv(), 0, 0};
     cmd->pushConstants(mp, sizeof mp);
     cmd->dispatch((motion_->width() + 7) / 8, (motion_->height() + 7) / 8);
     cmd->barrier(motion_.get(), rhi::State::ShaderRead);

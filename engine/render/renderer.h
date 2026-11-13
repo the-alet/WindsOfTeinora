@@ -4,12 +4,15 @@
 #include <string>
 #include <unordered_map>
 
+#include "render/ball_renderer.h"
+#include "render/manifest_renderer.h"
 #include "render/imgui_renderer.h"
 #include "render/terrain_renderer.h"
 #include "render/tree_renderer.h"
 #include "render/grass_renderer.h"
 #include "render/atmosphere.h"
 #include "render/cloud_renderer.h"
+#include "render/magic_renderer.h"
 #include "taelia/sim/sky.h"
 #include "rhi/rhi.h"
 #include "taelia/sim/math.h"
@@ -32,6 +35,13 @@ struct RenderView {
     SkyState sky;                     // suns, planet, stars for this moment (sim/sky.h)
     uint64_t seed = 1;                // the world seed (the star catalogue, the galaxy)
     uint64_t frame = 0;
+    const std::vector<BallPose>* balls = nullptr;  // thrown balls to draw (World::ballPoses)
+    const MagicField* magic = nullptr;              // the magic field (World::magic)
+    dvec3 campfire;                                 // the campfire's bed
+    double campfireStrength = 0;                    // 0: out, 1: as it starts
+    double rain = 0, storm = 0;                     // the weather over the camera
+    dvec3 strike;                                   // the last lightning strike's ground point
+    double strikeAge = -1;                          // seconds since it (< 0: none lately)
 };
 
 class Renderer {
@@ -60,8 +70,12 @@ private:
     TerrainRenderer terrain_;
     TreeRenderer trees_;
     GrassRenderer grass_;
+    BallRenderer balls_;
+    ManifestRenderer manifest_;
     AtmosphereRenderer atmosphere_;
     CloudRenderer cloudRenderer_;
+    MagicRenderer magic_;
+    std::unique_ptr<rhi::Pipeline> weatherPipe_;
     std::unique_ptr<rhi::AccelerationStructure> tlas_;
     std::vector<rhi::TlasInstance> instances_;
     static constexpr uint32_t kMaxInstances = 16384;

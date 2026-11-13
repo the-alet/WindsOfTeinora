@@ -27,11 +27,12 @@ add_library(taelia_sim STATIC ${SIM_SRC})
 target_include_directories(taelia_sim PUBLIC sim/include ${GEN_DIR} shared)
 target_compile_options(taelia_sim PRIVATE /W4 /WX)
 add_dependencies(taelia_sim shared_constants)
+target_link_libraries(taelia_sim PRIVATE physx)  # defined below; sim headers don't expose PhysX types
 
 enable_testing()
 file(GLOB TEST_SRC CONFIGURE_DEPENDS tests/*.cpp tests/*.h)
 add_executable(taelia_tests ${TEST_SRC})
-target_link_libraries(taelia_tests PRIVATE taelia_sim)
+target_link_libraries(taelia_tests PRIVATE taelia_sim physx)
 target_compile_options(taelia_tests PRIVATE /W4 /WX)
 add_test(NAME sim COMMAND taelia_tests)
 
@@ -51,10 +52,21 @@ target_include_directories(d3d12ma PUBLIC ${LOCAL}/d3d12ma/include ${LOCAL}/agil
 add_library(thirdparty_headers INTERFACE)
 target_include_directories(thirdparty_headers INTERFACE ${LOCAL}/vma/include ${LOCAL}/stb ${LOCAL}/agility/include)
 
+# NVIDIA PhysX 5, CPU only, static: PhysX 'debug' (/MTd) for our Debug, PhysX 'release' (/MT) otherwise.
+set(PHYSX_DIR ${LOCAL}/physx)
+set(PHYSX_LIB_DIR ${PHYSX_DIR}/lib/$<IF:$<CONFIG:Debug>,debug,release>)
+add_library(physx INTERFACE)
+target_include_directories(physx SYSTEM INTERFACE ${PHYSX_DIR}/include)
+target_compile_definitions(physx INTERFACE PX_PHYSX_STATIC_LIB DISABLE_CUDA_PHYSX $<$<CONFIG:Debug>:PX_DEBUG=1 PX_CHECKED=1>)
+foreach(lib PhysXExtensions PhysX PhysXCooking PhysXCharacterKinematic PhysXPvdSDK PhysXCommon PhysXFoundation)
+  target_link_libraries(physx INTERFACE ${PHYSX_LIB_DIR}/${lib}_static_64.lib)
+endforeach()
+
 # ---------------------------------------------------------------- shaders: HLSL -> DXIL and SPIR-V
 set(DXC ${LOCAL}/dxc/bin/x64/dxc.exe)
 set(SHADER_OUT ${CMAKE_BINARY_DIR}/bin/shaders)
 set(SHADER_LINES)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/shaders/shaders.txt)  # a new shader reconfigures
 if(EXISTS ${CMAKE_SOURCE_DIR}/shaders/shaders.txt)
   file(STRINGS shaders/shaders.txt SHADER_LINES)
 endif()

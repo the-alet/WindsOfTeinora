@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace taelia {
 
@@ -20,6 +21,13 @@ struct LaunchFlags {
     double rain = 0.0;                 // --rain=0..1
     std::optional<double> clouds;      // --clouds=0..1: a fixed cloud cover (else the natural weather)
     int throws = 0;                    // --throws=N
+    // --inject=aspect,x,y,z,kg (repeatable, checks only): add kg/m3 of an aspect at (x, height above ground y, z)
+    // once the magic field runs, so frames can show what dense magic does. No key does this.
+    struct Injection {
+        int aspect = 0;
+        double x = 0, y = 0, z = 0, kg = 0;
+    };
+    std::vector<Injection> injects;
     int frames = 0;                    // --frames=N: automated run
     std::string shot = "shot.png";     // --shot=<file>
     std::optional<std::string> api;    // --api=d3d12|vulkan (else the saved setting)

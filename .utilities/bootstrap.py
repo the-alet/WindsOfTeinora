@@ -25,6 +25,7 @@ PINS = {
     "agility": "1.620.2",
     "vs_channel": "https://aka.ms/vs/18/stable/channel",
     "streamline": "v2.14.16",  # NVIDIA Streamline (DLSS, Reflex); the user accepted its licence
+    "physx": "110.3-omni-and-physx-5.9.1",  # NVIDIA PhysX 5 (CPU only, static), built from source
 }
 
 
@@ -327,6 +328,48 @@ def build_vvl():
     mark(out)
 
 
+def build_physx():
+    """PhysX 5, CPU only, static libs with the static CRT, built with our toolchain:
+    PhysX 'debug' with /MTd for our Debug, PhysX 'release' with /MT for our RelWithDebInfo.
+    Configures PhysX's own CMake directly (no packman, no snippets, no GPU projects)."""
+    out = LOCAL / "physx"
+    if done(out):
+        return
+    tag = PINS["physx"]
+    log(f"NVIDIA PhysX {tag} (from source, two configs)")
+    src = LOCAL / "src/physx"
+    if not done(src):
+        shutil.rmtree(src, ignore_errors=True)
+        unzip(fetch(f"https://github.com/NVIDIA-Omniverse/PhysX/archive/refs/tags/{tag}.zip", f"physx-{tag}.zip"),
+              src, prefix=f"PhysX-{tag}/physx/")
+        mark(src)
+    cmake = str(LOCAL / "cmake/bin/cmake.exe")
+    shutil.rmtree(out, ignore_errors=True)
+    for cfg in ("debug", "release"):
+        bld = LOCAL / "build-physx" / cfg
+        libs = bld / "out"
+        shutil.rmtree(bld, ignore_errors=True)
+        subprocess.check_call([cmake, "-S", str(src), "-B", str(bld), "-G", "Ninja", "--log-level=WARNING",
+                               f"-DCMAKE_MAKE_PROGRAM={LOCAL / 'ninja/ninja.exe'}",
+                               f"-DCMAKE_TOOLCHAIN_FILE={LOCAL / 'toolchain.cmake'}",
+                               f"-DCMAKE_BUILD_TYPE={cfg}", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+                               "-DPX_GENERATE_GPU_PROJECTS=OFF", "-DPX_GENERATE_STATIC_LIBRARIES=ON",
+                               "-DNV_USE_STATIC_WINCRT=ON", f"-DNV_USE_DEBUG_WINCRT={'ON' if cfg == 'debug' else 'OFF'}",
+                               "-DPX_BUILDSNIPPETS=OFF", "-DPX_BUILDPVDRUNTIME=OFF", "-DPX_FLOAT_POINT_PRECISE_MATH=OFF",
+                               f"-DPX_OUTPUT_LIB_DIR={libs}", f"-DPX_OUTPUT_BIN_DIR={libs}", f"-DPX_OUTPUT_DLL_DIR={libs}"])
+        subprocess.check_call([cmake, "--build", str(bld)])
+        dest = out / "lib" / cfg
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in libs.rglob("*"):
+            if f.suffix in (".lib", ".pdb"):  # the compile PDBs next to the libs: the linker finds them there
+                shutil.copy2(f, dest / f.name)
+    shutil.rmtree(LOCAL / "build-physx", ignore_errors=True)  # ~650 MB of objects, not needed once installed
+    shutil.copytree(src / "include", out / "include")  # PxConfig.h is generated there (PX_PHYSX_STATIC_LIB)
+    shutil.copy2(src / "LICENSE.md", out / "LICENSE.md")
+    (out / "version.txt").write_text(tag)
+    mark(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
@@ -350,6 +393,8 @@ def main():
         get_msvc()
     if (LOCAL / "msvc/.done").exists():
         write_toolchain()
+    if not only or "physx" in only:  # needs cmake, ninja and the toolchain above
+        build_physx()
     if a.venv or "venv" in only:
         make_venv()
     if "vvl" in only:
