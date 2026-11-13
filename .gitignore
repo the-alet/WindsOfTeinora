@@ -7,3 +7,4 @@ out/
 shots/
 __pycache__/
 CMakeUserPresets.json
+graphify-out/
