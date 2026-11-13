@@ -54,7 +54,7 @@ struct FrameConstants {
     uint4 scene;            // x: TLAS bindless index, y: sky texture, z, w: unused
     float4 magicWindow[2];  // the magic volumes (L0, L1): xyz the window's min corner relative to the camera (m), w: cell width (m)
     float4 magicInfo;       // x: L0 cell height, y: L1 cell height (m), z: view reach (m), w: 1 if the volumes hold the field
-    uint4 magicVolume;      // bindless: x L0 volume, y L1 volume (rgb: colour x density, a: total density, kg/m3)
+    uint4 magicVolume;      // bindless: x L0 volume, y L1 volume (rgb: colour x density, a: total density, kg/m3); z L0 flow, w L1 flow (xyz: m/s, w: air magic, kg/m3)
     float4 fire;            // the campfire: xyz its bed relative to the camera (m), w: how strongly it burns (0: out)
     float4 fireInfo;        // x: seconds (wrapped hourly), yz: the wind 2 m up (m/s, x and z), w: unused
     float4 flames[3];       // fire condensed elsewhere: xyz relative to the camera (m), w strength like the campfire's (0: none)

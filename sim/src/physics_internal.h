@@ -98,6 +98,7 @@ struct Physics::Impl {
     physx::PxScene* scene = nullptr;
     physx::PxMaterial* ballMaterial = nullptr;
     physx::PxMaterial* barkMaterial = nullptr;
+    physx::PxMaterial* bodyMaterial = nullptr;  // a standing body
     physx::PxMaterial* surfaces[phys::kSurfaceCount] = {};
     physx::PxRigidStatic* flatGround = nullptr;  // tests without terrain
 
@@ -118,6 +119,7 @@ struct Physics::Impl {
     std::vector<TreeInstance> scratchTrees;
     std::vector<phys::PlantHit> plantHits;
     std::map<uint32_t, physx::PxRigidStatic*> rocks;
+    std::map<uint32_t, physx::PxRigidStatic*> capsules;
     Physics::MagicSampler magic;
     PhysicsStats stats;
 

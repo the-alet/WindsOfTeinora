@@ -543,6 +543,17 @@ bool MagicField::addDensity(const dvec3& p, Aspect a, double kgPerM3) {
     return false;
 }
 
+bool MagicField::cellAt(const dvec3& p, MagicDensities& out) const {
+    for (int l = 0; l < impl_->levels; ++l) {
+        const Level& L = impl_->lv[l];
+        const int c = L.find(int64_t(std::floor(p.x / L.dx)), int64_t(std::floor(p.z / L.dx)), int64_t(std::floor(p.y / L.dy)));
+        if (c < 0) continue;
+        for (int a = 0; a < kAspects; ++a) out.rho[a] = L.st[L.at(a, c)];
+        return true;
+    }
+    return false;
+}
+
 bool MagicField::addMass(const dvec3& p, Aspect a, double kg) {
     for (int l = 0; l < impl_->levels; ++l) {
         const Level& L = impl_->lv[l];

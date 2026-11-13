@@ -1,0 +1,3 @@
+The human in this folder is made from MakeHuman's assets (makehumancommunity.org): its base mesh, targets,
+skeleton and skin weights, skin, eyes, eyebrows, eyelashes, hair and clothes, all released under CC0 1.0
+Universal (LICENSE.ASSETS.md in github.com/makehumancommunity/makehuman). Converted by .utilities/makehuman.py.

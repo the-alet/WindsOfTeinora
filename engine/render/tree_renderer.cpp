@@ -33,6 +33,9 @@ uint32_t octNormal(double x, double y, double z) {
     return q(u) | (q(v) << 16);
 }
 
+// TreePush::kind bits 8-10: the aspect the thing holds + 1 (tree.hlsl; gbuffer.hlsli MAGIC_HELD_*).
+constexpr uint32_t kHoldsEarth = 1u << 8, kHoldsNature = 3u << 8;
+
 struct TreePush {
     uint32_t vbSrv, instSrv, instOffset, kind;
     uint32_t albedo, detail;
@@ -57,6 +60,31 @@ void TreeRenderer::buildMeshes() {
             m.radius = std::max(sk.crownRadius, sk.height * 0.25f);
             // Bark coordinate along each limb: continue from the parent when the limb continues it.
             std::vector<float> vEnd(sk.segments.size(), 0.0f);
+            // How far each limb's ends are from the root along the tree (the magic view's streams run out along it).
+            std::vector<float> rootA(sk.segments.size(), 0.0f), rootB(sk.segments.size(), 0.0f);
+            for (size_t si = 0; si < sk.segments.size(); ++si) {
+                const TreeSegment& s = sk.segments[si];
+                if (s.parent >= 0) {
+                    const TreeSegment& p = sk.segments[size_t(s.parent)];
+                    const dvec3 pa{p.a.x, p.a.y, p.a.z}, sa{s.a.x, s.a.y, s.a.z};
+                    rootA[si] = rootA[size_t(s.parent)] + float(length(sa - pa));
+                }
+                rootB[si] = rootA[si] + float(length(dvec3{s.b.x - s.a.x, s.b.y - s.a.y, s.b.z - s.a.z}));
+            }
+            // A leaf takes the distance of the limb end nearest to it, plus the way across.
+            std::vector<float> leafFlow(sk.leaves.size(), 0.0f);
+            for (size_t li = 0; li < sk.leaves.size(); ++li) {
+                const dvec3 ctr{sk.leaves[li].center.x, sk.leaves[li].center.y, sk.leaves[li].center.z};
+                double best = 1e30;
+                for (size_t si = 0; si < sk.segments.size(); ++si) {
+                    const TreeSegment& s = sk.segments[si];
+                    const double d = length(dvec3{s.b.x, s.b.y, s.b.z} - ctr);
+                    if (d < best) {
+                        best = d;
+                        leafFlow[li] = rootB[si] + float(d);
+                    }
+                }
+            }
             for (int lod = 0; lod < kLods; ++lod) {
                 m.bark[lod].firstIndex = uint32_t(idx.size());
                 for (size_t si = 0; si < sk.segments.size(); ++si) {
@@ -93,6 +121,7 @@ void TreeRenderer::buildMeshes() {
                             tv.uv[0] = float(i) / sides * std::max(1.0f, std::round(float(r) * 2.0f * 3.14159f / 0.35f));
                             tv.uv[1] = ring ? v1 : v0;
                             tv.info = w;
+                            tv.flow = ring ? rootB[si] : rootA[si];
                             verts.push_back(tv);
                         }
                     }
@@ -126,6 +155,7 @@ void TreeRenderer::buildMeshes() {
                         tv.uv[0] = float(cc[0] * 0.5 + 0.5);
                         tv.uv[1] = float(0.5 - cc[1] * 0.5);
                         tv.info = w;
+                        tv.flow = leafFlow[li];
                         verts.push_back(tv);
                     }
                     idx.insert(idx.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
@@ -325,7 +355,7 @@ void TreeRenderer::draw(rhi::CommandList* cmd, const rhi::Transient& fc, const u
                 rhi::Transient tr = device_->allocTransient(inst.size() * sizeof(InstanceGpu));
                 std::memcpy(tr.cpu, inst.data(), inst.size() * sizeof(InstanceGpu));
                 const uint32_t kind = uint32_t(mesh / kTreeVariants);
-                TreePush p{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), kind,
+                TreePush p{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), kind | kHoldsNature,
                            pass == 0 ? barkTex[0][kind] : leafTex[0][kind], pass == 0 ? barkTex[1][kind] : leafTex[1][kind], 1.0f, 1.0f};
                 cmd->pushConstants(&p, sizeof p);
                 cmd->drawIndexed(part.indexCount, uint32_t(inst.size()), part.firstIndex);
@@ -337,10 +367,10 @@ void TreeRenderer::draw(rhi::CommandList* cmd, const rhi::Transient& fc, const u
         cmd->setFrameConstants(fc);
         rhi::Transient tr = device_->allocTransient(sizeof fireInstance_);
         std::memcpy(tr.cpu, fireInstance_, sizeof fireInstance_);
-        TreePush stones{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), 0, rockTex_[0], rockTex_[1], 1.0f, 2.0f};
+        TreePush stones{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), kHoldsEarth, rockTex_[0], rockTex_[1], 1.0f, 2.0f};
         cmd->pushConstants(&stones, sizeof stones);
         cmd->drawIndexed(fireStones_.indexCount, 1, fireStones_.firstIndex);
-        TreePush logs{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), 1, barkTex[0][1], barkTex[1][1], 0.55f, 1.0f};
+        TreePush logs{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), 1 | kHoldsNature, barkTex[0][1], barkTex[1][1], 0.55f, 1.0f};
         cmd->pushConstants(&logs, sizeof logs);
         cmd->drawIndexed(fireLogs_.indexCount, 1, fireLogs_.firstIndex);
     }

@@ -43,6 +43,8 @@ stars.hlsl      PSMain      ps_6_6
 adapt.hlsl      CSMain      cs_6_6
 ball.hlsl       VSMain      vs_6_6
 ball.hlsl       PSMain      ps_6_6
+human.hlsl      VSMain      vs_6_6
+human.hlsl      PSMain      ps_6_6
 manifest.hlsl   VSMain      vs_6_6
 manifest.hlsl   PSMain      ps_6_6
 manifest.hlsl   FireflyVS   vs_6_6

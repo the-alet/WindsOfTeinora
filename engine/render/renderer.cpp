@@ -141,6 +141,7 @@ bool Renderer::init(rhi::Device* device, const Terrain* terrain, const CloudMap*
     trees_.setRockTextures(groundAlbedo_[2]->srv(), groundDetail_[2]->srv());
     if (!grass_.init(device_, detail, error)) return false;
     if (!balls_.init(device_, detail, error)) return false;
+    if (!human_.init(device_, error)) return false;
     if (!manifest_.init(device_, error)) return false;
     if (!atmosphere_.init(device_, error) || !cloudRenderer_.init(device_, clouds, error)) return false;
     if (!magic_.init(device_, error)) return false;
@@ -171,6 +172,7 @@ void Renderer::shutdown() {
     trees_.shutdown();
     grass_.shutdown();
     balls_.shutdown();
+    human_.shutdown();
     manifest_.shutdown();
     atmosphere_.shutdown();
     cloudRenderer_.shutdown();
@@ -235,22 +237,24 @@ void Renderer::generateTextures(rhi::CommandList* cmd) {
     std::vector<rhi::Texture*> all;
     for (uint32_t m = 0; m < 4; ++m) all.insert(all.end(), {groundAlbedo_[m].get(), groundDetail_[m].get()});
     for (uint32_t k = 0; k < 3; ++k) all.insert(all.end(), {barkAlbedo_[k].get(), barkDetail_[k].get(), leafAlbedo_[k].get(), leafDetail_[k].get()});
-    {
-        for (rhi::Texture* t : all) {
-            uint32_t w = t->width();
-            for (uint32_t mip = 1; mip < t->desc().mips; ++mip) {
-                cmd->barrier(t, rhi::State::UnorderedAccess);
-                const uint32_t dw = std::max(1u, w / 2);
-                DownPush dp{t->uav(mip - 1), t->uav(mip), w, w, dw, dw, {0, 0}};
-                cmd->pushConstants(&dp, sizeof dp);
-                cmd->dispatch((dw + 7) / 8, (dw + 7) / 8);
-                w = dw;
-            }
-            cmd->barrier(t, rhi::State::ShaderRead);
-        }
-    }
+    for (rhi::Texture* t : all) makeMips(cmd, t);
     cmd->endMarker();
     texturesReady_ = true;
+}
+
+// Each mip from the one above (UAV barriers between levels); the downsample pipeline must be set.
+void Renderer::makeMips(rhi::CommandList* cmd, rhi::Texture* t) {
+    uint32_t w = t->width(), h = t->height();
+    for (uint32_t mip = 1; mip < t->desc().mips; ++mip) {
+        cmd->barrier(t, rhi::State::UnorderedAccess);
+        const uint32_t dw = std::max(1u, w / 2), dh = std::max(1u, h / 2);
+        DownPush dp{t->uav(mip - 1), t->uav(mip), w, h, dw, dh, {0, 0}};
+        cmd->pushConstants(&dp, sizeof dp);
+        cmd->dispatch((dw + 7) / 8, (dh + 7) / 8);
+        w = dw;
+        h = dh;
+    }
+    cmd->barrier(t, rhi::State::ShaderRead);
 }
 
 rhi::Pipeline* Renderer::postPipeline(rhi::Format format) {
@@ -575,6 +579,13 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
     terrain_.select(v.cameraPos, frustum, v.waitForStreaming);
     trees_.select(v.cameraPos, frustum, v.waitForStreaming, v.charring);
     balls_.update(v.balls, v.cameraPos, frustum);
+    if (v.human) human_.update(v.humanFeet, v.humanYaw, v.humanHeld, v.simSeconds, v.cameraPos, frustum, v.waitForStreaming);
+    if (std::vector<rhi::Texture*> fresh = human_.takeTexturesNeedingMips(); !fresh.empty()) {
+        cmd->beginMarker("human textures");
+        cmd->setPipeline(downsample_.get());
+        for (rhi::Texture* t : fresh) makeMips(cmd, t);
+        cmd->endMarker();
+    }
     manifest_.update(v.magic, v.cameraPos);
     terrain_.upload(cmd);
     grass_.generate(cmd, terrain_, v.cameraPos, fc);
@@ -610,6 +621,7 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
     trees_.draw(cmd, fc, barkTex, leafTex);
     grass_.draw(cmd, fc);
     balls_.draw(cmd, fc);
+    if (v.human) human_.draw(cmd, fc);
     manifest_.draw(cmd, fc);
     cmd->endRenderPass();
     cmd->endMarker();
@@ -732,10 +744,12 @@ void Renderer::buildScene(rhi::CommandList* cmd, const rhi::Transient& fc) {
     for (int k = 0; k < 3; ++k) leafSrv[k] = leafAlbedo_[k]->srv();
     trees_.buildStructures(cmd, leafSrv);
     balls_.buildStructures(cmd);
+    human_.buildStructures(cmd);
     manifest_.buildStructures(cmd);
     instances_.clear();
     terrain_.addInstances(instances_);
     balls_.addInstances(instances_);  // before the trees, so a full table never drops them
+    human_.addInstances(instances_);  // only once it has been placed (update)
     manifest_.addInstances(instances_);
     trees_.addInstances(instances_, 350.0);
     if (instances_.empty()) return;

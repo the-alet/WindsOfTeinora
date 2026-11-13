@@ -3,6 +3,7 @@
 // tapered blade and bends it in the wind; the pixel shader colours it from the blade texture.
 #include "common.hlsli"
 #include "gbuffer.hlsli"
+#include "magic.hlsli"
 
 static const float CELL = 0.25;          // metres per candidate cell
 static const uint CANDIDATES = 4;        // blade candidates per cell near the camera
@@ -88,6 +89,7 @@ struct VSOut {
     float3 normal : NORMAL;
     float3 uvAo : TEXCOORD0;  // u across, v along, ambient occlusion
     float dry : TEXCOORD1;
+    float flow : TEXCOORD2;   // where the magic streaming up the blade has got to (m, each blade out of step)
 };
 
 VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
@@ -119,6 +121,7 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     o.normal = n;
     o.uvAo = float3(side * 0.5 + 0.5, t, lerp(0.35, 1.0, t));
     o.dry = b.w;
+    o.flow = t * a.w + b.x * 0.7;
     return o;
 }
 
@@ -129,7 +132,7 @@ GBufferOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     albedo = lerp(albedo, float3(0.025, 0.021, 0.018), saturate(i.dry - 1.0));  // charred at a burnt patch's edge
     const float3 n = normalize(i.normal) * (front ? 1.0 : -1.0);
     GBufferOut o;
-    o.albedo = float4(albedo, i.uvAo.z);
+    o.albedo = magicView() ? magicViewAlbedo(albedo, heldMagicGlow(MAGIC_HELD_NATURE, 1.0, i.flow, 1.0)) : float4(albedo, i.uvAo.z);
     o.normal = float4(normalize(n + float3(0, 0.6, 0) * (front ? 0 : 1)), d.z);
     o.material = float4(0.45, 0.3, 0, packMagic(MAGIC_HELD_NATURE, 1.0, false));
     o.motion = 0;

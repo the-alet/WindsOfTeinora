@@ -21,7 +21,7 @@ struct TreeVertexOut {  // 32 bytes, read by tree.hlsl
     uint32_t normal;  // octahedral, 2 x unorm16
     float uv[2];
     uint32_t info;    // bits 0-7 sway weight, bit 8 leaf
-    uint32_t pad;
+    float flow;       // metres from the root along the limbs: where the magic streaming up through the tree has got to
 };
 
 // Trees fire has reached, by tree cell (sim/plants.h kTreeCell): those burnt through, and those on fire with how far

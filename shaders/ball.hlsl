@@ -2,6 +2,7 @@
 // G-buffer with its own screen motion (this frame's pose against last frame's) for DLSS.
 #include "common.hlsli"
 #include "gbuffer.hlsli"
+#include "magic.hlsli"
 #include "ball.hlsli"
 
 struct BallPush {
@@ -50,6 +51,10 @@ GBufferOut PSMain(VSOut i) {
     }
     GBufferOut o;
     o.albedo = float4(a.rgb, 1.0 - 0.4 * a.w);  // the seam groove is a little shaded
+    if (magicView()) {  // its magic swirls round it in bands
+        const float flow = atan2(local.z, local.x) * 0.6 + local.y * 0.8;
+        o.albedo = magicViewAlbedo(a.rgb, heldMagicGlow(MAGIC_HELD_NATURE, 1.0, flow, pow(0.5 + 0.5 * cos(local.y * 10.0), 3.0)));
+    }
     o.normal = float4(normalize(i.normal), BALL_ROUGHNESS);
     o.material = float4(0, BALL_SPECULAR, 0, packMagic(MAGIC_HELD_NATURE, 1.0, true));  // its own motion in the motion target
     o.motion = motion;

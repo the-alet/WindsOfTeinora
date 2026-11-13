@@ -103,7 +103,8 @@ float3 reflectedScene(float3 origin, float3 R, out float hitT) {
         return applyHaze(ballAlbedo(local, 0.01).rgb * light, R * q.CommittedRayT());
     }
     const bool land = q.CommittedInstanceID() == TERRAIN_INSTANCE;
-    const float3 base = land ? float3(0.065, 0.085, 0.035) : float3(0.030, 0.055, 0.020);
+    float3 base = land ? float3(0.065, 0.085, 0.035) : float3(0.030, 0.055, 0.020);
+    if (q.CommittedInstanceID() == HUMAN_INSTANCE) base = float3(0.09, 0.11, 0.12);  // the human: its shirt, mostly
     float3 sunsUp = 0;
     [unroll] for (uint s = 0; s < 2; ++s)
         sunsUp += g_frame.sunLight[s].rgb * (1.0 - g_frame.suns[s].w) * sunTransmittance(g_frame.suns[s].xyz) * saturate(g_frame.suns[s].y);
@@ -152,8 +153,7 @@ float4 seenFromBelow(VSOut i, float3 n, float3 V, float dist) {
     below = lerp(waterGlow(depth), below, bedOnScreen);
     float3 color = throughWater(lerp(above, below, F), dist, depth * 0.5);
     if (magicView()) {
-        const float3 glow = magicSurfaceGlow(packMagic(MAGIC_HELD_WATER, 1.0, false), down, V, dist);
-        color = magicDim(color) + glow + magicFreeGlow(-V, dist, i.pos.xy);
+        color = magicDim(color) + waterMagicGlow(i.rel, down, V, dist) + magicFreeGlow(-V, dist, i.pos.xy) + magicMotes(-V, dist);
     }
     return float4(color, 1);
 }
@@ -189,7 +189,7 @@ float4 PSMain(VSOut i) : SV_Target0 {
 
     if (magicView()) {  // no reflections; the water glows with the magic it holds, the free magic in front of it
         const float dist = length(i.rel);
-        const float3 glow = magicSurfaceGlow(packMagic(MAGIC_HELD_WATER, 1.0, false), n, V, dist);
+        const float3 glow = waterMagicGlow(i.rel, n, V, dist) + magicMotes(-V, dist);
         const float4 f = marchFire(0, -V, dist, K_MAGIC_VIEW_DIM);
         return float4((magicDim(refracted) + glow + magicFreeGlow(-V, dist, i.pos.xy)) * f.a + f.rgb, 1);
     }

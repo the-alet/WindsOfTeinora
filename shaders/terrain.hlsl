@@ -2,6 +2,7 @@
 // Odd vertices slide onto the parent grid near the end of a level's reach, so levels meet without cracks.
 #include "common.hlsli"
 #include "gbuffer.hlsli"
+#include "magic.hlsli"
 
 struct TerrainPush {
     uint nodesSrv;
@@ -153,8 +154,12 @@ GBufferOut PSMain(VSOut i) {
 
     GBufferOut o;
     o.albedo = float4(albedo, ao);
+    if (magicView()) {
+        const float2 veins = groundVeins(i.rel);
+        o.albedo = magicViewAlbedo(albedo, heldMagicGlow(MAGIC_HELD_EARTH, 0.5, veins.x, veins.y));
+    }
     o.normal = float4(n, rough);
-    o.material = float4(0, 0.5, wet, packMagic(MAGIC_HELD_EARTH, 0.5, false));  // the ground glows softer than what grows on it
+    o.material = float4(0, 0.5, 0, packMagic(MAGIC_HELD_EARTH, 0.5, false));  // the ground glows softer than what grows on it
     o.motion = 0;
     return o;
 }

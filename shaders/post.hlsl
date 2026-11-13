@@ -87,6 +87,13 @@ float4 PSMain(FullscreenOut i) : SV_Target0 {
         c = acc / N;
     }
 
+    if (g_frame.flags.x != 0) {
+        // The magic view: a soft halo round bright magic (the pyramid's blurred levels, past a threshold).
+        const float far = float(g_push.mipCount - 1);
+        const float3 halo = hdr.SampleLevel(s_linearClamp, uv, min(3.0, far)).rgb + hdr.SampleLevel(s_linearClamp, uv, min(5.0, far)).rgb;
+        c += max(halo * 0.5 - 0.04, 0.0) * K_MAGIC_BLOOM;
+    }
+
     float2 q = abs(uv * 2.0 - 1.0);
     float e = pow(pow(q.x, 6.0) + pow(q.y, 6.0), 1.0 / 6.0);
     c *= 1.0 - g_push.vignette * smoothstep(0.72, 1.0, e);

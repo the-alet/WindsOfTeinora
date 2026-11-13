@@ -26,6 +26,7 @@ file(GLOB_RECURSE SIM_SRC CONFIGURE_DEPENDS sim/src/*.cpp sim/include/*.h)
 add_library(taelia_sim STATIC ${SIM_SRC})
 target_include_directories(taelia_sim PUBLIC sim/include ${GEN_DIR} shared)
 target_compile_options(taelia_sim PRIVATE /W4 /WX)
+target_compile_definitions(taelia_sim PRIVATE TAELIA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")  # the human's converted model
 add_dependencies(taelia_sim shared_constants)
 target_link_libraries(taelia_sim PRIVATE physx)  # defined below; sim headers don't expose PhysX types
 

@@ -2,12 +2,14 @@
 // Bark is opaque; leaf cards are alpha-tested, two-sided and let light through.
 #include "common.hlsli"
 #include "gbuffer.hlsli"
+#include "magic.hlsli"
 
 struct TreePush {
     uint vbSrv, instSrv, instOffset, kind;
     uint albedo, detail;
     float tint, uvScale;  // albedo multiplier (charred wood), texture repeats
 };
+// kind, bits 8-10: the aspect the thing holds + 1 (trees and wood nature, the campfire's stones earth).
 [[vk::push_constant]] ConstantBuffer<TreePush> g_push : register(b1, space0);
 
 struct VSOut {
@@ -17,6 +19,7 @@ struct VSOut {
     float3 rel : TEXCOORD1;
     float3 local : TEXCOORD2;                  // the mesh position (leaves burn away by it)
     nointerpolation float charred : TEXCOORD3;  // how far fire has charred this tree (0..1)
+    float flow : TEXCOORD4;                     // where the magic streaming through it has got to (m from the root)
 };
 
 VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
@@ -54,6 +57,7 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     o.uv = uv;
     o.local = p;
     o.charred = rot.w;
+    o.flow = asfloat(vb.Load(base + 28)) + rot.z * 1.7;  // each tree's streams out of step with its neighbours'
     return o;
 }
 
@@ -67,10 +71,15 @@ GBufferOut BarkPS(VSOut i) {
     const float3 B = cross(N, T);
     const float2 xy = d.xy * 2.0 - 1.0;
     const float3 n = normalize(N * sqrt(saturate(1.0 - dot(xy, xy))) + T * xy.x + B * xy.y);
+    const uint held = g_push.kind >> 8;
     GBufferOut o;
     o.albedo = float4(a.rgb, d.w);
+    if (magicView()) {  // threads of it wind round the limbs
+        const float threads = held == MAGIC_HELD_NATURE ? pow(0.5 + 0.5 * cos(i.uv.x * 6.2831853), 3.0) : 1.0;
+        o.albedo = magicViewAlbedo(a.rgb, heldMagicGlow(held, 1.0 - i.charred, i.flow, threads));
+    }
     o.normal = float4(n, d.z);
-    o.material = float4(0, 0.3, 0, packMagic(MAGIC_HELD_NATURE, 1.0 - i.charred, false));
+    o.material = float4(0, 0.3, 0, packMagic(held, 1.0 - i.charred, false));
     o.motion = 0;
     return o;
 }
@@ -94,7 +103,8 @@ GBufferOut LeafPS(VSOut i, bool front : SV_IsFrontFace) {
     const float3 T = normalize(cross(float3(0, 1, 0), N) + float3(1e-4, 0, 0));
     N = normalize(N + T * xy.x * 0.5 + cross(N, T) * xy.y * 0.5 + float3(0, 0.3, 0));  // a little bent toward the sky
     GBufferOut o;
-    o.albedo = float4(a.rgb, 1.0);
+    const float midrib = 0.35 + 0.65 * pow(saturate(1.0 - abs(i.uv.x - 0.5) * 2.0), 3.0);
+    o.albedo = magicView() ? magicViewAlbedo(a.rgb, heldMagicGlow(MAGIC_HELD_NATURE, 1.0 - i.charred, i.flow, midrib)) : float4(a.rgb, 1.0);
     o.normal = float4(N, d.z);
     o.material = float4(d.w, 0.35, 0, packMagic(MAGIC_HELD_NATURE, 1.0 - i.charred, false));  // translucency
     o.motion = 0;

@@ -168,6 +168,18 @@ MAGIC_VIEW_DIM              float   0.15        # the world goes grey and dim
 MAGIC_VIEW_EXPOSURE         float   1.0         # fixed: magic glows the same by day and by night
 MAGIC_SURFACE_GLOW          float   0.35        # a thing's glow at its full share of held magic
 MAGIC_FREE_GLOW             float   0.001       # free magic: glow per metre per kg/m3, times 1 + rho/4 (dense magic shows)
+MAGIC_WISP_GLOW             float   0.03        # free magic's wisps where its flow carries it: glow per metre per kg/m3 at a full wisp
+MAGIC_AIR_WISPS             float   2.5         # air magic's own wisps glow this many times more: its currents are the wind
+MAGIC_MOTES                 float   0.5         # how bright the motes glinting near the eye are
+MAGIC_STREAM_SPACING        float   1.8         # m between the pulses streaming through a thing
+MAGIC_STREAM_EARTH          float   0.35        # m/s: magic streams through earth slowest ...
+MAGIC_STREAM_WATER          float   0.7         # ... water
+MAGIC_STREAM_NATURE         float   1.0         # ... nature
+MAGIC_STREAM_FIRE           float   1.8         # ... fire (lightning too)
+MAGIC_STREAM_AIR            float   2.6         # ... air
+MAGIC_STREAM_LIGHT          float   4.0         # ... light fastest (the lighter the motes, the faster)
+MAGIC_GLOW_SCALE            float   4.0         # in the magic view the albedo target holds a surface's own glow at 1/this
+MAGIC_BLOOM                 float   0.3         # the magic view's soft halo round bright magic
 
 # ---- fire (step 5d): hot things hold a hot core of fire magic and send more up on the air they heat
 MAGIC_TAKE_TAU_FIRE         float   6.0         # s: free fire magic loses its aspect away from hot things
@@ -192,6 +204,17 @@ MAGIC_DROP_GROWTH           float   0.2         # kg/m3: nature magic a drop mak
 MAGIC_TAKE_TAU_LIGHT        float   3.0         # s: light magic turns back to neutral
 MAGIC_NATURE_DRINK          float   0.002       # 1/(kg/m3 s): nature absorbs water magic at this * nature * water
 MAGIC_HELD                  float   3.0         # kg/m3 of its own aspect every object holds
+HUMAN_HEIGHT                float   1.75        # m: the human, to the top of the hair
+HUMAN_RADIUS                float   0.22        # m: its capsule for balls
+HUMAN_SPOT                  float3  -2.2,0.0,5.0  # where it stands, from the spawn point (m), facing it
+HUMAN_BREATH_SECONDS        float   4.6         # s: one slow breath
+HUMAN_HEART_RADIUS          float   0.045       # m: how far round it the life magic thins by 1/e
+HUMAN_BRAIN_RADII           float3  0.058,0.048,0.072  # m: likewise round the brain (wide, tall, deep)
+HUMAN_HEART_MAGIC           float   12.0        # kg/m3 of life (nature) magic in the heart at its full share (a first number)
+HUMAN_BRAIN_MAGIC           float   9.0         # kg/m3 in the brain
+HUMAN_HEARTBEAT_SECONDS     float   0.95        # s: one beat (two close knocks)
+HUMAN_PULSE_SPEED           float   1.6         # m/s: how fast each heartbeat's pulse runs out along the arteries (the magic view)
+HUMAN_BLOOD_SPEED           float   0.35        # m/s: how fast the life magic streams through the arteries (half that back through the veins)
 MAGIC_HELD_TAU              float   600.0       # s: what it holds evens out with the magic around it
 MAGIC_FALL_APART            float   0.05        # below this share of what it should hold, it falls apart
 
@@ -223,3 +246,13 @@ PLANT_BURN_SECONDS          float   90.0        # s: a tree burns this long, the
 PLANT_BURN_HEAT             float   1.2         # a burning tree is a hot thing this strong (a campfire is 1)
 PLANT_BURN_REACH            float   2.5         # m: fire past the threshold this near a tree's trunk or crown sets it alight
 GRASS_SCORCH_RADIUS         float   1.6         # m of grass a patch of such fire burns away
+
+# Runes (step 7; SPEC.md "Next: runes", first numbers)
+RUNE_VOLUME_FACTOR          float   0.8         # volume = this x size^3: 0.5 m across holds about 0.1 m3
+RUNE_SEAL_WOOD              float   400.0       # kg/m3 a rune holds shut, by its material ...
+RUNE_SEAL_STONE             float   600.0
+RUNE_SEAL_METAL             float   900.0
+RUNE_BREAK                  float   1.5         # it bursts past this x its seal
+RUNE_INTAKE                 float   0.5         # 1/s: kg drawn in per second per m3 of rune per kg/m3 past the dew point
+RUNE_INTAKE_CAP_M3          float   8.0         # m3: never more per step than the field holds past the dew point in a fine cell
+RUNE_LEAK_AREA              float   0.005       # m2: how wide its seal lets the excess through (effusion)

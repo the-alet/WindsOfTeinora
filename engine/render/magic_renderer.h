@@ -26,7 +26,8 @@ public:
 
 private:
     struct Window {
-        std::unique_ptr<rhi::Texture> volume;
+        std::unique_ptr<rhi::Texture> volume;  // rgb: aspects' colours x density, a: total (kg/m3)
+        std::unique_ptr<rhi::Texture> flow;    // xyz: how the field flows (m/s), w: air magic (kg/m3)
         uint32_t version = ~0u;
         int64_t ox = 0, oz = 0, k0 = 0;  // world column of the min corner, absolute layer of the bottom
         double dx = 0, dy = 0;
@@ -34,7 +35,7 @@ private:
     };
     rhi::Device* device_ = nullptr;
     Window win_[2];
-    std::vector<uint16_t> texels_;
+    std::vector<uint16_t> texels_, flowTexels_;
 };
 
 }  // namespace taelia

@@ -5,7 +5,7 @@
 struct GBufferOut {
     float4 albedo : SV_Target0;    // rgb albedo (sRGB target), a: ambient occlusion
     float4 normal : SV_Target1;    // xyz world normal, w: roughness
-    float4 material : SV_Target2;  // r: translucency, g: specular, b: wetness, a: packMagic()
+    float4 material : SV_Target2;  // r: translucency, g: specular, b: subsurface (skin: light spreads under it), a: packMagic()
     float2 motion : SV_Target3;    // screen motion in uv
 };
 

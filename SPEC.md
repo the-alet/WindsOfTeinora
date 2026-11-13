@@ -132,13 +132,19 @@ Describe magic by the kinetic theory of gases. Work it as a continuous field on 
 - The world goes grey and dim. Each thing glows in its own shape, in the colour of the magic it holds: ground and rocks brown, trees and grass green, water blue, lava orange. Fire dims in this view.
 - Magic glows by its own light: the same by day and by night, and it lights nothing. The view reaches 100 m. No reflections. Rain is blue.
 - Free magic in the air is a cloud inside the scene: nearer hills, trees and things hide it. Never a spot painted over the finished picture.
+- Air magic shows too (the user; air counts as a thing): a faint haze with wisps that the field's own flow carries, the air's the brightest (its currents are the wind), and motes glinting near the eye. Never a flat tint.
+- Magic streams inside every thing (the user): pulses in the colour of what it holds run along where its mesh says its streams go: up a tree from the root out to the leaves, up grass blades, in slow veins through the ground, in ribbons on water; the lighter the aspect, the faster. Outlines glow, bright magic has a soft halo. Nothing looks like a flat fill.
+- The magic is built into the things themselves (the user): their meshes carry where their streams run.
 
 ## Next: a human model
 - One adult, about 1.75 m, ordinary proportions, plain clothes. No customisation yet: one fixed body and face.
-- The same model in both builds, made in code: a mesh skinned to a skeleton of about 20 bones, so it can be animated later. For now an idle pose, breathing slowly.
-- No downloaded models without asking. MetaHuman's licence ties it to Unreal, so it can't go into our own engine.
+- A normal, realistic person (the user), not a figure sculpted in code: the body, eyes, brows, lashes, hair, skin and clothes come from MakeHuman's CC0 assets (the user approved the download), converted by `.utilities/makehuman.py` into our own format in `assets/human/`, the same file for both builds.
+- More moving parts than 20 (the user): MakeHuman's full skeleton of 163 bones (the spine, neck, jaw, lips, tongue, eyes and lids, every finger and toe), so it can be animated later. For now an idle pose: it breathes slowly, shifts its weight, blinks and glances about.
+- Skin that lets light spread under it.
+- No other downloaded models without asking. MetaHuman's licence ties it to Unreal, so it can't go into our own engine.
 - It stands near the spawn point; the camera stays free. Ask before giving the player control of it.
-- A capsule collider, so a thrown ball bounces off it. It holds magic like every object (nature, as a living thing: a guess, confirm) and glows in its shape in the magic view.
+- A capsule collider, so a thrown ball bounces off it. It holds life magic (nature, the aspect of living things) like every object and glows in its shape in the magic view.
+- Its life magic is densest in the heart and the brain (the user), and flows like blood (the user; simplified for now): out from the heart through the arteries with each heartbeat (to the brain, the arms and hands, the legs and feet), back through the veins. In the magic view the vessels glow through the body, pulses running down them with each beat.
 
 ## Next: runes (first numbers, tune them)
 A rune is a sign carved or drawn on a thing that holds magic as a closed system: very dense inside, but up to its seal none of it reaches the world.

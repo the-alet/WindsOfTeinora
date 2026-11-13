@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include "render/ball_renderer.h"
+#include "render/human_renderer.h"
 #include "render/manifest_renderer.h"
 #include "render/imgui_renderer.h"
 #include "render/terrain_renderer.h"
@@ -52,6 +53,9 @@ struct RenderView {
     std::vector<RenderSpot> burning;   // trees on fire: their base, flame strength like the campfire's
     std::vector<RenderSpot> scorches;  // grass burnt away: the circle's centre on the ground, its radius (m)
     TreeCharring charring;             // the trees fire has reached, and how far each has burnt
+    bool human = false;                // the human (World::humanPosition): its feet, which way it faces, its magic (0..1)
+    dvec3 humanFeet;
+    double humanYaw = 0, humanHeld = 1;
 };
 
 class Renderer {
@@ -73,6 +77,7 @@ private:
     void fillFrameConstants(const RenderView& v, uint32_t outW, uint32_t outH, rhi::Transient& t, Frustum& frustum);
     void fireFrameData(gpu::FrameConstants& fc, const RenderView& v);
     void generateTextures(rhi::CommandList* cmd);
+    void makeMips(rhi::CommandList* cmd, rhi::Texture* t);
 
     rhi::Device* device_ = nullptr;
     std::unique_ptr<rhi::Texture> hdr_, depth_, gbAlbedo_, gbNormal_, gbMaterial_, gbMotion_;
@@ -82,6 +87,7 @@ private:
     TreeRenderer trees_;
     GrassRenderer grass_;
     BallRenderer balls_;
+    HumanRenderer human_;
     ManifestRenderer manifest_;
     AtmosphereRenderer atmosphere_;
     CloudRenderer cloudRenderer_;

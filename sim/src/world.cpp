@@ -31,6 +31,12 @@ World::World(const WorldDesc& d)
         u = s.u;
         air = s.level >= 0 && rho > 1e-6 ? s.rho[Aspect::Air] / rho : 0.0;  // only where the field runs
     });
+    // The human stands near the spawn point, facing it; a ball bounces off its capsule.
+    const dvec3 spawn{k::CAMERA_SPAWN[0], 0.0, k::CAMERA_SPAWN[2]};
+    humanPos_ = {spawn.x + k::HUMAN_SPOT[0], 0.0, spawn.z + k::HUMAN_SPOT[2]};
+    humanPos_.y = terrain_.height(humanPos_.x, humanPos_.z);
+    humanYaw_ = std::atan2(spawn.x - humanPos_.x, spawn.z - humanPos_.z);
+    physics_->addCapsule(1, humanPos_ + dvec3{0, 0.5 * k::HUMAN_HEIGHT, 0}, k::HUMAN_RADIUS, 0.5 * k::HUMAN_HEIGHT - k::HUMAN_RADIUS);
 }
 
 World::~World() = default;
@@ -92,6 +98,9 @@ void World::step() {
     }
     magic_->step(clock_.steps());
     burnPlants();
+    // Runes: what they draw in, what leaks over their seals; the burst ones are gone.
+    for (Rune& r : runes_) stepRune(r, *magic_, WorldClock::stepSeconds());
+    std::erase_if(runes_, [](const Rune& r) { return r.broken; });
     // What each ball holds evens out with the magic around it; in a void it falls apart.
     {
         std::vector<uint32_t> gone;
@@ -106,6 +115,8 @@ void World::step() {
         held_.swap(kept);
         for (const uint32_t id : gone) physics_->removeBall(id);
     }
+    // The human's nature magic evens out with the magic round its chest (in ordinary places it stays near its share).
+    humanHeld_ = magic::heldAfter(humanHeld_, magic_->sample(humanPos_ + dvec3{0, 1.3, 0}).rho.total(), WorldClock::stepSeconds());
     // What the magic left (minerals, sprouts) holds its magic like any object; minerals are rock to a ball.
     {
         std::vector<Manifestation>& ms = magic_->manifestations();
@@ -188,6 +199,19 @@ std::vector<World::BurningTree> World::burningTrees() const {
     return out;
 }
 
+uint32_t World::addRune(Rune r) {
+    r.id = nextRune_++;
+    r.broken = false;
+    runes_.push_back(r);
+    return r.id;
+}
+
+void World::damageRune(uint32_t id) {
+    for (Rune& r : runes_)
+        if (r.id == id) breakRune(r, *magic_);
+    std::erase_if(runes_, [](const Rune& r) { return r.broken; });
+}
+
 dvec3 World::windAt(const dvec3& p) const {
     const TerrainSample s = terrain_.sample(p.x, p.z);
     const double base = s.underwater() ? s.waterLevel : s.height;
@@ -227,6 +251,11 @@ uint64_t World::stateHash() const {
     for (const Glow& g : scorches_) h = hashCombine(hashCombine(h, bits(g.position.x)), bits(g.position.z));
     h = hashCombine(h, bits(fire_));
     for (const auto& [id, held] : held_) h = hashCombine(hashCombine(h, id), bits(held));
+    h = hashCombine(h, bits(humanHeld_));
+    for (const Rune& r : runes_) {
+        h = hashCombine(h, r.id);
+        for (const double c : r.contents) h = hashCombine(h, bits(c));
+    }
     for (const Manifestation& m : magic_->manifestations()) h = hashCombine(hashCombine(h, m.id), bits(m.held));
     return h;
 }

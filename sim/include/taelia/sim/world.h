@@ -13,6 +13,7 @@
 #include "taelia/sim/magic.h"
 #include "taelia/sim/physics.h"
 #include "taelia/sim/plants.h"
+#include "taelia/sim/rune.h"
 #include "taelia/sim/terrain.h"
 #include "taelia/sim/wind.h"
 
@@ -88,6 +89,15 @@ public:
     const std::set<std::pair<int64_t, int64_t>>& burntTrees() const { return burnt_; }
     const std::vector<Glow>& scorches() const { return scorches_; }  // strength: radius (m)
     const dvec3& focus() const { return focus_; }
+    // The human (step 6), standing near the spawn point facing it: its feet, which way it faces (radians, +z turned
+    // toward +x), and the nature magic it holds (kg/m3), which evens out with the magic round it like any object's.
+    // Runes (step 7): none in the world yet (the user decides where one goes); tests and checks add them.
+    uint32_t addRune(Rune r);
+    const std::vector<Rune>& runes() const { return runes_; }
+    void damageRune(uint32_t id);  // its sign damaged: everything comes out at once
+    const dvec3& humanPosition() const { return humanPos_; }
+    double humanYaw() const { return humanYaw_; }
+    double humanHeld() const { return humanHeld_; }
     // The campfire: where its core of fire magic sits, and how strongly it burns (1 as it starts).
     dvec3 campfireCore() const { return terrain_.campfirePosition() + dvec3{0, 0.4, 0}; }
     double campfireStrength() const { return fire_; }
@@ -121,6 +131,10 @@ private:
     dvec3 focus_{};
     double fire_ = 1.0;
     std::map<uint32_t, double> held_;  // balls' held magic
+    std::vector<Rune> runes_;
+    uint32_t nextRune_ = 1;
+    dvec3 humanPos_;
+    double humanYaw_ = 0, humanHeld_ = k::MAGIC_HELD;
     std::set<uint32_t> rocks_;         // minerals already rock to the physics
     std::vector<Strike> strikes_;
     struct Burning {

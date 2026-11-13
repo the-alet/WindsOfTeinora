@@ -56,17 +56,23 @@ bool MagicRenderer::init(rhi::Device* device, std::string* error) {
         d.usage = rhi::TextureUsage::Sampled;
         d.name = "magic.volume";
         w.volume = device->createTexture(d);
-        if (!w.volume) {
+        d.name = "magic.flow";
+        w.flow = device->createTexture(d);
+        if (!w.volume || !w.flow) {
             if (error) *error = "magic: could not create the volumes";
             return false;
         }
     }
     texels_.assign(size_t(kSide) * kSide * kLayers * 4, 0);
+    flowTexels_.assign(texels_.size(), 0);
     return true;
 }
 
 void MagicRenderer::shutdown() {
-    for (Window& w : win_) w.volume.reset();
+    for (Window& w : win_) {
+        w.volume.reset();
+        w.flow.reset();
+    }
     device_ = nullptr;
 }
 
@@ -94,7 +100,7 @@ void MagicRenderer::update(const MagicField* field, const dvec3& camera) {
                     const int slot = int(((Z % kSide) + kSide) % kSide) * kSide + int(((X % kSide) + kSide) % kSide);
                     // Underground holds nothing; above the level's top the top cell carries on.
                     const int64_t local = k0 + k - v.columnBase[slot];
-                    float rgb[3] = {0, 0, 0}, total = 0;
+                    float rgb[3] = {0, 0, 0}, total = 0, u[3] = {0, 0, 0}, air = 0;
                     if (local >= 0) {
                         const int c = int(std::min<int64_t>(local, v.layers - 1)) * cols + slot;
                         for (int a = 0; a < kAspects; ++a) {
@@ -104,7 +110,14 @@ void MagicRenderer::update(const MagicField* field, const dvec3& camera) {
                             for (int e = 0; e < 3; ++e) rgb[e] += col[e] * rho;
                             total += rho;
                         }
+                        for (int e = 0; e < 3; ++e) u[e] = v.state[size_t(MagicField::kU + e) * cells + c];
+                        air = v.state[size_t(Aspect::Air) * cells + c];
                     }
+                    uint16_t* fl = &flowTexels_[(size_t(k) * kSide * kSide + size_t(j) * kSide + i) * 4];
+                    fl[0] = toHalf(u[0]);
+                    fl[1] = toHalf(u[1]);
+                    fl[2] = toHalf(u[2]);
+                    fl[3] = toHalf(air);
                     uint16_t* t = &texels_[(size_t(k) * kSide * kSide + size_t(j) * kSide + i) * 4];
                     t[0] = toHalf(rgb[0]);
                     t[1] = toHalf(rgb[1]);
@@ -112,6 +125,7 @@ void MagicRenderer::update(const MagicField* field, const dvec3& camera) {
                     t[3] = toHalf(total);
                 }
         device_->uploadTexture(w.volume.get(), texels_.data(), texels_.size() * sizeof(uint16_t));
+        device_->uploadTexture(w.flow.get(), flowTexels_.data(), flowTexels_.size() * sizeof(uint16_t));
         w.valid = true;
     }
 }
@@ -123,7 +137,8 @@ void MagicRenderer::frameData(gpu::FrameConstants& fc, const dvec3& camera) cons
                              float(double(w.oz) * w.dx - camera.z), float(w.dx)};
     }
     fc.magicInfo = {float(win_[0].dy), float(win_[1].dy), float(k::MAGIC_VIEW_REACH), win_[0].valid && win_[1].valid ? 1.0f : 0.0f};
-    fc.magicVolume = {win_[0].volume ? win_[0].volume->srv() : 0u, win_[1].volume ? win_[1].volume->srv() : 0u, 0u, 0u};
+    fc.magicVolume = {win_[0].volume ? win_[0].volume->srv() : 0u, win_[1].volume ? win_[1].volume->srv() : 0u,
+                      win_[0].flow ? win_[0].flow->srv() : 0u, win_[1].flow ? win_[1].flow->srv() : 0u};
 }
 
 }  // namespace taelia

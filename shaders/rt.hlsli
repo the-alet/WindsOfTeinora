@@ -10,6 +10,7 @@
 static const uint TERRAIN_INSTANCE = 0xFFFFFF;
 static const uint CAMPFIRE_INSTANCE = 0xFFFFFE;
 static const uint BALL_INSTANCE = 0xFFFFFD;
+static const uint HUMAN_INSTANCE = 0xFFFFFC;
 static const uint FIRST_PROP_INSTANCE = 0xFFFFF0;  // ids from here up are opaque props, not tree entries
 
 bool rtEnabled() { return g_frame.flags.w != 0 && g_frame.scene.x != 0; }

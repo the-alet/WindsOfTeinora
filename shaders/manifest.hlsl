@@ -3,6 +3,7 @@
 // light, not insects: soft glowing sprites that drift and flicker, over the lit scene and behind nearer things.
 #include "common.hlsli"
 #include "gbuffer.hlsli"
+#include "magic.hlsli"
 
 struct ManifestPush {
     uint vbSrv, instSrv, instOffset, kind;  // kind 0 mineral, 1 sprout
@@ -44,11 +45,13 @@ GBufferOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
         o.albedo = float4(albedo, 1);
         o.normal = float4(n, 0.18);
         o.material = float4(0.15, 0.8, 0, packMagic(MAGIC_HELD_EARTH, i.fill, false));
+        if (magicView()) o.albedo = magicViewAlbedo(albedo, heldMagicGlow(MAGIC_HELD_EARTH, i.fill, i.local.y * 3.0 + float(i.seed & 255u) * 0.02, 1.0));
     } else {
         if (!front) n = -n;
         o.albedo = float4(lerp(float3(0.10, 0.26, 0.06), float3(0.26, 0.52, 0.14), saturate(i.local.y * 2.5)), 1);
         o.normal = float4(n, 0.6);
         o.material = float4(0.45, 0.3, 0, packMagic(MAGIC_HELD_NATURE, i.fill, false));
+        if (magicView()) o.albedo = magicViewAlbedo(o.albedo.rgb, heldMagicGlow(MAGIC_HELD_NATURE, i.fill, i.local.y * 4.0 + float(i.seed & 255u) * 0.02, 1.0));
     }
     o.motion = 0;  // standing still: the motion pass uses the camera's
     return o;

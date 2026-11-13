@@ -45,6 +45,7 @@ constexpr SurfaceSpec kSurfaces[kSurfaceCount] = {
     {0.08, 0.90, 0.40},   // pond bed
 };
 constexpr SurfaceSpec kBark = {0.5, 0.60, 0.0};  // a bough springs the ball back
+constexpr SurfaceSpec kBody = {0.3, 0.70, 0.0};  // cloth over flesh takes much of the bounce
 
 class ErrorsToStderr : public PxErrorCallback {
 public:
@@ -124,6 +125,7 @@ Physics::Impl::Impl(const Terrain* t, const WindField* w, uint64_t s) : terrain(
     scene = px->createScene(sd);
     ballMaterial = px->createMaterial(0.7f, 0.6f, 0.85f);
     barkMaterial = makeMaterial(px, kBark);
+    bodyMaterial = makeMaterial(px, kBody);
     for (int i = 0; i < kSurfaceCount; ++i) surfaces[i] = makeMaterial(px, kSurfaces[i]);
     if (!terrain) {
         flatGround = PxCreatePlane(*px, PxPlane(0.0f, 1.0f, 0.0f, 0.0f), *surfaces[kGrass]);
@@ -142,11 +144,13 @@ Physics::Impl::~Impl() {
         if (tile.field) tile.field->release();
     }
     for (auto& [id, r] : rocks) r->release();
+    for (auto& [id, c] : capsules) c->release();
     if (flatGround) flatGround->release();
     scene->release();
     dispatcher->release();
     ballMaterial->release();
     barkMaterial->release();
+    bodyMaterial->release();
     for (PxMaterial* m : surfaces) m->release();
     releasePhysics();
 }
@@ -531,6 +535,22 @@ void Physics::addRock(uint32_t id, const dvec3& position, double radius) {
     shape->setRestOffset(0.0f);
     m.scene->addActor(*rock);
     m.rocks[id] = rock;
+}
+
+void Physics::addCapsule(uint32_t id, const dvec3& centre, double radius, double halfHeight) {
+    Impl& m = *impl_;
+    if (m.capsules.count(id)) return;
+    if (!m.originSet) {
+        m.origin = originNear(centre);
+        m.originSet = true;
+    }
+    // PhysX capsules lie along x: stand it up.
+    PxRigidStatic* body = m.px->createRigidStatic(PxTransform(toPx(centre - m.origin), PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f))));
+    PxShape* shape = PxRigidActorExt::createExclusiveShape(*body, PxCapsuleGeometry(float(radius), float(halfHeight)), *m.bodyMaterial);
+    shape->setContactOffset(0.02f);
+    shape->setRestOffset(0.0f);
+    m.scene->addActor(*body);
+    m.capsules[id] = body;
 }
 
 void Physics::removeRock(uint32_t id) {

@@ -39,6 +39,12 @@ float sunVisibility(float3 rel, float3 n, float3 L) {
     return rayVisibility(rel, n, L, 6000.0);
 }
 
+// Light under skin spreads past the terminator, red farthest: a cheap stand-in for scattering (subsurface 0: none).
+float3 diffuseWrap(float NoL, float subsurface) {
+    const float3 w = subsurface * float3(0.42, 0.18, 0.10);
+    return saturate((NoL + w) / (1.0 + w));
+}
+
 float D_GGX(float NoH, float a) {
     float a2 = a * a;
     float d = NoH * NoH * (a2 - 1.0) + 1.0;
@@ -57,7 +63,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         float through;
         const float3 bodies = skyBodies(dir, through);
         color = skyRadiance(dir) + bodies;  // the air in front of everything out there scatters its own light
-        if (magicView()) color = magicDim(color) + magicFreeGlow(dir, 1e9, float2(id.xy));
+        if (magicView()) color = magicDim(color) + magicFreeGlow(dir, 1e9, float2(id.xy)) + magicMotes(dir, 1e9);
         else color += magicDewTint(dir, 1e9);
     } else {
         const float viewZ = g_frame.cameraUp.w / depth;
@@ -65,8 +71,15 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         const float4 a = g_tex2D[g_push.albedo].Load(int3(id.xy, 0));
         const float4 nr = g_tex2D[g_push.normal].Load(int3(id.xy, 0));
         const float4 m = g_tex2D[g_push.material].Load(int3(id.xy, 0));
-        const float3 albedo = a.rgb, n = normalize(nr.xyz);
-        const float rough = max(nr.w, 0.08), ao = a.a, translucency = m.r, specular = m.g;
+        const float3 n = normalize(nr.xyz);
+        const float rough = max(nr.w, 0.08), translucency = m.r, specular = m.g, subsurface = m.b;
+        float3 albedo = a.rgb, ownGlow = 0;
+        float ao = a.a;
+        if (magicView()) {  // the albedo target holds the surface's own glow, and its plain brightness in a
+            ownGlow = a.rgb * K_MAGIC_GLOW_SCALE;
+            albedo = a.aaa;
+            ao = 1.0;
+        }
         const float3 V = -dir;
 
         // Two suns: each through the air, past the planet (eclipses), the clouds and whatever casts a shadow.
@@ -79,7 +92,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
             sun *= cloudShadow(i, rel);
             sun *= sunVisibility(rel, n, L);
             const float NoL = dot(n, L);
-            direct += sun * saturate(NoL);
+            direct += sun * diffuseWrap(NoL, subsurface);
             back += sun * saturate(-NoL);  // leaves and blades let light through
             const float3 H = normalize(L + V);
             const float NoH = saturate(dot(n, H)), VoH = saturate(dot(V, H));
@@ -106,8 +119,13 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         } else {
             color = aerialPerspective(color, rel);
         }
-        if (magicView()) color = magicDim(color) + magicSurfaceGlow(m.a, n, V, dist) + magicFreeGlow(dir, dist, float2(id.xy));
-        else color += magicDewTint(dir, dist);
+        if (magicView()) {
+            const float fade = 1.0 - smoothstep(g_frame.magicInfo.z * 0.8, g_frame.magicInfo.z, dist);
+            color = magicDim(color) + (ownGlow + magicOutlineGlow(m.a, n, V)) * fade + magicFreeGlow(dir, dist, float2(id.xy)) +
+                    magicMotes(dir, dist);
+        } else {
+            color += magicDewTint(dir, dist);
+        }
         const float4 f = marchFire(0, dir, dist, magicView() ? K_MAGIC_VIEW_DIM : 1.0);  // in front of the surface
         color = color * f.a + f.rgb;
     }

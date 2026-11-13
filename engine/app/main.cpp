@@ -194,6 +194,10 @@ RenderView App::makeView(double aspect, double realSeconds) const {
     for (const World::Glow& s : world_->steam()) v.steam.push_back({s.position, s.strength});
     for (const World::Glow& s : world_->scorches()) v.scorches.push_back({s.position, s.strength});
     v.charring.burnt = &world_->burntTrees();
+    v.human = true;
+    v.humanFeet = world_->humanPosition();
+    v.humanYaw = world_->humanYaw();
+    v.humanHeld = world_->humanHeld() / k::MAGIC_HELD;
     for (const World::BurningTree& b : world_->burningTrees()) {
         v.burning.push_back({b.position, b.strength});
         v.charring.burning.push_back({{int64_t(std::floor(b.position.x / kTreeCell)), int64_t(std::floor(b.position.z / kTreeCell))}, float(b.burnt)});

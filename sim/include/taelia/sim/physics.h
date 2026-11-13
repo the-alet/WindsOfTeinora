@@ -61,6 +61,8 @@ public:
     // Rocks the world grew (minerals): solid balls bounce off. Ids are the world's.
     void addRock(uint32_t id, const dvec3& position, double radius);
     void removeRock(uint32_t id);
+    // A standing body (the human): an upright capsule round `centre`, soft like cloth over flesh.
+    void addCapsule(uint32_t id, const dvec3& centre, double radius, double halfHeight);
     // The magic at a point: its total density and velocity (past the effect threshold dense magic drags things along)
     // and its share of air magic (moving air magic makes the wind).
     using MagicSampler = std::function<void(const dvec3& p, double& rhoTotal, dvec3& velocity, double& airShare)>;

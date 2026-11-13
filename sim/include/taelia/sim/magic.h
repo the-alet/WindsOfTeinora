@@ -129,6 +129,8 @@ public:
     bool addDensity(const dvec3& p, Aspect a, double kgPerM3);
     // Adds kg of an aspect to the finest cell holding p (a lightning strike's fire). False if none.
     bool addMass(const dvec3& p, Aspect a, double kg);
+    // The densities in the finest cell holding p, as they are (no blending with its neighbours). False if none.
+    bool cellAt(const dvec3& p, MagicDensities& out) const;
     // Rain over the camera now (0..1): raindrops carry water magic down.
     void setRain(double rain);
 
