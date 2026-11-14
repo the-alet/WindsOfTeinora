@@ -21,6 +21,8 @@
 #include "rhi/rhi.h"
 #include "taelia/shared_constants.h"
 #include "taelia/sim/camera_rig.h"
+#include "taelia/sim/human.h"
+#include "taelia/sim/player.h"
 #include "taelia/sim/world.h"
 
 // The D3D12 Agility SDK next to the exe (bin/D3D12).
@@ -80,6 +82,11 @@ private:
     // A ball from the hand (in front of the camera, a little low and to the right) at `velocity`.
     void throwFromHand(const dvec3& velocity);
     RenderView makeView(double aspect, double realSeconds) const;
+    // The player (the user: the human is the player): what the keys ask (or a check's act), where a thrown ball goes
+    // (the ground under the eye's focus), the camera behind its shoulder or in its eyes.
+    PlayerInput playerInput(const LaunchFlags& f);
+    dvec3 aimPoint() const;
+    void placePlayerCamera(const LaunchFlags& f);
 
     std::filesystem::path dir_;
     GraphicsSettings settings_;
@@ -93,6 +100,9 @@ private:
     Ui ui_;
     bool magicView_ = false;
     bool automated_ = false;
+    bool playerMode_ = true, firstPerson_ = false;
+    int aspect_ = int(Aspect::Fire);
+    double actYaw_ = 0;
     int appliedDetail_ = -1;
     uint64_t frame_ = 0;
     bool charging_ = false;
@@ -103,6 +113,11 @@ private:
 };
 
 void App::placeCamera(const LaunchFlags& f) {
+    if (playerMode_) {  // behind the player, looking where it faces
+        rig_.place(world_->humanPosition() + dvec3{0, 1.8, -3.0}, actYaw_, -0.12);
+        rig_.gazeYaw = actYaw_;
+        return;
+    }
     // The spawn point stands on the ground: CAMERA_SPAWN.y is eye height above it.
     dvec3 pos{k::CAMERA_SPAWN[0], 0.0, k::CAMERA_SPAWN[2]};
     pos.y = world_->groundHeight(pos.x, pos.z) + k::CAMERA_SPAWN[1];
@@ -123,6 +138,86 @@ void App::handleKeys() {
     if (w.keyPressed(VK_OEM_PLUS) || w.keyPressed(VK_ADD)) world_->clock().faster();
     if (w.keyPressed(VK_OEM_MINUS) || w.keyPressed(VK_SUBTRACT)) world_->clock().slower();
     if (w.keyPressed('M')) magicView_ = !magicView_;
+    if (playerMode_) {
+        static const int kKeys[8] = {int(Aspect::Earth), int(Aspect::Water), int(Aspect::Life), int(Aspect::Fire),
+                                     int(Aspect::Air), int(Aspect::Lightning), int(Aspect::Light), int(Aspect::Necrotic)};
+        for (int i = 0; i < 8; ++i)
+            if (w.keyPressed('1' + i) || w.keyPressed(VK_NUMPAD1 + i)) aspect_ = kKeys[i];
+        if (w.keyPressed('V')) firstPerson_ = !firstPerson_;
+    }
+}
+
+PlayerInput App::playerInput(const LaunchFlags& f) {
+    PlayerInput in;
+    in.aspect = Aspect(aspect_);
+    in.yaw = rig_.yaw;
+    in.pitch = rig_.pitch;
+    if (automated_) {  // a check's act, along the way it faces
+        const std::string& a = f.act;
+        const uint64_t last = uint64_t(f.frames);
+        in.yaw = actYaw_;
+        in.pitch = a == "fly" ? 0.15 : 0.0;
+        in.forward = (a == "run" || a == "crouchrun" || a == "dash" || a == "swim" || a == "fly" || (a == "landrun" && frame_ > 185)) ? 1.0 : 0.0;
+        in.crouch = a == "crouch" || a == "crouchrun";
+        in.jump = (a == "jump" && frame_ + 16 == last) || ((a == "hover" || a == "land" || a == "landrun") && frame_ > 2 && frame_ < 50);
+        in.dash = a == "dash" && frame_ + 6 == last;
+        in.fly = ((a == "fly" || a == "hover" || a == "land" || a == "landrun") && frame_ == 2) || ((a == "land" || a == "landrun") && frame_ == 50);  // land: up, then let go
+        in.gather = (a == "gather" && frame_ >= 2) || (a == "throw" && frame_ >= 2 && frame_ + 14 < last);
+        in.face = in.gather || a == "throw";
+        in.aim = playerToWorld(world_->player(), {0, 1.2, 30});
+        return in;
+    }
+    Window& w = window_;
+    if (w.mouseCaptured() && ui_.menu == Menu::None) {
+        in.forward = (w.keyDown('W') ? 1 : 0) - (w.keyDown('S') ? 1 : 0);
+        in.right = (w.keyDown('D') ? 1 : 0) - (w.keyDown('A') ? 1 : 0);
+        in.jump = w.keyDown(VK_SPACE);
+        in.crouch = w.keyDown('C') || w.keyDown(VK_CONTROL);
+        in.dash = w.keyPressed(VK_SHIFT);
+        in.fly = w.keyPressed('F');
+        in.gather = w.mouseDown(0);
+    }
+    in.face = firstPerson_ || in.gather || world_->player().toss >= 0.0;
+    in.aim = aimPoint();
+    return in;
+}
+
+dvec3 App::aimPoint() const {
+    // The ground under the eye's focus (or far along it).
+    const dvec3 from = rig_.position, dir = rig_.gazeDirection();
+    double prev = 0;
+    for (double t = 0.5; t <= 150.0; t += 0.5) {
+        const dvec3 p = from + dir * t;
+        if (p.y <= world_->groundHeight(p.x, p.z)) {
+            double lo = prev, hi = t;
+            for (int i = 0; i < 12; ++i) {
+                const double mid = 0.5 * (lo + hi);
+                const dvec3 q = from + dir * mid;
+                (q.y <= world_->groundHeight(q.x, q.z) ? hi : lo) = mid;
+            }
+            return from + dir * hi;
+        }
+        prev = t;
+    }
+    return from + dir * 150.0;
+}
+
+void App::placePlayerCamera(const LaunchFlags& f) {
+    const Player& p = world_->player();
+    if (automated_ && f.playerCamera) {  // checks: from round it, looking at its middle
+        const double mid = p.mode == PlayerMode::Swim ? -0.1 : 1.0 - 0.3 * p.crouch;
+        const dvec3 pivot = p.position + dvec3{0, mid, 0};
+        const double yaw = p.yaw + f.playerCamera->yawDeg * kDegToRad, pitch = f.playerCamera->pitchDeg * kDegToRad;
+        const dvec3 cam = pivot + directionFromAngles(yaw, pitch) * f.playerCamera->distance;
+        const dvec3 look = normalize(pivot - cam);
+        rig_.place(cam, std::atan2(look.x, look.z), std::asin(std::clamp(look.y, -1.0, 1.0)));
+        return;
+    }
+    if (firstPerson_) {
+        rig_.position = playerEyes(p, humanPose(world_->humanMotion()));
+        return;
+    }
+    rig_.position = playerCamera(p, world_->terrain(), rig_.yaw, rig_.pitch);
 }
 
 void App::throwFromHand(const dvec3& velocity) {
@@ -134,7 +229,7 @@ void App::throwFromHand(const dvec3& velocity) {
 void App::handleThrowButton() {
     Window& w = window_;
     // Only with the mouse captured and no menu: a click that focuses the window or works a menu throws nothing.
-    if (!w.mouseCaptured() || ui_.menu != Menu::None) {
+    if (!w.mouseCaptured() || ui_.menu != Menu::None || playerMode_) {  // the player's LMB gathers magic instead
         charging_ = false;
         return;
     }
@@ -198,6 +293,13 @@ RenderView App::makeView(double aspect, double realSeconds) const {
     v.humanFeet = world_->humanPosition();
     v.humanYaw = world_->humanYaw();
     v.humanHeld = world_->humanHeld() / k::MAGIC_HELD;
+    v.humanWater = world_->humanWater() / k::HUMAN_WATER;
+    v.humanMotion = world_->humanMotion();
+    for (const World::Dust& d : world_->dust()) v.dust.push_back({d.position, d.radius, d.age});
+    v.humanFirstPerson = playerMode_ && firstPerson_;
+    auto addBall = [&](const MagicBall& b) { v.magicBalls.push_back({b.position, b.radius(), b.fill(), int(b.aspect), b.id}); };
+    if (world_->gathering().kg > 0.0) addBall(world_->gathering());
+    for (const MagicBall& b : world_->magicBalls()) addBall(b);
     for (const World::BurningTree& b : world_->burningTrees()) {
         v.burning.push_back({b.position, b.strength});
         v.charring.burning.push_back({{int64_t(std::floor(b.position.x / kTreeCell)), int64_t(std::floor(b.position.z / kTreeCell))}, float(b.burnt)});
@@ -230,6 +332,13 @@ int App::run(const LaunchFlags& f) {
     if (f.clouds) wd.settings.cloudCover = *f.clouds;
     world_ = std::make_unique<World>(wd);
     world_->clock().setTimeSpeed(f.timeSpeed);
+    playerMode_ = !f.camera.has_value();
+    firstPerson_ = f.firstPerson;
+    aspect_ = f.aspect;
+    if (f.player) {
+        actYaw_ = f.player->yawDeg * kDegToRad;
+        world_->placePlayer({f.player->x, 0.0, f.player->z}, actYaw_);
+    }
     placeCamera(f);
     magicView_ = f.magic;
 
@@ -340,16 +449,24 @@ int App::run(const LaunchFlags& f) {
             }
             injected_ = true;
         }
+        // The look first: the player's moves are relative to it (the free camera of the checks flies with the keys).
+        {
+            CameraInput ci = automated ? CameraInput{} : readCameraInput(window_);
+            if (playerMode_) ci.forward = ci.right = ci.up = 0.0;
+            rig_.update(ci, dt, aspect);
+        }
+        if (playerMode_) world_->setPlayerInput(playerInput(f));
         world_->setFocus(rig_.position);
         world_->advance(dt);
         device_->latencyMarker(rhi::LatencyMarker::SimulationEnd);
-        if (!automated) rig_.update(readCameraInput(window_), dt, aspect);
-        else rig_.update(CameraInput{}, dt, aspect);
+        if (playerMode_) placePlayerCamera(f);
         if (frame_ > 0 && dt > 0) cameraVelocity_ = (rig_.position - lastCameraPos_) * (1.0 / dt);
         lastCameraPos_ = rig_.position;
         world_->ballPoses(ballPoses_);
 
         // In automated runs the UI is laid out at the frame size; it never reads the real mouse.
+        ui_.playerMode = playerMode_;
+        ui_.ballAspect = aspect_;
         ui_.newFrame(outW, outH, dt, automated || window_.mouseCaptured());
         UiActions act = ui_.build(*world_, settings_, api, !f.noUi, device_->upscalerSupported(), device_->latencySupported());
         if (f.noUi) ui_.menu = Menu::None;
@@ -369,8 +486,13 @@ int App::run(const LaunchFlags& f) {
         device_->latencyMarker(rhi::LatencyMarker::RenderSubmitStart);
         rhi::CommandList* cmd = device_->beginFrame(swapchain_.get());
         rhi::Texture* target = swapchain_ ? swapchain_->backbuffer() : offscreen_.get();
-        if (target)  // no image while the swapchain is being rebuilt (resize, minimize)
-            renderer_.render(cmd, target, makeView(aspect, realSeconds), f.noUi ? nullptr : draw, settings_.renderScale);
+        if (target) {  // no image while the swapchain is being rebuilt (resize, minimize)
+            RenderView view = makeView(aspect, realSeconds);
+            std::vector<World::Area> dented;
+            world_->takeDentAreas(dented);
+            for (const World::Area& a : dented) view.dentAreas.push_back({a.x0, a.z0, a.x1, a.z1});
+            renderer_.render(cmd, target, view, f.noUi ? nullptr : draw, settings_.renderScale);
+        }
         device_->latencyMarker(rhi::LatencyMarker::RenderSubmitEnd);
         device_->endFrame(swapchain_.get());
         ++frame_;

@@ -92,6 +92,10 @@ void BallRenderer::update(const std::vector<BallPose>* poses, const dvec3& cam, 
                 g.prevRel[1] = float(prevRel.y);
                 g.prevRel[2] = float(prevRel.z);
                 std::memcpy(g.prevRot, last.rotation, sizeof g.prevRot);
+                g.squash[0] = p.squashAxis[0];
+                g.squash[1] = p.squashAxis[1];
+                g.squash[2] = p.squashAxis[2];
+                g.squash[3] = p.squash;
                 visible_.push_back(g);
             }
             if (length(rel) < kRtDistance) {

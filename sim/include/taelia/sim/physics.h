@@ -29,6 +29,15 @@ struct Ball {
     double rotation[4] = {0, 0, 0, 1};  // orientation quaternion x, y, z, w
     bool resting = false;               // asleep
     bool inWater = false;
+    double squash = 0;                  // squashed this share of its radius where it hit (springs back)
+    dvec3 squashAxis{0, 1, 0};
+};
+
+// A ball hitting the ground hard enough to dent it: where, the ground's normal there, the energy it lost into the
+// ground along that normal (J), how fast it came in (m/s), its radius.
+struct Impact {
+    dvec3 point, normal;
+    double energy = 0, speed = 0, radius = 0;
 };
 
 // A ball to draw: between the last two steps.
@@ -36,6 +45,8 @@ struct BallPose {
     uint32_t id = 0;
     dvec3 position;
     float rotation[4] = {0, 0, 0, 1};  // quaternion x, y, z, w
+    float squash = 0;                  // the share of its radius it is squashed along squashAxis
+    float squashAxis[3] = {0, 1, 0};
 };
 
 struct PhysicsStats {
@@ -61,12 +72,18 @@ public:
     // Rocks the world grew (minerals): solid balls bounce off. Ids are the world's.
     void addRock(uint32_t id, const dvec3& position, double radius);
     void removeRock(uint32_t id);
-    // A standing body (the human): an upright capsule round `centre`, soft like cloth over flesh.
+    // A standing body (the human): an upright capsule round `centre`, soft like cloth over flesh; it moves with the
+    // body (kinematic: balls bounce off it, it is not pushed).
     void addCapsule(uint32_t id, const dvec3& centre, double radius, double halfHeight);
+    void moveCapsule(uint32_t id, const dvec3& centre);
     // The magic at a point: its total density and velocity (past the effect threshold dense magic drags things along)
     // and its share of air magic (moving air magic makes the wind).
     using MagicSampler = std::function<void(const dvec3& p, double& rhoTotal, dvec3& velocity, double& airShare)>;
     void setMagicSampler(MagicSampler sampler);
+    // Hits on the ground since the last call (the world dents the ground with them).
+    void takeImpacts(std::vector<Impact>& out);
+    // The ground changed here (a crater): its height field tiles are rebuilt when next needed.
+    void groundChanged(double x0, double z0, double x1, double z1);
     // One fixed simulation step of dt seconds, ending at simulated time `seconds` (PHYSICS_SUBSTEPS PhysX steps).
     void step(double dt, double seconds);
 

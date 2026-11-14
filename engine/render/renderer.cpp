@@ -143,6 +143,7 @@ bool Renderer::init(rhi::Device* device, const Terrain* terrain, const CloudMap*
     if (!balls_.init(device_, detail, error)) return false;
     if (!human_.init(device_, error)) return false;
     if (!manifest_.init(device_, error)) return false;
+    if (!magicBalls_.init(device_, error)) return false;
     if (!atmosphere_.init(device_, error) || !cloudRenderer_.init(device_, clouds, error)) return false;
     if (!magic_.init(device_, error)) return false;
     weatherPipe_ = device_->createComputePipeline({"weather.CSMain", "weather"}, error);
@@ -174,6 +175,7 @@ void Renderer::shutdown() {
     balls_.shutdown();
     human_.shutdown();
     manifest_.shutdown();
+    magicBalls_.shutdown();
     atmosphere_.shutdown();
     cloudRenderer_.shutdown();
     magic_.shutdown();
@@ -502,6 +504,7 @@ void Renderer::fillFrameConstants(const RenderView& v, uint32_t outW, uint32_t o
                      atmosphere_.aerialPerspectiveVolume()};
     fc.atmosphere2 = {atmosphere_.skyIrradiance(), cloudRenderer_.shadowMap(), cloudRenderer_.mapTexture(), cloudRenderer_.result()};
     magic_.frameData(fc, v.cameraPos);
+    terrain_.dentsFrameData(fc, v.cameraPos);
     manifest_.frameData(fc, v.magic, v.cameraPos);
     fireFrameData(fc, v);
     {
@@ -572,6 +575,8 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
     rhi::Transient fc = device_->allocTransient(sizeof(gpu::FrameConstants));
     Frustum frustum;
     magic_.update(v.magic, v.cameraPos);
+    for (const RenderRect& r : v.dentAreas) terrain_.refresh(r.x0, r.z0, r.x1, r.z1);
+    terrain_.updateDents(v.cameraPos);
     fillFrameConstants(v, outW, outH, fc, frustum);
     if (!texturesReady_) generateTextures(cmd);
 
@@ -579,7 +584,10 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
     terrain_.select(v.cameraPos, frustum, v.waitForStreaming);
     trees_.select(v.cameraPos, frustum, v.waitForStreaming, v.charring);
     balls_.update(v.balls, v.cameraPos, frustum);
-    if (v.human) human_.update(v.humanFeet, v.humanYaw, v.humanHeld, v.simSeconds, v.cameraPos, frustum, v.waitForStreaming);
+    if (v.human)
+        human_.update(v.humanFeet, v.humanYaw, v.humanHeld, v.humanWater, v.humanMotion, v.humanFirstPerson, v.cameraPos, frustum,
+                      v.waitForStreaming);
+    magicBalls_.update(v.magicBalls, v.dust, v.cameraPos);
     if (std::vector<rhi::Texture*> fresh = human_.takeTexturesNeedingMips(); !fresh.empty()) {
         cmd->beginMarker("human textures");
         cmd->setPipeline(downsample_.get());
@@ -641,6 +649,7 @@ void Renderer::render(rhi::CommandList* cmd, rhi::Texture* output, const RenderV
     cloudRenderer_.render(cmd, fc, sceneHdr_.get(), depth_.get());
     drawWater(cmd, v, fc);
     manifest_.drawFireflies(cmd, fc, sceneHdr_.get(), depth_.get());
+    magicBalls_.draw(cmd, fc, sceneHdr_.get(), depth_.get());
     if (weatherPipe_ && (v.rain > 0.001 || (v.strikeAge >= 0.0 && v.strikeAge < 0.3))) {
         cmd->beginMarker("weather");
         cmd->barrier(sceneHdr_.get(), rhi::State::UnorderedAccess);

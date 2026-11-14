@@ -65,6 +65,8 @@ struct FrameConstants {
     float4 steam[2];        // steam where fire past the dew point meets water: xyz its base on the surface relative to the camera (m), w strength (0: none)
     float4 scorch[8];       // grass burnt away: xyz the circle's centre on the ground relative to the camera (m), w its radius (0: none)
     float4 underwater;      // x: 1 if the eye is under a pond's surface, y: how far that surface is above it (m), zw: unused
+    uint4 magicHeld;        // bindless: x L0, y L1: the necrotic magic the things in each cell hold (R16F, kg/m3; it tints them), zw: unused
+    float4 dents;           // the ground's dents round the eye: xy the window's min corner relative to the camera (x, z; m), z its size (m), w its texture (bindless, as bits; 0 none)
 };
 
 

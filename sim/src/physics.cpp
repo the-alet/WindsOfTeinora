@@ -445,10 +445,13 @@ void Physics::Impl::substep(double h, bool first) {
         b.restKnown = false;
         applyAirWaterGround(b, h);
     }
+    std::vector<dvec3> vIn(n);
+    for (size_t i = 0; i < n; ++i) vIn[i] = toD(balls[i].actor->getLinearVelocity());
     scene->simulate(float(h));
     scene->fetchResults(true);
     for (size_t i = 0; i < n; ++i) {
         BallBody& b = balls[i];
+        b.state.squash *= std::exp(-h / double(k::BALL_SQUASH_TAU));
         const PxTransform pose = b.actor->getGlobalPose();
         b.state.position = toD(pose.p) + origin;
         b.state.rotation[0] = pose.q.x;
@@ -459,6 +462,19 @@ void Physics::Impl::substep(double h, bool first) {
         b.state.spin = toD(b.actor->getAngularVelocity());
         b.state.resting = b.actor->isSleeping();
         if (b.state.resting) continue;
+        // A hit on the ground: what the ball lost into it along the ground's normal dents it (World); it squashes.
+        {
+            const Ground g = groundUnder(b.state.position);
+            const double gap = (b.state.position.y - g.height) * g.normal.y - k::BALL_RADIUS;
+            const double vin = dot(vIn[i], g.normal), vout = dot(b.state.velocity, g.normal);
+            if (gap < 0.06 + (std::fabs(vin) + std::fabs(vout)) * h && vin < -0.8 && vout > vin + 0.4 && g.water <= g.height) {
+                const double out = std::max(vout, 0.0);
+                const double e = 0.5 * k::BALL_MASS * (vin * vin - out * out);
+                if (e > 0.0) impacts.push_back({b.state.position - g.normal * double(k::BALL_RADIUS), g.normal, e, -vin, double(k::BALL_RADIUS)});
+                b.state.squash = std::max(b.state.squash, std::min(double(k::BALL_SQUASH_MAX), -vin * double(k::BALL_SQUASH)));
+                b.state.squashAxis = g.normal;
+            }
+        }
         plantContacts(b, before[i], b.state.position);
         // A safety net: should a ball ever end up under the ground, put it back on top.
         const double floor = groundUnder(b.state.position).height;
@@ -544,13 +560,20 @@ void Physics::addCapsule(uint32_t id, const dvec3& centre, double radius, double
         m.origin = originNear(centre);
         m.originSet = true;
     }
-    // PhysX capsules lie along x: stand it up.
-    PxRigidStatic* body = m.px->createRigidStatic(PxTransform(toPx(centre - m.origin), PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f))));
+    // PhysX capsules lie along x: stand it up. Kinematic: it moves with the body, nothing pushes it.
+    PxRigidDynamic* body = m.px->createRigidDynamic(PxTransform(toPx(centre - m.origin), PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f))));
+    body->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*body, PxCapsuleGeometry(float(radius), float(halfHeight)), *m.bodyMaterial);
     shape->setContactOffset(0.02f);
     shape->setRestOffset(0.0f);
     m.scene->addActor(*body);
     m.capsules[id] = body;
+}
+
+void Physics::moveCapsule(uint32_t id, const dvec3& centre) {
+    const auto it = impl_->capsules.find(id);
+    if (it == impl_->capsules.end()) return;
+    it->second->setKinematicTarget(PxTransform(toPx(centre - impl_->origin), PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f))));
 }
 
 void Physics::removeRock(uint32_t id) {
@@ -561,6 +584,27 @@ void Physics::removeRock(uint32_t id) {
 }
 
 void Physics::setMagicSampler(MagicSampler sampler) { impl_->magic = std::move(sampler); }
+
+void Physics::takeImpacts(std::vector<Impact>& out) {
+    out.insert(out.end(), impl_->impacts.begin(), impl_->impacts.end());
+    impl_->impacts.clear();
+}
+
+void Physics::groundChanged(double x0, double z0, double x1, double z1) {
+    Impl& m = *impl_;
+    for (auto it = m.tiles.begin(); it != m.tiles.end();) {
+        const Tile& t = it->second;
+        const double tx0 = double(it->first.first) * kTileSize, tz0 = double(it->first.second) * kTileSize;
+        if (tx0 > x1 || tx0 + kTileSize < x0 || tz0 > z1 || tz0 + kTileSize < z0) {
+            ++it;
+            continue;
+        }
+        if (t.actor) t.actor->release();
+        if (t.field) t.field->release();
+        it = m.tiles.erase(it);
+    }
+    for (BallBody& b : m.balls) b.restKnown = false;
+}
 
 bool Physics::removeBall(uint32_t id) {
     Impl& m = *impl_;
@@ -626,6 +670,10 @@ void Physics::poses(double alpha, std::vector<BallPose>& out) const {
         }
         len = len > 0.0 ? 1.0 / std::sqrt(len) : 0.0;
         for (int i = 0; i < 4; ++i) p.rotation[i] = float(q[i] * len);
+        p.squash = float(b.state.squash);
+        p.squashAxis[0] = float(b.state.squashAxis.x);
+        p.squashAxis[1] = float(b.state.squashAxis.y);
+        p.squashAxis[2] = float(b.state.squashAxis.z);
         out.push_back(p);
     }
 }

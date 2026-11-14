@@ -34,7 +34,7 @@ uint32_t octNormal(double x, double y, double z) {
 }
 
 // TreePush::kind bits 8-10: the aspect the thing holds + 1 (tree.hlsl; gbuffer.hlsli MAGIC_HELD_*).
-constexpr uint32_t kHoldsEarth = 1u << 8, kHoldsNature = 3u << 8;
+constexpr uint32_t kHoldsEarth = 1u << 8, kHoldsLife = 3u << 8;
 
 struct TreePush {
     uint32_t vbSrv, instSrv, instOffset, kind;
@@ -355,7 +355,7 @@ void TreeRenderer::draw(rhi::CommandList* cmd, const rhi::Transient& fc, const u
                 rhi::Transient tr = device_->allocTransient(inst.size() * sizeof(InstanceGpu));
                 std::memcpy(tr.cpu, inst.data(), inst.size() * sizeof(InstanceGpu));
                 const uint32_t kind = uint32_t(mesh / kTreeVariants);
-                TreePush p{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), kind | kHoldsNature,
+                TreePush p{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), kind | kHoldsLife,
                            pass == 0 ? barkTex[0][kind] : leafTex[0][kind], pass == 0 ? barkTex[1][kind] : leafTex[1][kind], 1.0f, 1.0f};
                 cmd->pushConstants(&p, sizeof p);
                 cmd->drawIndexed(part.indexCount, uint32_t(inst.size()), part.firstIndex);
@@ -370,7 +370,7 @@ void TreeRenderer::draw(rhi::CommandList* cmd, const rhi::Transient& fc, const u
         TreePush stones{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), kHoldsEarth, rockTex_[0], rockTex_[1], 1.0f, 2.0f};
         cmd->pushConstants(&stones, sizeof stones);
         cmd->drawIndexed(fireStones_.indexCount, 1, fireStones_.firstIndex);
-        TreePush logs{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), 1 | kHoldsNature, barkTex[0][1], barkTex[1][1], 0.55f, 1.0f};
+        TreePush logs{vertices_->srv(), tr.buffer->srv(), uint32_t(tr.offset), 1 | kHoldsLife, barkTex[0][1], barkTex[1][1], 0.55f, 1.0f};
         cmd->pushConstants(&logs, sizeof logs);
         cmd->drawIndexed(fireLogs_.indexCount, 1, fireLogs_.firstIndex);
     }

@@ -20,7 +20,7 @@ public:
 private:
     rhi::Device* device_ = nullptr;
     double radius_ = 60.0;
-    uint32_t maxBlades_ = 1200000;
+    uint32_t maxBlades_ = 2400000;
     std::unique_ptr<rhi::Buffer> blades_, args_;
     std::unique_ptr<rhi::Texture> albedo_, detail_;
     std::unique_ptr<rhi::Pipeline> reset_, gen_, clamp_, draw_, texgen_;

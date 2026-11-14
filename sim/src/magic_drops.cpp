@@ -1,6 +1,6 @@
 // Light drops (step 5e): single fast motes the suns shoot (and the planet sends back a little of), walked through the
 // finest level along their way. Each passing cell may stop one (its mean free path shortens in denser magic). Where
-// nature magic rules the cell absorbs it and grows; anywhere else it leaves a speck of light magic and stirs a small
+// life magic rules the cell absorbs it and grows; anywhere else it leaves a speck of light magic and stirs a small
 // eddy. The ground swallows the rest. Deterministic: the drops of a tick come from integer hashes.
 #include <algorithm>
 #include <cmath>
@@ -49,10 +49,10 @@ void MagicField::Impl::drops(int l, double dtTick, int64_t tick) {
                 r = mix64(r + 0x9e37);
                 if (hashToUnit(r) >= 1.0 - fmath::exp(-step / lambda)) continue;
                 // Stopped here.
-                const float nature = L.st[L.at(int(Aspect::Nature), c)];
-                if (nature > 0.4 * rhoTot) {
+                const float life = L.st[L.at(int(Aspect::Life), c)];
+                if (life > 0.4 * rhoTot) {
                     const float grow = std::min(float(k::MAGIC_DROP_GROWTH), L.st[L.at(int(Aspect::Neutral), c)]);
-                    L.st[L.at(int(Aspect::Nature), c)] += grow;
+                    L.st[L.at(int(Aspect::Life), c)] += grow;
                     L.st[L.at(int(Aspect::Neutral), c)] -= grow;
                 } else {
                     L.st[L.at(int(Aspect::Light), c)] += float(k::MAGIC_DROP_LIGHT);

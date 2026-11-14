@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "taelia/sim/noise.h"
+#include "taelia/shared_constants.h"
 
 namespace taelia {
 
@@ -134,7 +135,9 @@ bool Terrain::pondInCell(int64_t cellX, int64_t cellZ, Pond& out) const {
     return exists;
 }
 
-double Terrain::height(double x, double z) const {
+double Terrain::height(double x, double z) const { return untouchedHeight(x, z) + editAt(x, z); }
+
+double Terrain::untouchedHeight(double x, double z) const {
     double h = baseHeight(x, z);
     const int64_t cx = int64_t(std::floor(x / kPondCell)), cz = int64_t(std::floor(z / kPondCell));
     for (int64_t dz = -1; dz <= 1; ++dz) {
@@ -220,6 +223,92 @@ TerrainSample Terrain::sample(double x, double z) const {
     s.materials = materials(x, z, s.height, s.normal);
     s.waterLevel = waterLevelAt(x, z, s.height);
     return s;
+}
+
+}  // namespace taelia
+
+namespace taelia {
+
+namespace {
+
+uint64_t editKey(int64_t i, int64_t j) { return (uint64_t(uint32_t(int32_t(i))) << 32) | uint64_t(uint32_t(int32_t(j))); }
+
+Stratum stratum(double hardness, double density, const float* color) {
+    Stratum s;
+    s.hardness = hardness;
+    s.density = density;
+    for (int i = 0; i < 3; ++i) s.color[i] = color[i];
+    return s;
+}
+
+}  // namespace
+
+Stratum Terrain::stratumAt(double x, double z, double depth) const {
+    const double h = untouchedHeight(x, z), e = 0.25;
+    const dvec3 n = normalize(dvec3{-(untouchedHeight(x + e, z) - untouchedHeight(x - e, z)) / (2 * e), 1.0,
+                                    -(untouchedHeight(x, z + e) - untouchedHeight(x, z - e)) / (2 * e)});
+    const GroundMaterials m = materials(x, z, h, n);
+    const bool wet = waterLevelAt(x, z, h) > h;
+    if (depth >= k::TERRAIN_INTERIOR) return stratum(k::HARDNESS_BEDROCK, 2700, k::STRATUM_ROCK);
+    if (m.rock > 0.5f) return stratum(k::HARDNESS_ROCK, 2600, k::STRATUM_ROCK);
+    if (wet && depth < 1.0) return stratum(k::HARDNESS_MUD, 1700, k::STRATUM_MUD);
+    if (m.sand > 0.5f && depth < k::TERRAIN_SUBSOIL) return stratum(k::HARDNESS_SAND, 1600, k::STRATUM_SAND);
+    if (depth < k::TERRAIN_TOPSOIL) return stratum(k::HARDNESS_TOPSOIL, 1300, k::STRATUM_TOPSOIL);
+    if (depth < k::TERRAIN_SUBSOIL) return stratum(k::HARDNESS_SUBSOIL, 1800, k::STRATUM_SUBSOIL);
+    if (depth < k::TERRAIN_GRAVEL) return stratum(k::HARDNESS_GRAVEL, 1900, k::STRATUM_GRAVEL);
+    return stratum(k::HARDNESS_ROCK, 2500, k::STRATUM_ROCK);
+}
+
+void Terrain::dent(double x, double z, double radius, double depth) {
+    if (!(radius > 1e-4) || !(depth > 1e-6)) return;
+    const double cell = k::TERRAIN_EDIT_CELL, outer = radius * 1.6;
+    const int64_t i0 = int64_t(std::floor((x - outer) / cell)), i1 = int64_t(std::floor((x + outer) / cell));
+    const int64_t j0 = int64_t(std::floor((z - outer) / cell)), j1 = int64_t(std::floor((z + outer) / cell));
+    std::unique_lock<std::shared_mutex> lock(editMutex_);
+    for (int64_t j = j0; j <= j1; ++j)
+        for (int64_t i = i0; i <= i1; ++i) {
+            const double r = std::hypot((double(i) + 0.5) * cell - x, (double(j) + 0.5) * cell - z) / radius;
+            double dh;
+            if (r < 1.0) dh = -depth * (1.0 - r * r);                                    // the bowl
+            else if (r < 1.6) dh = 0.15 * depth * std::sin(kPi * (r - 1.0) / 0.6);  // the soil heaped round it
+            else continue;
+            float& e = edits_[editKey(i, j)];
+            e = float(std::max(double(e) + dh, -double(k::TERRAIN_INTERIOR)));
+        }
+    editLo_[0] = std::min(editLo_[0], x - outer - cell);
+    editLo_[1] = std::min(editLo_[1], z - outer - cell);
+    editHi_[0] = std::max(editHi_[0], x + outer + cell);
+    editHi_[1] = std::max(editHi_[1], z + outer + cell);
+    hasEdits_.store(true, std::memory_order_release);
+    editsVersion_.fetch_add(1, std::memory_order_acq_rel);
+}
+
+double Terrain::editAt(double x, double z) const {
+    if (!hasEdits_.load(std::memory_order_acquire)) return 0.0;
+    std::shared_lock<std::shared_mutex> lock(editMutex_);
+    if (x < editLo_[0] || x > editHi_[0] || z < editLo_[1] || z > editHi_[1]) return 0.0;
+    const double cell = k::TERRAIN_EDIT_CELL;
+    const double u = x / cell - 0.5, v = z / cell - 0.5;
+    const int64_t i = int64_t(std::floor(u)), j = int64_t(std::floor(v));
+    const double fu = u - double(i), fv = v - double(j);
+    auto at = [&](int64_t a, int64_t b) {
+        const auto it = edits_.find(editKey(a, b));
+        return it == edits_.end() ? 0.0 : double(it->second);
+    };
+    return (at(i, j) * (1 - fu) + at(i + 1, j) * fu) * (1 - fv) + (at(i, j + 1) * (1 - fu) + at(i + 1, j + 1) * fu) * fv;
+}
+
+void Terrain::editsInArea(double x0, double z0, int n, std::vector<float>& out) const {
+    out.assign(size_t(n) * size_t(n), 0.0f);
+    if (!hasEdits_.load(std::memory_order_acquire)) return;
+    const double cell = k::TERRAIN_EDIT_CELL;
+    const int64_t i0 = int64_t(std::floor(x0 / cell)), j0 = int64_t(std::floor(z0 / cell));
+    std::shared_lock<std::shared_mutex> lock(editMutex_);
+    for (const auto& [key, v] : edits_) {
+        const int64_t i = int64_t(int32_t(uint32_t(key >> 32))), j = int64_t(int32_t(uint32_t(key & 0xffffffffull)));
+        if (i < i0 || j < j0 || i >= i0 + n || j >= j0 + n) continue;
+        out[size_t(j - j0) * size_t(n) + size_t(i - i0)] = v;
+    }
 }
 
 }  // namespace taelia

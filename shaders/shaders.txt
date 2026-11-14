@@ -49,4 +49,8 @@ manifest.hlsl   VSMain      vs_6_6
 manifest.hlsl   PSMain      ps_6_6
 manifest.hlsl   FireflyVS   vs_6_6
 manifest.hlsl   FireflyPS   ps_6_6
+magic_ball.hlsl VSMain      vs_6_6
+magic_ball.hlsl PSMain      ps_6_6
+magic_ball.hlsl DustVS      vs_6_6
+magic_ball.hlsl DustPS      ps_6_6
 weather.hlsl    CSMain      cs_6_6

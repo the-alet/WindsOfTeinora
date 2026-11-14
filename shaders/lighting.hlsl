@@ -75,10 +75,13 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         const float rough = max(nr.w, 0.08), translucency = m.r, specular = m.g, subsurface = m.b;
         float3 albedo = a.rgb, ownGlow = 0;
         float ao = a.a;
+        const float necrotic = necroticAmount(rel);  // the necrotic magic the things here hold tints them
         if (magicView()) {  // the albedo target holds the surface's own glow, and its plain brightness in a
             ownGlow = a.rgb * K_MAGIC_GLOW_SCALE;
             albedo = a.aaa;
             ao = 1.0;
+        } else {
+            albedo = necroticTint(albedo, necrotic);
         }
         const float3 V = -dir;
 
@@ -121,7 +124,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         }
         if (magicView()) {
             const float fade = 1.0 - smoothstep(g_frame.magicInfo.z * 0.8, g_frame.magicInfo.z, dist);
-            color = magicDim(color) + (ownGlow + magicOutlineGlow(m.a, n, V)) * fade + magicFreeGlow(dir, dist, float2(id.xy)) +
+            color = magicDim(color) + necroticGlow(ownGlow + magicOutlineGlow(m.a, n, V), necrotic) * fade + magicFreeGlow(dir, dist, float2(id.xy)) +
                     magicMotes(dir, dist);
         } else {
             color += magicDewTint(dir, dist);

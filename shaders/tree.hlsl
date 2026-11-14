@@ -9,7 +9,7 @@ struct TreePush {
     uint albedo, detail;
     float tint, uvScale;  // albedo multiplier (charred wood), texture repeats
 };
-// kind, bits 8-10: the aspect the thing holds + 1 (trees and wood nature, the campfire's stones earth).
+// kind, bits 8-10: the aspect the thing holds + 1 (trees and wood life, the campfire's stones earth).
 [[vk::push_constant]] ConstantBuffer<TreePush> g_push : register(b1, space0);
 
 struct VSOut {
@@ -75,8 +75,10 @@ GBufferOut BarkPS(VSOut i) {
     GBufferOut o;
     o.albedo = float4(a.rgb, d.w);
     if (magicView()) {  // threads of it wind round the limbs
-        const float threads = held == MAGIC_HELD_NATURE ? pow(0.5 + 0.5 * cos(i.uv.x * 6.2831853), 3.0) : 1.0;
-        o.albedo = magicViewAlbedo(a.rgb, heldMagicGlow(held, 1.0 - i.charred, i.flow, threads));
+        const float threads = held == MAGIC_HELD_LIFE ? pow(0.5 + 0.5 * cos(i.uv.x * 6.2831853), 3.0) : 1.0;
+        float3 glow = heldMagicGlow(held, 1.0 - i.charred, i.flow, threads);
+        if (held == MAGIC_HELD_LIFE) glow += sapGlow(1.0 - i.charred, i.flow, threads);
+        o.albedo = magicViewAlbedo(a.rgb, glow);
     }
     o.normal = float4(n, d.z);
     o.material = float4(0, 0.3, 0, packMagic(held, 1.0 - i.charred, false));
@@ -104,9 +106,11 @@ GBufferOut LeafPS(VSOut i, bool front : SV_IsFrontFace) {
     N = normalize(N + T * xy.x * 0.5 + cross(N, T) * xy.y * 0.5 + float3(0, 0.3, 0));  // a little bent toward the sky
     GBufferOut o;
     const float midrib = 0.35 + 0.65 * pow(saturate(1.0 - abs(i.uv.x - 0.5) * 2.0), 3.0);
-    o.albedo = magicView() ? magicViewAlbedo(a.rgb, heldMagicGlow(MAGIC_HELD_NATURE, 1.0 - i.charred, i.flow, midrib)) : float4(a.rgb, 1.0);
+    o.albedo = magicView() ? magicViewAlbedo(a.rgb, heldMagicGlow(MAGIC_HELD_LIFE, 1.0 - i.charred, i.flow, midrib) +
+                                                        sapGlow(1.0 - i.charred, i.flow, midrib))
+                           : float4(a.rgb, 1.0);
     o.normal = float4(N, d.z);
-    o.material = float4(d.w, 0.35, 0, packMagic(MAGIC_HELD_NATURE, 1.0 - i.charred, false));  // translucency
+    o.material = float4(d.w, 0.35, 0, packMagic(MAGIC_HELD_LIFE, 1.0 - i.charred, false));  // translucency
     o.motion = 0;
     return o;
 }

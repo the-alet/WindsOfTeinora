@@ -48,9 +48,13 @@ void GenMain(uint3 id : SV_DispatchThreadID) {
         const float2 local = (float2(id.xy) + float2(rand01(pcgHash(h + 1)), rand01(pcgHash(h + 2)))) * CELL;  // from the corner
         const int2 t = int2(floor(local / g_push.tileSize));
         if (any(t < 0) || any(t >= int(g_push.gridTiles))) continue;
-        const int slot = asint(g_buffers[g_push.lookupSrv].Load(g_push.lookupOffset + uint(t.y * int(g_push.gridTiles) + t.x) * 4));
-        if (slot < 0) continue;
-        const float2 g = (local - float2(t) * g_push.tileSize) / g_push.tileSize * GRID;
+        const int entry = asint(g_buffers[g_push.lookupSrv].Load(g_push.lookupOffset + uint(t.y * int(g_push.gridTiles) + t.x) * 4));
+        if (entry < 0) continue;
+        // The finest tile holding the place: a leaf near the camera, a coarser one farther out.
+        const int slot = entry & 0xFFFFFF, level = entry >> 24;
+        const int2 leaf0 = g_push.cornerCell / int(round(g_push.tileSize / CELL));
+        const int2 first = ((leaf0 + t) >> level) << level;
+        const float2 g = (local - float2(first - leaf0) * g_push.tileSize) / (g_push.tileSize * float(1u << uint(level))) * GRID;
         const uint2 g0 = min(uint2(g), uint2(GRID - 1, GRID - 1));
         const float2 f = g - float2(g0);
         const uint4 v00 = tileVertex(uint(slot), g0.x, g0.y), v10 = tileVertex(uint(slot), g0.x + 1, g0.y);
@@ -66,6 +70,7 @@ void GenMain(uint3 id : SV_DispatchThreadID) {
         // Fire burnt the grass away here: none inside, short and charred at the edge.
         const float burnt = scorchAt(base);
         if (burnt > 0.85) continue;
+        if (dentAt(base.xz) < -0.012) continue;  // dug: bare soil, no blades
         // Shorter toward the edge of the radius, so the field fades into the ground colour instead of ending in a line.
         const float height = lerp(0.22, 0.85, meadow) * (0.65 + 0.7 * rand01(pcgHash(h + 4))) * smoothstep(1.0, 0.55, far) * (1.0 - 0.8 * burnt);
         const float4 clip = mul(g_frame.viewProj, float4(base + float3(0, height * 0.5, 0), 1));
@@ -132,9 +137,10 @@ GBufferOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     albedo = lerp(albedo, float3(0.025, 0.021, 0.018), saturate(i.dry - 1.0));  // charred at a burnt patch's edge
     const float3 n = normalize(i.normal) * (front ? 1.0 : -1.0);
     GBufferOut o;
-    o.albedo = magicView() ? magicViewAlbedo(albedo, heldMagicGlow(MAGIC_HELD_NATURE, 1.0, i.flow, 1.0)) : float4(albedo, i.uvAo.z);
+    o.albedo = magicView() ? magicViewAlbedo(albedo, heldMagicGlow(MAGIC_HELD_LIFE, 1.0, i.flow, 1.0) + sapGlow(1.0, i.flow, 1.0))
+                           : float4(albedo, i.uvAo.z);
     o.normal = float4(normalize(n + float3(0, 0.6, 0) * (front ? 0 : 1)), d.z);
-    o.material = float4(0.45, 0.3, 0, packMagic(MAGIC_HELD_NATURE, 1.0, false));
+    o.material = float4(0.45, 0.3, 0, packMagic(MAGIC_HELD_LIFE, 1.0, false));
     o.motion = 0;
     return o;
 }

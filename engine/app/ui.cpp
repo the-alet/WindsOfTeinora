@@ -44,14 +44,17 @@ const char* compass(double fromDeg) {
 
 void controlsTable() {
     static const char* rows[][2] = {
-        {"Mouse", "Move the eye's focus; the view follows it"},
-        {"LMB", "Hold to throw harder, click to drop"},
-        {"W / S", "Fly forward / back"},
-        {"A / D", "Fly left / right"},
-        {"E or Space", "Up"},
-        {"Q or C", "Down"},
+        {"Mouse", "Look: the eye's focus moves first, the view follows it"},
+        {"W A S D", "Run"},
+        {"Space", "Jump; in flight, rise"},
+        {"C or Ctrl", "Crouch; in flight, sink"},
+        {"Shift", "Dash"},
+        {"F", "Fly / stop flying (deep water: it swims)"},
+        {"1 .. 8", "Magic: earth, water, life, fire, air, lightning, light, necrotic"},
+        {"LMB", "Hold: gather a ball of it between the hands (from neutral magic slower); let go: throw"},
+        {"V", "Third / first person"},
         {"+ / -", "Time speed (x1/50 .. x50)"},
-        {"M", "Magic view (arrives with the magic)"},
+        {"M", "Magic view"},
         {"/", "World settings"},
         {"Esc", "Menu"},
     };
@@ -124,10 +127,17 @@ UiActions Ui::build(World& world, GraphicsSettings& settings, const std::string&
         ImGui::Text("Wind %.1f m/s from %s", ws.windSpeed, compass(ws.windFromDeg));
         // The magic at the camera by aspect, kg/m3.
         const MagicSample m = world.magicAt(world.focus());
-        ImGui::Text("Magic  earth %.2f  water %.2f  nature %.2f  fire %.2f", m.rho[Aspect::Earth], m.rho[Aspect::Water],
-                    m.rho[Aspect::Nature], m.rho[Aspect::Fire]);
-        ImGui::Text("       air %.2f  lightning %.2f  light %.2f  neutral %.2f  kg/m3", m.rho[Aspect::Air],
-                    m.rho[Aspect::Lightning], m.rho[Aspect::Light], m.rho[Aspect::Neutral]);
+        ImGui::Text("Magic  earth %.2f  water %.2f  life %.2f  fire %.2f", m.rho[Aspect::Earth], m.rho[Aspect::Water],
+                    m.rho[Aspect::Life], m.rho[Aspect::Fire]);
+        ImGui::Text("       air %.2f  lightning %.2f  light %.2f  necrotic %.2f  neutral %.2f  kg/m3", m.rho[Aspect::Air],
+                    m.rho[Aspect::Lightning], m.rho[Aspect::Light], m.rho[Aspect::Necrotic], m.rho[Aspect::Neutral]);
+        if (playerMode) {
+            const MagicBall& b = world.gathering();
+            if (b.kg > 0.0)
+                ImGui::Text("Ball: %s (1-8)   gathering %.0f%%  %.0f kg", aspectName(b.aspect), 100.0 * b.fill(), b.kg);
+            else
+                ImGui::Text("Ball: %s (1-8)   hold LMB to gather", aspectName(Aspect(ballAspect)));
+        }
         ImGui::End();
     }
 

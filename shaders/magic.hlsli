@@ -16,11 +16,12 @@ float3 aspectColor(uint aspect1) {  // aspect + 1, as packMagic stores it
     switch (aspect1) {
         case 1: return K_MAGIC_COLOR_EARTH;
         case 2: return K_MAGIC_COLOR_WATER;
-        case 3: return K_MAGIC_COLOR_NATURE;
+        case 3: return K_MAGIC_COLOR_LIFE;
         case 4: return K_MAGIC_COLOR_FIRE;
         case 5: return K_MAGIC_COLOR_AIR;
         case 6: return K_MAGIC_COLOR_LIGHTNING;
         case 7: return K_MAGIC_COLOR_LIGHT;
+        case 9: return K_MAGIC_COLOR_NECROTIC;
         default: return 0;
     }
 }
@@ -139,9 +140,10 @@ float streamSpeed(uint aspect1) {
     switch (aspect1) {
         case 1: return K_MAGIC_STREAM_EARTH;
         case 2: return K_MAGIC_STREAM_WATER;
-        case 3: return K_MAGIC_STREAM_NATURE;
+        case 3: return K_MAGIC_STREAM_LIFE;
         case 5: return K_MAGIC_STREAM_AIR;
         case 7: return K_MAGIC_STREAM_LIGHT;
+        case 9: return K_MAGIC_STREAM_NECROTIC;
         default: return K_MAGIC_STREAM_FIRE;
     }
 }
@@ -160,6 +162,11 @@ float3 heldMagicGlow(uint aspect1, float fill, float flow, float threads) {
     const float x = frac(s) - at;
     const float pulse = exp(-x * x * 60.0) * strength;
     return (col * 0.12 + (col * 2.0 + 0.3) * pulse * threads) * fill * K_MAGIC_SURFACE_GLOW;
+}
+
+// Plants hold water magic in their sap (the user): blue streams up them beside their life magic, a little behind it.
+float3 sapGlow(float fill, float flow, float threads) {
+    return heldMagicGlow(MAGIC_HELD_WATER, fill * K_PLANT_WATER / K_MAGIC_HELD * 0.3, flow + 0.9, threads * 0.6);
 }
 
 // The outline of a thing in the colour of what it holds (from its G-buffer material), so its shape reads.
@@ -215,6 +222,29 @@ float3 magicDewTint(float3 dir, float maxT) {
         sum += m.rgb / max(m.a, 1e-3) * max(m.a - K_MAGIC_DEW_POINT, 0.0) * dt;
     }
     return sum * 0.004;
+}
+
+// Necrotic magic (the user): what the things at a point hold of it (kg/m3) and how much of its tint they show (0..1,
+// half at MAGIC_NECROTIC_TINT, their own share); none past the uploaded windows.
+float necroticHeldAt(float3 rel) {
+    uint l;
+    float3 uvw;
+    if (!magicCoords(rel, l, uvw)) return 0;
+    return max(g_tex3D[l == 0 ? g_frame.magicHeld.x : g_frame.magicHeld.y].SampleLevel(s_linearClamp, uvw, 0).r, 0.0);
+}
+float necroticAmount(float3 rel) {
+    const float h = necroticHeldAt(rel);
+    return h / (h + K_MAGIC_NECROTIC_TINT);
+}
+// Its grey-violet tint on a colour: the colour's brightness in its hue, a little darker (it withers what it holds).
+float3 necroticTint(float3 c, float amount) {
+    const float3 luma = float3(0.2126, 0.7152, 0.0722);
+    const float3 hue = K_MAGIC_COLOR_NECROTIC / dot(K_MAGIC_COLOR_NECROTIC, luma);
+    return lerp(c, dot(c, luma) * hue * 0.85, amount);
+}
+// In the magic view: a thing's own glow turns toward it, and it glows faintly with what it holds of it.
+float3 necroticGlow(float3 glow, float amount) {
+    return necroticTint(glow, amount) + K_MAGIC_COLOR_NECROTIC * K_MAGIC_SURFACE_GLOW * 0.6 * amount;
 }
 
 // The rest of the world in the magic view: grey and dim.

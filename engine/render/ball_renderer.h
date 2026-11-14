@@ -26,11 +26,12 @@ public:
     void addInstances(std::vector<rhi::TlasInstance>& out) const;
 
 private:
-    struct InstanceGpu {  // 64 bytes, read by ball.hlsl
+    struct InstanceGpu {  // 80 bytes, read by ball.hlsl
         float rel[4];      // centre relative to the camera
         float rot[4];      // quaternion x, y, z, w
         float prevRel[4];  // last frame's centre relative to last frame's camera
         float prevRot[4];
+        float squash[4];   // xyz: along what it is squashed (world), w: by how much (share of its radius)
     };
     struct Prev {
         dvec3 position;

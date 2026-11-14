@@ -99,6 +99,15 @@ Layer sampleGround(uint i, float2 xz) {
     return o;
 }
 
+// What a dent lays bare this deep (the ground's insides, the user): topsoil, clay, sand and gravel, weathered rock.
+float3 stratumColor(float depth) {
+    float3 c = K_STRATUM_TOPSOIL;
+    c = lerp(c, K_STRATUM_SUBSOIL, smoothstep(K_TERRAIN_TOPSOIL * 0.7, K_TERRAIN_TOPSOIL * 1.3, depth));
+    c = lerp(c, K_STRATUM_GRAVEL, smoothstep(K_TERRAIN_SUBSOIL * 0.85, K_TERRAIN_SUBSOIL * 1.15, depth));
+    c = lerp(c, K_STRATUM_ROCK, smoothstep(K_TERRAIN_GRAVEL * 0.9, K_TERRAIN_GRAVEL * 1.1, depth));
+    return c;
+}
+
 GBufferOut PSMain(VSOut i) {
     float3 N = normalize(i.normal);
     float4 w = i.mats / max(dot(i.mats, 1.0), 1e-3);
@@ -147,6 +156,29 @@ GBufferOut PSMain(VSOut i) {
     const float wet = i.extra.y;
     albedo *= lerp(1.0, 0.55, wet);
     rough = lerp(rough, 0.35, wet);
+    // Dents and craters: their fine shape in the normal (less what the tile's own shape shows), the soil under the turf
+    // and the layers under it laid bare by depth, shaded in the bowl; loose soil heaped on the rim.
+    if (asuint(g_frame.dents.w) != 0u) {
+        const float2 p = i.rel.xz;
+        const float e0 = dentAt(p), c = K_TERRAIN_EDIT_CELL;
+        if (e0 != 0.0 || dentAt(p + float2(0.3, 0.3)) != 0.0 || dentAt(p - float2(0.3, 0.3)) != 0.0) {
+            const float2 fine = float2(dentAt(p + float2(c, 0)) - dentAt(p - float2(c, 0)), dentAt(p + float2(0, c)) - dentAt(p - float2(0, c))) / (2.0 * c);
+            const float2 coarse = float2(dentAt(p + float2(0.5, 0)) - dentAt(p - float2(0.5, 0)), dentAt(p + float2(0, 0.5)) - dentAt(p - float2(0, 0.5)));
+            const float2 slope = fine - coarse;
+            n = normalize(n - float3(slope.x, 0, slope.y));
+            if (e0 < -0.003) {
+                const float depth = -e0, bare = smoothstep(0.003, 0.025, depth);
+                float3 under = stratumColor(depth);
+                under = lerp(under, K_STRATUM_SAND, saturate(w.w * 1.5) * (1.0 - smoothstep(K_TERRAIN_SUBSOIL * 0.85, K_TERRAIN_SUBSOIL * 1.15, depth)));
+                under = lerp(under, K_STRATUM_ROCK, saturate(w.z * 1.5));
+                albedo = lerp(albedo, under, bare);
+                ao *= lerp(1.0, 0.72, saturate(depth * 6.0));
+                rough = lerp(rough, 0.92, bare);
+            } else if (e0 > 0.002) {
+                albedo = lerp(albedo, K_STRATUM_TOPSOIL * 1.3, smoothstep(0.002, 0.02, e0));
+            }
+        }
+    }
     // Ash where fire burnt the grass away.
     const float ash = scorchAt(i.rel) * (1.0 - wet);
     albedo = lerp(albedo, float3(0.034, 0.031, 0.028) * lerp(0.75, 1.25, L[0].height), ash);

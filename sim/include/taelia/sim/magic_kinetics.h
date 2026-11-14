@@ -5,11 +5,12 @@
 
 namespace taelia {
 
-enum class Aspect : uint8_t { Earth, Water, Nature, Fire, Air, Lightning, Light, Neutral, Count };
+// Life is the aspect of living things (once nature: the user made them one). Necrotic (the user) comes last.
+enum class Aspect : uint8_t { Earth, Water, Life, Fire, Air, Lightning, Light, Neutral, Necrotic, Count };
 inline constexpr int kAspects = int(Aspect::Count);
 const char* aspectName(Aspect a);  // "earth", ...
 
-// Eight densities in kg/m3, in Aspect order.
+// Nine densities in kg/m3, in Aspect order.
 struct MagicDensities {
     float rho[kAspects] = {};
     float operator[](Aspect a) const { return rho[int(a)]; }
@@ -57,7 +58,12 @@ bool visible(double rhoTotal);
 // What an object holds (kg/m3 of its own aspect) evens out with the total magic around it, toward MAGIC_HELD at most;
 // below MAGIC_FALL_APART of MAGIC_HELD it falls apart (so in ordinary places nothing does).
 double heldAfter(double held, double around, double dt);
+// The same evening out (MAGIC_HELD_TAU) toward any target: water a living thing holds, necrotic magic it takes up.
+double heldToward(double held, double target, double dt);
 bool fallsApart(double held);
+// Necrotic magic absorbs life magic at MAGIC_NECROTIC_ABSORB * necrotic * life: what a living thing holds of life
+// magic (kg/m3) after dt among necrotic magic this dense.
+double lifeLeft(double held, double necrotic, double dt);
 // Fireflies from light magic of this density (SPEC: 3 at 40, one more for every 3 past it; ten merge into a big one).
 int fireflyCount(double light);
 void fireflyGroups(double light, int& big, int& small);

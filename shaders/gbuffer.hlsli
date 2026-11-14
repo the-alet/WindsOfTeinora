@@ -23,7 +23,7 @@ float4 unpackUnorm8x4(uint p) {
 
 // material.a: the magic a surface holds and one flag. Bits 0-2: its aspect + 1 (0: none), bits 3-6: how full its share
 // is (0..15), bit 7: the motion target holds this surface's own motion (so a > 0.5 tests it).
-static const uint MAGIC_HELD_EARTH = 1, MAGIC_HELD_WATER = 2, MAGIC_HELD_NATURE = 3, MAGIC_HELD_FIRE = 4;
+static const uint MAGIC_HELD_EARTH = 1, MAGIC_HELD_WATER = 2, MAGIC_HELD_LIFE = 3, MAGIC_HELD_FIRE = 4;
 float packMagic(uint aspect1, float fill, bool ownMotion) {
     const uint f = uint(round(saturate(fill) * 15.0));
     return float(aspect1 | (f << 3) | (ownMotion ? 128u : 0u)) / 255.0;

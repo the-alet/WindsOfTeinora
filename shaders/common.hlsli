@@ -79,6 +79,15 @@ float latticeNoise3(float3 p) {
 // G-buffer and the shadow rays agree). 0.05..0.95, patches about a metre across.
 float leafBurnNoise(float3 p) { return 0.05 + 0.9 * latticeNoise3(p * 1.1); }
 
+// How far the ground has been moved round the eye (m, < 0 dug; frame constants dents), 0 past the window.
+float dentAt(float2 relXZ) {
+    const uint tex = asuint(g_frame.dents.w);
+    if (tex == 0u) return 0.0;
+    const float2 uv = (relXZ - g_frame.dents.xy) / g_frame.dents.z;
+    if (any(uv <= 0.0) || any(uv >= 1.0)) return 0.0;
+    return g_tex2D[tex].SampleLevel(s_linearClamp, uv, 0).r;
+}
+
 // Where fire burnt the grass away (frame constants scorch): 1 inside a circle, fading to 0 over a ragged edge.
 // rel: a point on the ground relative to the camera.
 float scorchAt(float3 rel) {

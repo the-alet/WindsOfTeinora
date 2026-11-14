@@ -1,5 +1,7 @@
 // The world: seed, clock, settings, and the fixed step. No engine or graphics code here.
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <set>
@@ -13,6 +15,7 @@
 #include "taelia/sim/magic.h"
 #include "taelia/sim/physics.h"
 #include "taelia/sim/plants.h"
+#include "taelia/sim/player.h"
 #include "taelia/sim/rune.h"
 #include "taelia/sim/terrain.h"
 #include "taelia/sim/wind.h"
@@ -24,6 +27,18 @@ struct WorldSettings {
     double windFromDeg = 250;   // where the wind blows from, degrees clockwise from north (+Z)
     double rain = 0;            // 0..1 (rain arrives with the weather in step 5)
     double cloudCover = -1;     // < 0: the natural weather; 0..1: a fixed cover
+};
+
+// A ball of one aspect's magic gathered between the player's hands (the user): weightless, it flies straight until it
+// hits something (or goes MAGIC_BALL_RANGE), then bursts: all it holds goes into the field there.
+struct MagicBall {
+    uint32_t id = 0;
+    Aspect aspect = Aspect::Fire;
+    dvec3 position, velocity;
+    double kg = 0;          // the magic it holds
+    double travelled = 0;   // m since thrown
+    double fill() const { return std::min(kg / double(k::MAGIC_BALL_FULL), 1.0); }
+    double radius() const { return k::MAGIC_BALL_RADIUS * std::cbrt(std::max(fill(), 0.04)); }
 };
 
 struct WorldDesc {
@@ -90,18 +105,44 @@ public:
     const std::vector<Glow>& scorches() const { return scorches_; }  // strength: radius (m)
     const dvec3& focus() const { return focus_; }
     // The human (step 6), standing near the spawn point facing it: its feet, which way it faces (radians, +z turned
-    // toward +x), and the nature magic it holds (kg/m3), which evens out with the magic round it like any object's.
+    // toward +x), and the life magic it holds (kg/m3), which evens out with the magic round it like any object's.
     // Runes (step 7): none in the world yet (the user decides where one goes); tests and checks add them.
     uint32_t addRune(Rune r);
     const std::vector<Rune>& runes() const { return runes_; }
     void damageRune(uint32_t id);  // its sign damaged: everything comes out at once
-    const dvec3& humanPosition() const { return humanPos_; }
-    double humanYaw() const { return humanYaw_; }
+    // The human is the player (the user): what the keys and the mouse ask for (held keys as they are, pressed ones taken
+    // by the next step), where it is, its pose's motion.
+    void setPlayerInput(const PlayerInput& in);
+    const Player& player() const { return player_; }
+    void placePlayer(const dvec3& feet, double yaw);  // checks and tests
+    HumanMotion humanMotion() const { return playerMotion(player_, clock_.seconds(), gathering_.fill()); }
+    const dvec3& humanPosition() const { return player_.position; }
+    double humanYaw() const { return player_.yaw; }
     double humanHeld() const { return humanHeld_; }
+    double humanWater() const { return humanWater_; }        // kg/m3 of water magic (HUMAN_WATER at its share)
+    double humanNecrotic() const { return humanNecrotic_; }  // kg/m3 of necrotic magic it has taken up
+    // Things of pure life magic (balls, sprouts) whose necrotic magic ate their life crumble to dust: where, how big,
+    // how long ago (s, gone after MAGIC_DUST_SECONDS).
+    struct Dust {
+        dvec3 position;
+        double radius = 0.1, age = 0;
+    };
+    const std::vector<Dust>& dust() const { return dust_; }
+    // Where the ground was dented deeply enough to change its shape for renderers (x0, z0, x1, z1), since the last call.
+    struct Area {
+        double x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+    };
+    void takeDentAreas(std::vector<Area>& out);
+    // Something hit the ground at p with this much energy (J) pushing into it, `radius` m across: a dent by the
+    // ground's hardness there (its strata by depth). Hits and hard landings call it; tests too.
+    void dentGround(const dvec3& p, double energy, double radius);
+    // Magic balls: the one gathering between its hands (kg 0: none), the ones thrown and flying.
+    const MagicBall& gathering() const { return gathering_; }
+    const std::vector<MagicBall>& magicBalls() const { return magicBalls_; }
     // The campfire: where its core of fire magic sits, and how strongly it burns (1 as it starts).
     dvec3 campfireCore() const { return terrain_.campfirePosition() + dvec3{0, 0.4, 0}; }
     double campfireStrength() const { return fire_; }
-    // What a ball holds of its own aspect (nature), kg/m3; it falls apart below MAGIC_FALL_APART of MAGIC_HELD.
+    // What a ball holds of its own aspect (life), kg/m3; it falls apart below MAGIC_FALL_APART of MAGIC_HELD.
     double ballHeld(uint32_t id) const {
         const auto it = held_.find(id);
         return it == held_.end() ? k::MAGIC_HELD : it->second;
@@ -133,8 +174,21 @@ private:
     std::map<uint32_t, double> held_;  // balls' held magic
     std::vector<Rune> runes_;
     uint32_t nextRune_ = 1;
-    dvec3 humanPos_;
-    double humanYaw_ = 0, humanHeld_ = k::MAGIC_HELD;
+    Player player_;
+    PlayerInput input_;
+    double humanHeld_ = k::MAGIC_HELD, humanWater_ = k::HUMAN_WATER, humanNecrotic_ = 0;
+    std::map<uint32_t, double> ballNecrotic_;  // balls' necrotic magic, kg/m3
+    std::vector<Dust> dust_;
+    std::vector<Area> dentAreas_;
+    std::vector<Impact> impacts_;
+    // A thing of pure life magic crumbles: dust where it was, its necrotic magic out into the field.
+    void crumble(const dvec3& at, double radius, double necroticKg);
+    MagicBall gathering_;
+    std::vector<MagicBall> magicBalls_;
+    uint32_t nextMagicBall_ = 1;
+    void stepPlayer();
+    void stepMagicBalls();
+    void burst(MagicBall& b, const dvec3& at);
     std::set<uint32_t> rocks_;         // minerals already rock to the physics
     std::vector<Strike> strikes_;
     struct Burning {

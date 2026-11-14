@@ -25,8 +25,11 @@ struct HumanPush {
     float place[4];  // feet relative to the camera, yaw
     float info[4];   // fill, heartbeat, seconds (wrapped), roughness
     float heart[4];  // xyz, specular
-    float brain[4];
+    float brain[4];  // xyz, w: last frame's bones (offset, as bits)
+    float prevPlace[4];  // last frame's feet relative to last frame's camera, yaw
+    float breath[4];     // where it is in a breath (0..1), its water magic (0..1 of its share), unused, unused
 };
+static_assert(sizeof(HumanPush) <= 128, "push constants");
 
 struct VertexGpu {  // 40 bytes, read by human.hlsl
     float pos[3];
@@ -118,18 +121,19 @@ void HumanRenderer::upload(const HumanMesh& mesh) {
         g.extra = unorm8(v.occlusion) | (v.tangent[3] < 0 ? 256u : 0u);
     }
     vertexCount_ = uint32_t(verts.size());
-    // Ray tracing sees it standing (the rest pose holds its arms out): its shadows fall from its own shape.
+    // Ray tracing sees it as it is posed (rewritten each frame): its shadows fall from its own shape.
     {
         const HumanPose standing = humanIdlePose(0.0);
-        std::vector<float> posed;
-        posed.reserve(mesh.vertices.size() * 3);
+        posedCpu_.clear();
+        posedCpu_.reserve(mesh.vertices.size() * 3);
         for (const HumanVertex& v : mesh.vertices) {
             const fvec3 p = humanSkin(standing, v);
-            posed.insert(posed.end(), {p.x, p.y, p.z});
+            posedCpu_.insert(posedCpu_.end(), {p.x, p.y, p.z});
         }
-        standing_ = device_->createBuffer({posed.size() * 4, rhi::BufferUsage::Storage | rhi::BufferUsage::AccelerationInput,
-                                           rhi::Memory::GpuOnly, "human.standing"}, posed.data());
+        posed_ = device_->createBuffer({posedCpu_.size() * 4, rhi::BufferUsage::Storage | rhi::BufferUsage::AccelerationInput | rhi::BufferUsage::CopyDst,
+                                        rhi::Memory::GpuOnly, "human.posed"}, posedCpu_.data());
     }
+    mesh_ptr_ = &mesh;
     vertices_ = device_->createBuffer({verts.size() * sizeof(VertexGpu), rhi::BufferUsage::Storage | rhi::BufferUsage::AccelerationInput,
                                        rhi::Memory::GpuOnly, "human.vertices"}, verts.data());
     indices_ = device_->createBuffer({mesh.indices.size() * 4, rhi::BufferUsage::Index | rhi::BufferUsage::Storage | rhi::BufferUsage::AccelerationInput,
@@ -147,11 +151,15 @@ void HumanRenderer::upload(const HumanMesh& mesh) {
             if (((mat.flags & kHumanAlpha) != 0) != (pass == 1)) continue;
             pieces_.push_back({s.firstIndex, s.indexCount, albedo[s.material], normal[s.material], mat.flags, mat.roughness, mat.specular});
         }
-    // Its blood vessels for the magic view: a, distance from the heart there; b, the same (negative for a vein).
+    // Its blood vessels for the magic view: a, distance from the heart there; b, the same (negative for a vein). Then
+    // its airways (from the nose), then its two lungs (their middles).
     std::vector<float> vs;
     for (const HumanVessel& v : mesh.vessels)
         vs.insert(vs.end(), {v.a.x, v.a.y, v.a.z, v.fromHeartA, v.b.x, v.b.y, v.b.z, v.artery ? v.fromHeartB : -v.fromHeartB});
     vesselCount_ = uint32_t(mesh.vessels.size());
+    for (const HumanVessel& v : mesh.airways) vs.insert(vs.end(), {v.a.x, v.a.y, v.a.z, v.fromHeartA, v.b.x, v.b.y, v.b.z, v.fromHeartB});
+    airwayCount_ = uint32_t(mesh.airways.size());
+    for (const dvec3& l : mesh.lungs) vs.insert(vs.end(), {float(l.x), float(l.y), float(l.z), 0.f, 0.f, 0.f, 0.f, 0.f});
     if (!vs.empty())
         vessels_ = device_->createBuffer({vs.size() * 4, rhi::BufferUsage::Storage, rhi::Memory::GpuOnly, "human.vessels"}, vs.data());
     heart_[0] = float(mesh.heart.x);
@@ -169,7 +177,7 @@ void HumanRenderer::shutdown() {
     vertices_.reset();
     indices_.reset();
     vessels_.reset();
-    standing_.reset();
+    posed_.reset();
     textures_.clear();
     needMips_.clear();
     pieces_.clear();
@@ -181,14 +189,34 @@ std::vector<rhi::Texture*> HumanRenderer::takeTexturesNeedingMips() {
     return out;
 }
 
-void HumanRenderer::update(const dvec3& feet, double yaw, double held, double seconds, const dvec3& cam, const Frustum& f, bool wait) {
+void HumanRenderer::update(const dvec3& feet, double yaw, double held, double water, const HumanMotion& motion, bool firstPerson, const dvec3& cam,
+                           const Frustum& f, bool wait) {
     if (mesh_.valid() && (wait || mesh_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)) upload(*mesh_.get());
     if (!vertices_) {
         visible_ = nearEnough_ = false;
         return;
     }
-    pose_ = humanIdlePose(seconds);
+    const double seconds = motion.seconds;
+    // Last frame's pose and place, for its own motion on screen.
+    if (havePrev_) {
+        prevPose_ = pose_;
+        std::memcpy(prevPlace_, place_, sizeof prevPlace_);
+    }
+    pose_ = humanPose(motion);
+    // Its ray-traced shape: this pose skinned on the CPU, head included (it still casts its shadow in first person).
+    if (mesh_ptr_ && posedCpu_.size() == mesh_ptr_->vertices.size() * 3) {
+        for (size_t i = 0; i < mesh_ptr_->vertices.size(); ++i) {
+            const fvec3 p = humanSkin(pose_, mesh_ptr_->vertices[i]);
+            posedCpu_[i * 3 + 0] = p.x;
+            posedCpu_[i * 3 + 1] = p.y;
+            posedCpu_[i * 3 + 2] = p.z;
+        }
+        posedDirty_ = true;
+    }
+    if (firstPerson) hideHumanHead(pose_);
     heartbeat_ = humanHeartbeat(seconds);
+    breathPhase_ = float(humanBreathPhase(motion));
+    water_ = float(std::clamp(water, 0.0, 1.0));
     seconds_ = float(std::fmod(seconds, 3600.0));
     const dvec3 rel = feet - cam;
     place_[0] = float(rel.x);
@@ -201,21 +229,32 @@ void HumanRenderer::update(const dvec3& feet, double yaw, double held, double se
     const float c = std::cos(float(yaw)), s = std::sin(float(yaw));
     const float xf[12] = {c, 0, s, place_[0], 0, 1, 0, place_[1], -s, 0, c, place_[2]};
     std::memcpy(transform_, xf, sizeof xf);
+    if (!havePrev_ || prevPose_.size() != pose_.size()) {
+        prevPose_ = pose_;
+        std::memcpy(prevPlace_, place_, sizeof prevPlace_);
+    }
+    havePrev_ = true;
 }
 
 void HumanRenderer::draw(rhi::CommandList* cmd, const rhi::Transient& fc) {
     if (!visible_ || !pipe_ || pose_.empty()) return;
     cmd->beginMarker("human");
-    rhi::Transient bones = device_->allocTransient(pose_.size() * sizeof(HumanBoneMatrix));
-    std::memcpy(bones.cpu, pose_.data(), pose_.size() * sizeof(HumanBoneMatrix));
+    const size_t boneBytes = pose_.size() * sizeof(HumanBoneMatrix);
+    rhi::Transient bones = device_->allocTransient(boneBytes * 2);  // this frame's, then last frame's
+    std::memcpy(bones.cpu, pose_.data(), boneBytes);
+    std::memcpy(static_cast<uint8_t*>(bones.cpu) + boneBytes, prevPose_.data(), boneBytes);
+    float prevBones;
+    const uint32_t prevOffset = uint32_t(bones.offset + boneBytes);
+    std::memcpy(&prevBones, &prevOffset, 4);
     cmd->setIndexBuffer(indices_.get(), 0, rhi::IndexType::U32);
     cmd->setPipeline(pipe_.get());
     cmd->setFrameConstants(fc);
     for (const Piece& p : pieces_) {
         HumanPush push{vertices_->srv(), bones.buffer->srv(), uint32_t(bones.offset), vessels_ ? vessels_->srv() : 0u,
-                       p.albedo, p.normal, p.flags, vessels_ ? vesselCount_ : 0u,
+                       p.albedo, p.normal, p.flags | (vessels_ ? airwayCount_ << 16 : 0u), vessels_ ? vesselCount_ : 0u,
                        {place_[0], place_[1], place_[2], place_[3]}, {held_, float(heartbeat_), seconds_, p.roughness},
-                       {heart_[0], heart_[1], heart_[2], p.specular}, {brain_[0], brain_[1], brain_[2], 0}};
+                       {heart_[0], heart_[1], heart_[2], p.specular}, {brain_[0], brain_[1], brain_[2], prevBones},
+                       {prevPlace_[0], prevPlace_[1], prevPlace_[2], prevPlace_[3]}, {breathPhase_, water_, 0, 0}};
         cmd->pushConstants(&push, sizeof push);
         cmd->drawIndexed(p.indexCount, 1, p.firstIndex);
     }
@@ -223,17 +262,27 @@ void HumanRenderer::draw(rhi::CommandList* cmd, const rhi::Transient& fc) {
 }
 
 void HumanRenderer::buildStructures(rhi::CommandList* cmd) {
-    if (blas_ || !device_->rayTracingSupported() || !standing_) return;
-    cmd->barrier(standing_.get(), rhi::State::ShaderRead);
+    if (!device_->rayTracingSupported() || !posed_ || !nearEnough_) return;
+    if (posedDirty_) {  // this frame's posed shape
+        const uint64_t bytes = posedCpu_.size() * 4;
+        rhi::Transient tr = device_->allocTransient(bytes);
+        if (tr.buffer) {
+            std::memcpy(tr.cpu, posedCpu_.data(), bytes);
+            cmd->barrier(posed_.get(), rhi::State::CopyDst);
+            cmd->copyBuffer(posed_.get(), 0, tr.buffer, tr.offset, bytes);
+        }
+        posedDirty_ = false;
+    }
+    cmd->barrier(posed_.get(), rhi::State::ShaderRead);
     cmd->barrier(indices_.get(), rhi::State::ShaderRead);
     rhi::BlasDesc desc;
     for (const Piece& p : pieces_)
         if (!(p.flags & kHumanAlpha))
-            desc.geometries.push_back({standing_.get(), 0, 12, vertexCount_, indices_.get(), uint64_t(p.firstIndex) * 4,
+            desc.geometries.push_back({posed_.get(), 0, 12, vertexCount_, indices_.get(), uint64_t(p.firstIndex) * 4,
                                        p.indexCount, rhi::IndexType::U32, true});
     if (desc.geometries.empty()) return;
     desc.name = "human.blas";
-    blas_ = device_->createBlas(desc);
+    if (!blas_) blas_ = device_->createBlas(desc);
     if (blas_) cmd->buildBlas(blas_.get(), desc);
 }
 

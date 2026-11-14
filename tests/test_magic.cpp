@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include "taelia/shared_constants.h"
@@ -13,12 +14,12 @@ using namespace taelia;
 
 TEST(magic_thresholds_come_from_the_motes) {
     const double th = magic::theta0();
-    for (const Aspect a : {Aspect::Earth, Aspect::Water, Aspect::Nature, Aspect::Fire, Aspect::Air, Aspect::Light}) {
+    for (const Aspect a : {Aspect::Earth, Aspect::Water, Aspect::Life, Aspect::Fire, Aspect::Air, Aspect::Light}) {
         const double rho = magic::showThreshold(a);
         CHECK_NEAR(magic::numberDensity(a, rho) * magic::excludedVolume(a), 1.0 / 3.0, 1e-6);  // condensation
     }
-    // Inertia and pace: lighter motes move faster and even out sooner (light, air, fire, nature, water, earth).
-    const Aspect order[6] = {Aspect::Light, Aspect::Air, Aspect::Fire, Aspect::Nature, Aspect::Water, Aspect::Earth};
+    // Inertia and pace: lighter motes move faster and even out sooner (light, air, fire, life, water, earth).
+    const Aspect order[6] = {Aspect::Light, Aspect::Air, Aspect::Fire, Aspect::Life, Aspect::Water, Aspect::Earth};
     const double nTot = 1.0 / 4e-6;
     for (int i = 0; i + 1 < 6; ++i) {
         CHECK(magic::moteSpeed(order[i], th) > magic::moteSpeed(order[i + 1], th));
@@ -64,14 +65,14 @@ TEST(the_baseline_holds_earth_low_water_by_ponds_and_free_magic_everywhere) {
         CHECK(land.at({pond->cx, pond->level + 0.2, pond->cz})[Aspect::Water] > 1.5);
         CHECK(land.at({pond->cx, pond->level - 0.3, pond->cz})[Aspect::Water] > 2.0);  // in the water
     }
-    // Some meadow near the spawn holds a little nature magic low down; never much.
-    double nature = 0;
+    // Some meadow near the spawn holds a little life magic low down; never much.
+    double life = 0;
     for (int i = 0; i < 400; ++i) {
         const double x = (i % 20) * 9.0 - 90.0, z = (i / 20) * 9.0 - 90.0;
-        nature = std::max(nature, double(land.at({x, terrain.height(x, z) + 0.3, z})[Aspect::Nature]));
+        life = std::max(life, double(land.at({x, terrain.height(x, z) + 0.3, z})[Aspect::Life]));
     }
-    CHECK(nature > 0.05);
-    CHECK(nature < 1.0);
+    CHECK(life > 0.05);
+    CHECK(life < 1.0);
 }
 
 namespace {
@@ -194,21 +195,112 @@ TEST(light_drops_fall_by_day_and_turn_back_to_neutral) {
     CHECK(f.minDensity() >= 0.0);
 }
 
-TEST(nature_drinks_water_magic) {
+TEST(life_drinks_water_magic) {
     MagicField f(nullptr, nullptr, box(2));
     f.setFocus({0, 1, 0});
     f.step(2);
     const dvec3 at{1, 3, 1};
-    f.addDensity(at, Aspect::Nature, 6.0);
+    f.addDensity(at, Aspect::Life, 6.0);
     f.addDensity(at, Aspect::Water, 6.0);
-    const double water0 = f.totalMass(Aspect::Water), nature0 = f.totalMass(Aspect::Nature);
+    const double water0 = f.totalMass(Aspect::Water), life0 = f.totalMass(Aspect::Life);
     double all0 = 0, all1 = 0;
     for (int a = 0; a < kAspects; ++a) all0 += f.totalMass(Aspect(a));
     for (int64_t s = 3; s < 1200; ++s) f.step(s);
     for (int a = 0; a < kAspects; ++a) all1 += f.totalMass(Aspect(a));
     CHECK(f.totalMass(Aspect::Water) < water0);
-    CHECK(f.totalMass(Aspect::Nature) > nature0);
+    CHECK(f.totalMass(Aspect::Life) > life0);
     CHECK_NEAR(all1, all0, 1e-3 * all0);
+}
+
+// The same density of an aspect in every cell of a test box (nothing moves: only the local rules act).
+static void fillBox(MagicField& f, Aspect a, double rho) {
+    const MagicLevelView v = f.view(0);
+    for (int j = 0; j < v.columns; ++j)
+        for (int i = 0; i < v.columns; ++i) {
+            const int64_t X = v.originX + i, Z = v.originZ + j;
+            const int slot = int(((Z % v.columns) + v.columns) % v.columns) * v.columns + int(((X % v.columns) + v.columns) % v.columns);
+            for (int k = 0; k < v.layers; ++k)
+                f.addDensity({(double(X) + 0.5) * v.dx, (double(v.columnBase[slot] + k) + 0.5) * v.dy, (double(Z) + 0.5) * v.dx}, a, rho);
+        }
+}
+
+static double boxTotal(const MagicField& f) {
+    double all = 0;
+    for (int a = 0; a < kAspects; ++a) all += f.totalMass(Aspect(a));
+    return all;
+}
+
+TEST(necrotic_magic_is_the_ninth_aspect_heavier_than_life) {
+    CHECK(kAspects == 9);
+    CHECK(std::string(aspectName(Aspect::Life)) == "life");
+    CHECK(std::string(aspectName(Aspect::Necrotic)) == "necrotic");
+    CHECK(magic::moteMass(Aspect::Necrotic) > magic::moteMass(Aspect::Life));
+    CHECK(magic::moteMass(Aspect::Necrotic) < magic::moteMass(Aspect::Water));
+    CHECK(magic::showThreshold(Aspect::Necrotic) > 0.0);  // sets its size; it never condenses
+    // A living thing among it slowly loses its life magic: e^(-ABSORB * necrotic * t).
+    CHECK_NEAR(magic::lifeLeft(3.0, 10.0, 600.0), 3.0 * std::exp(-double(k::MAGIC_NECROTIC_ABSORB) * 10.0 * 600.0), 1e-9);
+    CHECK(magic::lifeLeft(3.0, 0.0, 600.0) == 3.0);
+}
+
+TEST(necrotic_magic_slowly_absorbs_life_magic_and_grows_by_it) {
+    MagicField f(nullptr, nullptr, box(2));
+    f.setFocus({0, 1, 0});
+    f.step(2);
+    fillBox(f, Aspect::Life, 1.0);       // fed everywhere: past MAGIC_NECROTIC_FED, so it does not fade
+    fillBox(f, Aspect::Necrotic, 10.0);
+    const double life0 = f.totalMass(Aspect::Life), necrotic0 = f.totalMass(Aspect::Necrotic), all0 = boxTotal(f);
+    for (int64_t s = 3; s < 3 + 60 * 60; ++s) f.step(s);  // a minute
+    const double taken = life0 - f.totalMass(Aspect::Life);
+    // Very slowly: about 3% of the life magic a minute at 10 kg/m3 (dL/dt = -ABSORB N L); it grows by only 0.7 of it.
+    const double expected = life0 * (1.0 - std::exp(-double(k::MAGIC_NECROTIC_ABSORB) * 10.0 * 60.0));
+    CHECK_NEAR(taken, expected, 0.05 * expected);
+    CHECK_NEAR(f.totalMass(Aspect::Necrotic) - necrotic0, double(k::MAGIC_NECROTIC_GAIN) * taken, 0.02 * taken);
+    CHECK_NEAR(boxTotal(f), all0, 1e-4 * all0);
+}
+
+TEST(necrotic_magic_fades_without_life_and_the_things_round_it_take_its_tint) {
+    MagicField f(nullptr, nullptr, box(2));
+    f.setFocus({0, 1, 0});
+    f.step(2);
+    fillBox(f, Aspect::Necrotic, 10.0);  // a bare box: no life magic to feed on
+    const double necrotic0 = f.totalMass(Aspect::Necrotic), neutral0 = f.totalMass(Aspect::Neutral), all0 = boxTotal(f);
+    const dvec3 middle{1, 5, 1};
+    CHECK(f.sample(middle).necroticHeld < 0.01);  // things hold none of it yet
+    for (int64_t s = 3; s < 3 + 600 * 60; ++s) f.step(s);  // ten minutes
+    const double kept = std::exp(-600.0 / double(k::MAGIC_NECROTIC_FADE_TAU));
+    CHECK_NEAR(f.totalMass(Aspect::Necrotic), necrotic0 * kept, 0.01 * necrotic0);         // very slowly, into neutral
+    CHECK_NEAR(f.totalMass(Aspect::Neutral) - neutral0, necrotic0 * (1.0 - kept), 0.01 * necrotic0);
+    CHECK_NEAR(boxTotal(f), all0, 1e-4 * all0);
+    // What the things hold evens out with it over MAGIC_HELD_TAU: about 1 - 1/e of the way after as long.
+    const double held = f.sample(middle).necroticHeld, gas = f.sample(middle).rho[Aspect::Necrotic];
+    CHECK(held > 0.5 * gas);
+    CHECK(held < 0.75 * gas);
+}
+
+// A thing of pure life magic among necrotic magic: the necrotic magic it takes up eats its life (growing by 0.7 of
+// it); in dense necrotic magic it falls apart (crumbles to dust in the world), in a little it holds on.
+static int secondsToCrumble(double around, double& necroticHeld) {
+    double life = k::MAGIC_HELD, necrotic = 0;
+    int seconds = 0;
+    while (!magic::fallsApart(life) && seconds < 4 * 3600) {
+        life = magic::heldAfter(life, around + 1.0, 1.0);
+        necrotic = magic::heldToward(necrotic, around, 1.0);
+        const double eaten = life - magic::lifeLeft(life, necrotic, 1.0);
+        life -= eaten;
+        necrotic += k::MAGIC_NECROTIC_GAIN * eaten;
+        ++seconds;
+    }
+    necroticHeld = necrotic;
+    return seconds;
+}
+
+TEST(a_thing_of_pure_life_magic_crumbles_in_dense_necrotic_magic_and_holds_on_in_thin) {
+    double held = 0;
+    const int dense = secondsToCrumble(3000.0, held);
+    CHECK(dense < 4 * 3600);  // it crumbles ...
+    CHECK(dense > 60);        // ... not at once
+    CHECK(held > 300.0);      // and what it took up goes out into the field
+    CHECK(secondsToCrumble(5.0, held) >= 4 * 3600);  // a little necrotic magic only wears it down
 }
 
 TEST(things_hold_their_magic_in_ordinary_places_and_fall_apart_in_a_void) {
@@ -398,3 +490,4 @@ TEST(fire_past_the_dew_point_makes_steam_over_water_and_sets_plants_burning) {
     CHECK(w.burntTrees().count(key) == 1);
     CHECK(w.magic().minDensity() >= 0.0);
 }
+

@@ -6,6 +6,7 @@
 
 #include "render/ball_renderer.h"
 #include "render/human_renderer.h"
+#include "render/magic_ball_renderer.h"
 #include "render/manifest_renderer.h"
 #include "render/imgui_renderer.h"
 #include "render/terrain_renderer.h"
@@ -26,6 +27,11 @@ namespace taelia {
 struct RenderSpot {
     dvec3 position;
     double strength = 0;
+};
+
+// An area of ground whose shape changed (a crater): x0, z0 .. x1, z1 (m).
+struct RenderRect {
+    double x0 = 0, z0 = 0, x1 = 0, z1 = 0;
 };
 
 struct RenderView {
@@ -53,9 +59,14 @@ struct RenderView {
     std::vector<RenderSpot> burning;   // trees on fire: their base, flame strength like the campfire's
     std::vector<RenderSpot> scorches;  // grass burnt away: the circle's centre on the ground, its radius (m)
     TreeCharring charring;             // the trees fire has reached, and how far each has burnt
-    bool human = false;                // the human (World::humanPosition): its feet, which way it faces, its magic (0..1)
+    bool human = false;                // the human, the player: its feet, which way it faces, its magic (0..1), its motion
     dvec3 humanFeet;
-    double humanYaw = 0, humanHeld = 1;
+    double humanYaw = 0, humanHeld = 1, humanWater = 1;  // its life and water magic (0..1 of their shares)
+    HumanMotion humanMotion;
+    bool humanFirstPerson = false;     // the eye is in its head: the head is not drawn
+    std::vector<RenderMagicBall> magicBalls;  // gathering between its hands and flying
+    std::vector<RenderDust> dust;             // things of pure life magic crumbling to dust
+    std::vector<RenderRect> dentAreas;        // ground reshaped since the last frame (its tiles are made again)
 };
 
 class Renderer {
@@ -89,6 +100,7 @@ private:
     BallRenderer balls_;
     HumanRenderer human_;
     ManifestRenderer manifest_;
+    MagicBallRenderer magicBalls_;
     AtmosphereRenderer atmosphere_;
     CloudRenderer cloudRenderer_;
     MagicRenderer magic_;

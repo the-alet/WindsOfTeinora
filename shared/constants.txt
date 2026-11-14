@@ -74,27 +74,29 @@ PHYSICS_SUBSTEPS            int     2           # PhysX steps per simulation ste
 WIND_REFERENCE_HEIGHT       float   10.0        # m: the set wind is measured this high above the ground
 
 # ---- magic (step 5): a weightless gas of motes, kinetic theory in SI units (SPEC.md, Magic; .local/step5_design.json)
-# Aspect order everywhere: earth water nature fire air lightning light neutral. Mote masses in MAGIC_MU.
+# Aspect order everywhere: earth water life fire air lightning light neutral necrotic. Mote masses in MAGIC_MU.
 MAGIC_MU                    double  1e-6        # kg: the unit of mote mass
 MAGIC_MASS_EARTH            float   1024.0      # mote mass, MAGIC_MU: earth heaviest ...
 MAGIC_MASS_WATER            float   256.0
-MAGIC_MASS_NATURE           float   64.0
+MAGIC_MASS_LIFE           float   64.0
 MAGIC_MASS_FIRE             float   16.0
 MAGIC_MASS_AIR              float   4.0
 MAGIC_MASS_LIGHTNING        float   12.0        # > 9.8 so 675 of fire turned to lightning stays under the light threshold
 MAGIC_MASS_LIGHT            float   1.0         # ... light lightest
 MAGIC_MASS_NEUTRAL          float   4.0         # like air
+MAGIC_MASS_NECROTIC         float   128.0       # heavier than life magic: it creeps
 MAGIC_THETA0                double  8.533333333333333e-5  # J: ambient magic temperature 256 mu/3 (v = 16/sqrt(m/mu) m/s)
 MAGIC_FIRE_BIRTH_THETA      float   3.0         # fire magic is born at this many THETA0
 MAGIC_GAMMA                 float   1.6666667   # monatomic: speed of sound sqrt(gamma Theta/m)
 # Manifestation thresholds (kg/m3, own aspect). Mote diameters follow from n*b = 1/3 here (van der Waals b = 2/3 pi d^3).
 MAGIC_SHOW_EARTH            float   50.0
 MAGIC_SHOW_WATER            float   40.0
-MAGIC_SHOW_NATURE           float   38.0
+MAGIC_SHOW_LIFE           float   38.0
 MAGIC_SHOW_FIRE             float   45.0
 MAGIC_SHOW_AIR              float   35.0
 MAGIC_SHOW_LIGHTNING        float   40.0        # only sets its diameter: lightning does not condense
 MAGIC_SHOW_LIGHT            float   40.0
+MAGIC_SHOW_NECROTIC         float   40.0        # only sets its diameter: necrotic magic does not condense
 MAGIC_DEW_POINT             float   30.0        # total density: magic becomes visible, bends light
 MAGIC_EFFECT_THRESHOLD      float   50.0        # total density: direct force on things only above this
 MAGIC_D_MAX                 float   2.0         # m2/s: collisions with the air's molecules cap diffusion in thin magic
@@ -142,27 +144,28 @@ MAGIC_EARTH_GROUND          float   2.5         # kg/m3 at the ground, times 0.9
 MAGIC_EARTH_SCALE           float   1.5         # m
 MAGIC_WATER_NEAR            float   2.5         # kg/m3 at a pond's surface (and inside the water)
 MAGIC_WATER_SCALE           float   1.5         # m
-MAGIC_NATURE_MEADOW         float   0.4         # kg/m3 times the meadow
-MAGIC_NATURE_SCALE          float   3.0         # m
-MAGIC_NATURE_CROWN          float   0.4         # kg/m3 inside a tree crown
+MAGIC_LIFE_MEADOW         float   0.4         # kg/m3 times the meadow
+MAGIC_LIFE_SCALE          float   3.0         # m
+MAGIC_LIFE_CROWN          float   0.4         # kg/m3 inside a tree crown
 MAGIC_FREE_TOP0             float   1800.0      # m: free magic tapers to 0 between these heights
 MAGIC_FREE_TOP1             float   2200.0
 MAGIC_TAKE_TAU_EARTH        float   20.0        # s: neutral takes an aspect toward its baseline (and gives it back above)
 MAGIC_TAKE_TAU_WATER        float   20.0
-MAGIC_TAKE_TAU_NATURE       float   60.0
+MAGIC_TAKE_TAU_LIFE       float   60.0
 MAGIC_TAKE_TAU_AIR          float   10.0
 
 # ---- the magic view (step 5c): SPEC "Aspects and colours" (linear rgb)
 MAGIC_COLOR_EARTH           float3  0.45,0.25,0.10  # brown
 MAGIC_COLOR_WATER           float3  0.30,0.62,1.00  # light blue ...
 MAGIC_COLOR_WATER_DEEP      float3  0.04,0.14,0.62  # ... to deep blue as it thickens
-MAGIC_COLOR_NATURE          float3  0.06,0.32,0.09  # dark green
+MAGIC_COLOR_LIFE          float3  0.06,0.32,0.09  # dark green
 MAGIC_COLOR_FIRE            float3  1.00,0.42,0.06  # orange
 MAGIC_COLOR_AIR             float3  0.22,0.85,0.68  # green-turquoise
 MAGIC_COLOR_LIGHTNING       float3  0.55,0.20,1.00  # violet
 MAGIC_COLOR_LIGHT           float3  1.00,1.00,1.00  # white
 MAGIC_COLOR_NEUTRAL         float3  0.30,0.30,0.32  # no colour of its own: a faint grey
-MAGIC_VIEW_REACH            float   100.0       # m: the magic view reaches this far
+MAGIC_COLOR_NECROTIC        float3  0.36,0.29,0.46  # grey-violet (the user)
+MAGIC_VIEW_REACH            float   250.0       # m: the magic view reaches this far (the user: farther than the first 100)
 MAGIC_VIEW_LAYERS           int     32          # layers of each uploaded window (absolute heights around the camera)
 MAGIC_VIEW_DIM              float   0.15        # the world goes grey and dim
 MAGIC_VIEW_EXPOSURE         float   1.0         # fixed: magic glows the same by day and by night
@@ -174,10 +177,11 @@ MAGIC_MOTES                 float   0.5         # how bright the motes glinting 
 MAGIC_STREAM_SPACING        float   1.8         # m between the pulses streaming through a thing
 MAGIC_STREAM_EARTH          float   0.35        # m/s: magic streams through earth slowest ...
 MAGIC_STREAM_WATER          float   0.7         # ... water
-MAGIC_STREAM_NATURE         float   1.0         # ... nature
+MAGIC_STREAM_LIFE         float   1.0         # ... life
 MAGIC_STREAM_FIRE           float   1.8         # ... fire (lightning too)
 MAGIC_STREAM_AIR            float   2.6         # ... air
 MAGIC_STREAM_LIGHT          float   4.0         # ... light fastest (the lighter the motes, the faster)
+MAGIC_STREAM_NECROTIC       float   0.85        # necrotic: between water and life, as its motes are
 MAGIC_GLOW_SCALE            float   4.0         # in the magic view the albedo target holds a surface's own glow at 1/this
 MAGIC_BLOOM                 float   0.3         # the magic view's soft halo round bright magic
 
@@ -194,34 +198,46 @@ CAMPFIRE_FEED               float   0.01        # 1/s: the wind feeds a fire who
 CAMPFIRE_DIE_TAU            float   120.0       # s: a fire the air magic outweighs dies down
 CAMPFIRE_MAX                float   1.5         # the strongest a fed fire burns (1: as it starts)
 
-# ---- light drops, nature, objects holding magic (step 5e)
+# ---- light drops, life, objects holding magic (step 5e)
 MAGIC_DROPS                 float   3.0         # drops per second from each sun at full light (fewer through cloud, none in eclipse)
 MAGIC_PLANET_REFLECT        float   0.05        # the planet sends back this share of the drops that hit it
 MAGIC_DROP_PATH             float   300.0       # m: a drop's mean free path in ambient magic (shorter in denser)
 MAGIC_DROP_LIGHT            float   0.4         # kg/m3 of light magic a drop leaves where it stops
 MAGIC_DROP_KICK             float   0.6         # m/s: the eddy it stirs (a small vortex around its path)
-MAGIC_DROP_GROWTH           float   0.2         # kg/m3: nature magic a drop makes grow where nature absorbs it
+MAGIC_DROP_GROWTH           float   0.2         # kg/m3: life magic a drop makes grow where life absorbs it
 MAGIC_TAKE_TAU_LIGHT        float   3.0         # s: light magic turns back to neutral
-MAGIC_NATURE_DRINK          float   0.002       # 1/(kg/m3 s): nature absorbs water magic at this * nature * water
+MAGIC_LIFE_DRINK          float   0.002       # 1/(kg/m3 s): life absorbs water magic at this * life * water
 MAGIC_HELD                  float   3.0         # kg/m3 of its own aspect every object holds
 HUMAN_HEIGHT                float   1.75        # m: the human, to the top of the hair
 HUMAN_RADIUS                float   0.22        # m: its capsule for balls
-HUMAN_SPOT                  float3  -2.2,0.0,5.0  # where it stands, from the spawn point (m), facing it
 HUMAN_BREATH_SECONDS        float   4.6         # s: one slow breath
 HUMAN_HEART_RADIUS          float   0.045       # m: how far round it the life magic thins by 1/e
 HUMAN_BRAIN_RADII           float3  0.058,0.048,0.072  # m: likewise round the brain (wide, tall, deep)
-HUMAN_HEART_MAGIC           float   12.0        # kg/m3 of life (nature) magic in the heart at its full share (a first number)
+HUMAN_HEART_MAGIC           float   12.0        # kg/m3 of life magic in the heart at its full share (a first number)
 HUMAN_BRAIN_MAGIC           float   9.0         # kg/m3 in the brain
 HUMAN_HEARTBEAT_SECONDS     float   0.95        # s: one beat (two close knocks)
 HUMAN_PULSE_SPEED           float   1.6         # m/s: how fast each heartbeat's pulse runs out along the arteries (the magic view)
+HUMAN_WATER                 float   2.0         # kg/m3 of water magic the human holds at its share (the user: it is mostly water)
+PLANT_WATER                 float   1.5         # kg/m3 of water magic in a plant's sap (the magic view: blue streams up it)
+HUMAN_LUNG_RADII            float3  0.075,0.13,0.085  # m: each lung (wide, tall, deep), either side of the heart
+HUMAN_AIR_SPEED             float   0.9         # m/s: air magic streaming down the airways at the height of a breath
 HUMAN_BLOOD_SPEED           float   0.35        # m/s: how fast the life magic streams through the arteries (half that back through the veins)
 MAGIC_HELD_TAU              float   600.0       # s: what it holds evens out with the magic around it
 MAGIC_FALL_APART            float   0.05        # below this share of what it should hold, it falls apart
 
+# ---- necrotic magic (the user): grey-violet; it slowly absorbs life magic, mixes with the other aspects, tints the
+# things that hold it by how much they hold, and with no life magic to feed on it slowly fades
+MAGIC_NECROTIC_ABSORB       float   0.00005     # 1/(kg/m3 s): it takes life magic at this * necrotic * life ...
+MAGIC_NECROTIC_GAIN         float   0.7         # ... and grows by only this share of it (the user); the rest goes back to neutral
+MAGIC_NECROTIC_FADE_TAU     float   3600.0      # s: with no life magic to feed on it fades into neutral this slowly
+MAGIC_NECROTIC_FED          float   0.05        # kg/m3 of life magic round it from which it is fed and does not fade
+MAGIC_DUST_SECONDS          float   3.0         # s: a thing of pure life magic its necrotic magic ate crumbles away as dust
+MAGIC_NECROTIC_TINT         float   0.5         # kg/m3: a thing holding this much shows half the tint (no natural source: any shows)
+
 # ---- condensation and manifestations (step 5f)
 MAGIC_CONDENSE_TAU          float   0.1         # s: the excess past an aspect's threshold condenses (fast, like dew)
 MAGIC_EVAPORATE_TAU         float   2.0         # s: its manifestation evaporates back when the surroundings thin
-MAGIC_SPAWN_KG              float   40.0        # kg of earth (nature) condensate in a cell grows a mineral (a sprout) that stays
+MAGIC_SPAWN_KG              float   40.0        # kg of earth (life) condensate in a cell grows a mineral (a sprout) that stays
 MAGIC_MINERAL_VOLUME        float   0.12        # m3: one mineral cluster
 MAGIC_SPROUT_VOLUME         float   0.04        # m3: one sprout
 MAGIC_FIREFLY_MERGE         int     10          # fireflies together merge into a big one ...
@@ -256,3 +272,60 @@ RUNE_BREAK                  float   1.5         # it bursts past this x its seal
 RUNE_INTAKE                 float   0.5         # 1/s: kg drawn in per second per m3 of rune per kg/m3 past the dew point
 RUNE_INTAKE_CAP_M3          float   8.0         # m3: never more per step than the field holds past the dew point in a fine cell
 RUNE_LEAK_AREA              float   0.005       # m2: how wide its seal lets the excess through (effusion)
+
+# ---- the player (the user: the human is the player; the camera rides it)
+PLAYER_SPEED                float   4.2         # m/s on foot (a run)
+PLAYER_CROUCH_SPEED         float   1.6         # m/s crouched
+PLAYER_WADE                 float   0.55        # in water past its knees it moves at this share
+PLAYER_ACCEL                float   12.0        # 1/s: on the ground its speed eases to what the keys ask this fast
+PLAYER_AIR_ACCEL            float   2.0         # 1/s: in the air it steers a little
+PLAYER_JUMP_SPEED           float   5.0         # m/s up: a jump about 1.3 m high
+PLAYER_DASH_SPEED           float   13.0        # m/s: a dash (Shift) ...
+PLAYER_DASH_SECONDS         float   0.22        # ... lasts this long ...
+PLAYER_DASH_COOLDOWN        float   0.6         # ... and comes again after this long
+PLAYER_SWIM_SPEED           float   1.6         # m/s
+PLAYER_SWIM_DEPTH           float   1.3         # m of water from which it swims (up to its chest)
+PLAYER_FLY_SPEED            float   9.0         # m/s in flight (F)
+PLAYER_FLY_ACCEL            float   2.5         # 1/s: flight eases to its speed and to a stop
+PLAYER_RADIUS               float   0.3         # m: its body against trunks
+PLAYER_TURN_RATE            float   9.0         # 1/s: its body turns toward where it goes
+PLAYER_CROUCH_DROP          float   0.40        # m its hips drop crouching
+PLAYER_CAMERA_DISTANCE      float   3.0         # m behind its head (third person) ...
+PLAYER_CAMERA_SIDE          float   0.45        # ... over its right shoulder ...
+PLAYER_CAMERA_RISE          float   0.15        # ... and a little above it
+
+# ---- the magic ball (the user): number keys choose the aspect; LMB gathers it and neutral magic round the hands
+MAGIC_BALL_FULL             float   240.0       # kg: a full ball (bursting, it puts a fine cell past the dew point)
+MAGIC_BALL_REACH            float   8.0         # m round the hands it gathers from (more from nearer)
+MAGIC_BALL_DRAW             float   1.0         # 1/s: the share of its aspect within reach it draws ...
+MAGIC_BALL_NEUTRAL          float   0.3         # ... neutral magic this times as fast (it must take the aspect: slower)
+MAGIC_BALL_RADIUS           float   0.12        # m: a full ball between the hands
+MAGIC_BALL_SPEED            float   18.0        # m/s thrown; weightless, it flies straight ...
+MAGIC_BALL_RANGE            float   80.0        # ... and bursts where it hits something, or this far out
+MAGIC_BALL_MIN              float   1.0         # kg: less is let go where it is (a click)
+
+# ---- the ground's insides (the user: about 10 m of it) and things deforming where they hit (by their properties)
+TERRAIN_INTERIOR            float   10.0        # m of ground under the surface that can be dug into (bedrock below)
+TERRAIN_EDIT_CELL           float   0.0625      # m: the grid dents and craters are kept on
+TERRAIN_TOPSOIL             float   0.3         # m: dark topsoil ...
+TERRAIN_SUBSOIL             float   1.5         # ... clay down to here ...
+TERRAIN_GRAVEL              float   4.0         # ... sand and gravel down to here, then weathered rock down to the bedrock
+HARDNESS_TOPSOIL            float   200000.0    # Pa: the pressure each yields under (a dent's volume = energy / this)
+HARDNESS_SUBSOIL            float   500000.0
+HARDNESS_GRAVEL             float   1500000.0
+HARDNESS_ROCK               float   30000000.0
+HARDNESS_SAND               float   60000.0
+HARDNESS_MUD                float   30000.0
+HARDNESS_BEDROCK            float   300000000.0
+STRATUM_TOPSOIL             float3  0.10,0.07,0.045   # colours of what a dent lays bare (linear rgb)
+STRATUM_SUBSOIL             float3  0.36,0.24,0.13
+STRATUM_GRAVEL              float3  0.42,0.38,0.31
+STRATUM_ROCK                float3  0.34,0.33,0.31
+STRATUM_SAND                float3  0.55,0.48,0.36
+STRATUM_MUD                 float3  0.10,0.08,0.06
+IMPACT_PLASTIC              float   0.6         # of the energy a hit loses into the ground, this share pushes it aside
+HUMAN_MASS                  float   75.0        # kg
+LANDING_PLASTIC             float   0.12        # landing, the legs take most of it; this share goes into the ground
+BALL_SQUASH                 float   0.012       # a ball squashes this share of its radius per m/s it hits at ...
+BALL_SQUASH_MAX             float   0.3         # ... at most ...
+BALL_SQUASH_TAU             float   0.035       # ... and springs back this fast (s)

@@ -1,6 +1,6 @@
 // The analytic baseline of magic: what the land, the water and the plants hold the gas at when nothing stirs it
 // (.local/step5_design.json, "sources_sinks"). The field's taking rule pulls toward it and new bricks are filled from
-// it; it is never a hidden sink. Earth near the ground, water near and in ponds, nature by meadows and in tree crowns,
+// it; it is never a hidden sink. Earth near the ground, water near and in ponds, life by meadows and in tree crowns,
 // free magic (half air, half neutral) everywhere up to about 2 km.
 #pragma once
 #include <vector>

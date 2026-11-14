@@ -40,6 +40,18 @@ struct LaunchFlags {
     std::optional<int> latency;        // --reflex=off|on|boost
     std::string menu;                  // --menu=graphics|controls|world: open a menu (to check it in a frame)
     std::optional<double> gazeX, gazeY;  // --gaze=x,y: the eye's focus on screen, ndc -1..1 (to check the blur)
+    // The player (checks): --camera keeps the free camera; otherwise the camera rides the player.
+    struct PlayerPlace {
+        double x = 0, z = 0, yawDeg = 0;
+    };
+    std::optional<PlayerPlace> player;  // --player=x,z,yaw: stand it there (on the ground, or swimming in deep water)
+    struct Orbit {
+        double yawDeg = 0, pitchDeg = 0, distance = 3;
+    };
+    std::optional<Orbit> playerCamera;  // --player-camera=yaw,pitch,dist: look at it from round it (yaw from its facing)
+    bool firstPerson = false;           // --first-person: from its own eyes
+    std::string act;                    // --act=run|crouch|crouchrun|jump|dash|swim|tread|fly|hover|gather|throw|land
+    int aspect = 3;                     // --aspect=fire: the magic ball's aspect (gather, throw)
 
     bool automated() const { return frames > 0; }
 };

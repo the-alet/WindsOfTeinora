@@ -31,12 +31,10 @@ World::World(const WorldDesc& d)
         u = s.u;
         air = s.level >= 0 && rho > 1e-6 ? s.rho[Aspect::Air] / rho : 0.0;  // only where the field runs
     });
-    // The human stands near the spawn point, facing it; a ball bounces off its capsule.
-    const dvec3 spawn{k::CAMERA_SPAWN[0], 0.0, k::CAMERA_SPAWN[2]};
-    humanPos_ = {spawn.x + k::HUMAN_SPOT[0], 0.0, spawn.z + k::HUMAN_SPOT[2]};
-    humanPos_.y = terrain_.height(humanPos_.x, humanPos_.z);
-    humanYaw_ = std::atan2(spawn.x - humanPos_.x, spawn.z - humanPos_.z);
-    physics_->addCapsule(1, humanPos_ + dvec3{0, 0.5 * k::HUMAN_HEIGHT, 0}, k::HUMAN_RADIUS, 0.5 * k::HUMAN_HEIGHT - k::HUMAN_RADIUS);
+    // The human, the player (the user), stands at the spawn point looking along +z; a ball bounces off its capsule.
+    player_.position = {k::CAMERA_SPAWN[0], 0.0, k::CAMERA_SPAWN[2]};
+    player_.position.y = terrain_.height(player_.position.x, player_.position.z);
+    physics_->addCapsule(1, player_.position + dvec3{0, 0.5 * k::HUMAN_HEIGHT, 0}, k::HUMAN_RADIUS, 0.5 * k::HUMAN_HEIGHT - k::HUMAN_RADIUS);
 }
 
 World::~World() = default;
@@ -54,7 +52,12 @@ void World::step() {
     clouds_.step(WorldClock::stepSeconds(), wind(), clock_.seconds());
     wind_.setMean(wind());
     wind_.step(WorldClock::stepSeconds());
+    stepPlayer();
     physics_->step(WorldClock::stepSeconds(), clock_.seconds());
+    // Hits dent the ground (the user): IMPACT_PLASTIC of the energy each lost into it pushes it aside.
+    impacts_.clear();
+    physics_->takeImpacts(impacts_);
+    for (const Impact& im : impacts_) dentGround(im.point, im.energy * k::IMPACT_PLASTIC, im.radius);
     // The campfire: the wind feeds it while its fire magic outweighs the air magic at its bed; else it dies down.
     const dvec3 core = campfireCore();
     if (magic_->started()) {
@@ -100,28 +103,70 @@ void World::step() {
     burnPlants();
     // Runes: what they draw in, what leaks over their seals; the burst ones are gone.
     for (Rune& r : runes_) stepRune(r, *magic_, WorldClock::stepSeconds());
+    stepMagicBalls();
     std::erase_if(runes_, [](const Rune& r) { return r.broken; });
-    // What each ball holds evens out with the magic around it; in a void it falls apart.
+    // What each ball holds evens out with the magic around it; in a void it falls apart. A ball is pure life magic:
+    // necrotic magic it takes up eats its life (growing by MAGIC_NECROTIC_GAIN of it), and when it falls apart it
+    // crumbles to dust, its necrotic magic going out into the field.
     {
+        const double dt = WorldClock::stepSeconds();
         std::vector<uint32_t> gone;
-        std::map<uint32_t, double> kept;
+        std::map<uint32_t, double> kept, keptNecrotic;
         for (const Ball& b : physics_->balls()) {
             const auto it = held_.find(b.id);
             double held = it == held_.end() ? double(k::MAGIC_HELD) : it->second;
-            held = magic::heldAfter(held, magic_->sample(b.position).rho.total(), WorldClock::stepSeconds());
-            if (magic::fallsApart(held)) gone.push_back(b.id);
-            else kept[b.id] = held;
+            const auto nt = ballNecrotic_.find(b.id);
+            double necrotic = nt == ballNecrotic_.end() ? 0.0 : nt->second;
+            const MagicSample around = magic_->sample(b.position);
+            held = magic::heldAfter(held, around.rho.total(), dt);
+            necrotic = magic::heldToward(necrotic, around.rho[Aspect::Necrotic], dt);
+            const double eaten = held - magic::lifeLeft(held, necrotic, dt);
+            held -= eaten;
+            necrotic += k::MAGIC_NECROTIC_GAIN * eaten;
+            if (magic::fallsApart(held)) {
+                gone.push_back(b.id);
+                const double volume = 4.0 / 3.0 * kPi * k::BALL_RADIUS * k::BALL_RADIUS * k::BALL_RADIUS;
+                crumble(b.position, k::BALL_RADIUS, necrotic * volume);
+            } else {
+                kept[b.id] = held;
+                keptNecrotic[b.id] = necrotic;
+            }
         }
         held_.swap(kept);
+        ballNecrotic_.swap(keptNecrotic);
         for (const uint32_t id : gone) physics_->removeBall(id);
     }
-    // The human's nature magic evens out with the magic round its chest (in ordinary places it stays near its share).
-    humanHeld_ = magic::heldAfter(humanHeld_, magic_->sample(humanPos_ + dvec3{0, 1.3, 0}).rho.total(), WorldClock::stepSeconds());
+    // The human's life magic (and the water magic it holds, the user: it is mostly water) evens out with the magic
+    // round its chest (in ordinary places both stay near their shares). Necrotic magic it takes up from round it
+    // slowly eats its life magic; holding water too, it does not crumble.
+    {
+        const double dt = WorldClock::stepSeconds();
+        const MagicSample chest = magic_->sample(player_.position + dvec3{0, 1.3, 0});
+        humanHeld_ = magic::heldAfter(humanHeld_, chest.rho.total(), dt);
+        humanWater_ = magic::heldToward(humanWater_, std::min(double(k::HUMAN_WATER), chest.rho.total()), dt);
+        humanNecrotic_ = magic::heldToward(humanNecrotic_, chest.rho[Aspect::Necrotic], dt);
+        const double eaten = humanHeld_ - magic::lifeLeft(humanHeld_, humanNecrotic_, dt);
+        humanHeld_ -= eaten;
+        humanNecrotic_ += k::MAGIC_NECROTIC_GAIN * eaten;
+    }
+    // Dust settles and is gone.
+    for (Dust& d : dust_) d.age += WorldClock::stepSeconds();
+    std::erase_if(dust_, [](const Dust& d) { return d.age > k::MAGIC_DUST_SECONDS; });
     // What the magic left (minerals, sprouts) holds its magic like any object; minerals are rock to a ball.
     {
         std::vector<Manifestation>& ms = magic_->manifestations();
         for (Manifestation& m : ms) {
-            m.held = float(magic::heldAfter(m.held, magic_->sample(m.position + dvec3{0, 0.3, 0}).rho.total(), WorldClock::stepSeconds()));
+            const MagicSample around = magic_->sample(m.position + dvec3{0, 0.3, 0});
+            const double dt = WorldClock::stepSeconds();
+            double held = magic::heldAfter(m.held, around.rho.total(), dt);
+            if (m.kind == ManifestKind::Sprout) {  // pure life magic: necrotic magic it takes up eats it
+                double necrotic = magic::heldToward(m.necrotic, around.rho[Aspect::Necrotic], dt);
+                const double eaten = held - magic::lifeLeft(held, necrotic, dt);
+                held -= eaten;
+                necrotic += k::MAGIC_NECROTIC_GAIN * eaten;
+                m.necrotic = float(necrotic);
+            }
+            m.held = float(held);
             if (m.kind == ManifestKind::Mineral && !rocks_.count(m.id)) {
                 physics_->addRock(m.id, m.position + dvec3{0, 0.25, 0}, std::cbrt(3.0 * m.volume / (4.0 * kPi)));
                 rocks_.insert(m.id);
@@ -129,6 +174,9 @@ void World::step() {
         }
         for (auto it = ms.begin(); it != ms.end();) {
             if (magic::fallsApart(it->held)) {
+                // A sprout withering is a death (not by fire): the life it still held turns necrotic, with what it had
+                // taken up (the user: necrotic magic comes from death; a burnt-out tree leaves none).
+                if (it->kind == ManifestKind::Sprout) crumble(it->position + dvec3{0, 0.2, 0}, 0.25, double(it->necrotic + it->held) * it->volume);
                 physics_->removeRock(it->id);
                 rocks_.erase(it->id);
                 it = ms.erase(it);
@@ -150,7 +198,7 @@ void World::burnPlants() {
     const double now = clock_.seconds();
     for (auto it = burning_.begin(); it != burning_.end();) {
         if (now >= it->second.until) {
-            burnt_.insert(it->first);
+            burnt_.insert(it->first);  // fire consumed its life magic: it leaves no necrotic magic (the user)
             it = burning_.erase(it);
         } else {
             ++it;
@@ -197,6 +245,175 @@ std::vector<World::BurningTree> World::burningTrees() const {
                        std::clamp(1.0 - left / k::PLANT_BURN_SECONDS, 0.0, 1.0)});
     }
     return out;
+}
+
+void World::setPlayerInput(const PlayerInput& in) {
+    // Pressed keys wait for the next step to take them.
+    const bool dash = input_.dash || in.dash, fly = input_.fly || in.fly;
+    input_ = in;
+    input_.dash = dash;
+    input_.fly = fly;
+}
+
+void World::placePlayer(const dvec3& feet, double yaw) {
+    player_ = Player{};
+    player_.position = feet;
+    player_.yaw = yaw;
+    const TerrainSample s = terrain_.sample(feet.x, feet.z);
+    if (s.underwater() && s.waterLevel - s.height > k::PLAYER_SWIM_DEPTH) {
+        player_.mode = PlayerMode::Swim;
+        player_.position.y = s.waterLevel;
+        player_.swim = 1.0;
+    } else {
+        player_.position.y = s.height;
+    }
+}
+
+void World::stepPlayer() {
+    const double dt = WorldClock::stepSeconds();
+    std::vector<TreeInstance> trees;
+    const dvec3 p = player_.position;
+    treesInArea(terrain_, p.x - 4.0, p.z - 4.0, p.x + 4.0, p.z + 4.0, trees);
+    const PlayerMode was = player_.mode;
+    const double fall = -player_.velocity.y;
+    taelia::stepPlayer(player_, input_, terrain_, trees, dt);
+    // A hard landing presses its feet into soft ground (its legs take most of it).
+    if (was == PlayerMode::Air && player_.mode == PlayerMode::Ground && fall > 3.0) {
+        const double energy = 0.5 * k::HUMAN_MASS * fall * fall * k::LANDING_PLASTIC;
+        const dvec3 side{std::cos(player_.yaw), 0.0, -std::sin(player_.yaw)};
+        for (const double s : {-1.0, 1.0}) dentGround(player_.position + side * (0.11 * s), energy * 0.5, 0.09);
+    }
+    input_.dash = input_.fly = false;
+    // Its capsule for balls: round its body, lower while it swims.
+    const double centre = player_.mode == PlayerMode::Swim ? -0.4 : 0.5 * k::HUMAN_HEIGHT - 0.25 * player_.crouch;
+    physics_->moveCapsule(1, player_.position + dvec3{0, centre, 0});
+}
+
+// Bursting: all it holds goes into the field where it is (a little back from what it hit, into the air).
+void World::burst(MagicBall& b, const dvec3& at) {
+    if (b.kg > 0.0 && !magic_->addMass(at, b.aspect, b.kg)) magic_->addMass(at + dvec3{0, 1.0, 0}, b.aspect, b.kg);
+    b.kg = 0.0;
+}
+
+void World::stepMagicBalls() {
+    const double dt = WorldClock::stepSeconds();
+    // Gathering between the hands: its aspect from the cells round them (nearer more), and neutral magic, slower: it
+    // must take the aspect.
+    const dvec3 hands = playerToWorld(player_, humanBallPoint(humanMotion()));
+    if (input_.gather && magic_->started()) {
+        if (gathering_.kg <= 0.0) {
+            gathering_ = MagicBall{};
+            gathering_.id = nextMagicBall_++;
+            gathering_.aspect = input_.aspect;
+        }
+        gathering_.position = hands;
+        double room = double(k::MAGIC_BALL_FULL) - gathering_.kg;
+        const double reach = k::MAGIC_BALL_REACH, stepM = 2.0;  // the fine cells' size
+        for (double dy = -reach; dy <= reach + 1e-9 && room > 0.0; dy += stepM)
+            for (double dz = -reach; dz <= reach + 1e-9 && room > 0.0; dz += stepM)
+                for (double dx = -reach; dx <= reach + 1e-9 && room > 0.0; dx += stepM) {
+                    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (dist > reach) continue;
+                    const dvec3 q = hands + dvec3{dx, dy, dz};
+                    MagicDensities d;
+                    double volume = 0;
+                    if (!magic_->cellAt(q, d, &volume) || volume > 9.0) continue;  // the fine level only
+                    const double w = (1.0 - dist / reach) * dt * k::MAGIC_BALL_DRAW;
+                    const Aspect a = gathering_.aspect;
+                    double own = std::min(double(d[a]) * volume * w, room);
+                    if (own > 0.0 && magic_->addMass(q, a, -own)) {
+                        gathering_.kg += own;
+                        room -= own;
+                    }
+                    if (a == Aspect::Neutral) continue;
+                    double neutral = std::min(double(d[Aspect::Neutral]) * volume * w * k::MAGIC_BALL_NEUTRAL, room);
+                    if (neutral > 0.0 && magic_->addMass(q, Aspect::Neutral, -neutral)) {
+                        gathering_.kg += neutral;
+                        room -= neutral;
+                    }
+                }
+    } else if (gathering_.kg > 0.0) {
+        // Let go: thrown toward the aim, or (a click's worth) let go where it is.
+        if (gathering_.kg >= k::MAGIC_BALL_MIN) {
+            MagicBall b = gathering_;
+            b.position = hands;
+            dvec3 dir = input_.aim - hands;
+            dir = length(dir) > 0.5 ? normalize(dir) : directionFromAngles(input_.yaw, input_.pitch);
+            b.velocity = dir * double(k::MAGIC_BALL_SPEED) + player_.velocity;
+            magicBalls_.push_back(b);
+            player_.toss = 0.0;
+        } else {
+            burst(gathering_, hands);
+        }
+        gathering_ = MagicBall{};
+    }
+    // Flying: straight (magic is weightless) until it hits the ground, water or a trunk, or has gone its range.
+    for (MagicBall& b : magicBalls_) {
+        const dvec3 from = b.position, to = from + b.velocity * dt;
+        const double r = b.radius();
+        b.travelled += length(to - from);
+        const TerrainSample s = terrain_.sample(to.x, to.z);
+        if (to.y - r <= s.height) {
+            burst(b, {to.x, std::max(to.y, s.height + 0.3), to.z});
+            continue;
+        }
+        if (s.underwater() && to.y - r <= s.waterLevel) {
+            burst(b, {to.x, s.waterLevel + 0.3, to.z});
+            continue;
+        }
+        std::vector<TreeInstance> trees;
+        treesInArea(terrain_, std::min(from.x, to.x) - 2.0, std::min(from.z, to.z) - 2.0, std::max(from.x, to.x) + 2.0,
+                    std::max(from.z, to.z) + 2.0, trees);
+        bool hit = false;
+        for (const TreeInstance& t : trees) {
+            if (to.y > t.position.y + 6.0 * t.scale || to.y < t.position.y) continue;
+            // Closest approach of the step to the trunk's axis (in plan).
+            const double ax = to.x - from.x, az = to.z - from.z, len2 = ax * ax + az * az;
+            const double u = len2 > 1e-12 ? std::clamp(((t.position.x - from.x) * ax + (t.position.z - from.z) * az) / len2, 0.0, 1.0) : 0.0;
+            const double cx = from.x + ax * u - t.position.x, cz = from.z + az * u - t.position.z;
+            if (cx * cx + cz * cz < (0.35 * t.scale + r) * (0.35 * t.scale + r)) {
+                burst(b, from);
+                hit = true;
+                break;
+            }
+        }
+        if (hit) continue;
+        b.position = to;
+        if (b.travelled > k::MAGIC_BALL_RANGE) burst(b, to);
+    }
+    std::erase_if(magicBalls_, [](const MagicBall& b) { return b.kg <= 0.0; });
+}
+
+void World::dentGround(const dvec3& p, double energy, double radius) {
+    if (!(energy > 0.0) || !(radius > 0.0)) return;
+    const double dug = std::max(-terrain_.editAt(p.x, p.z), 0.0);
+    const Stratum s = terrain_.stratumAt(p.x, p.z, dug + 0.01);
+    const double volume = energy / s.hardness;
+    if (volume < 2e-8) return;
+    // Pressed in as a spherical cap of what hit it (V = pi d^2 (R - d/3)), the soil pushed into a bowl of that volume.
+    double d = std::sqrt(volume / (kPi * radius));
+    for (int i = 0; i < 4; ++i) d = std::sqrt(volume / (kPi * std::max(radius - d / 3.0, 0.4 * radius)));
+    d = std::min(d, 2.0 * radius);
+    // A paraboloid of that volume and depth, at least a cell and a half across the grid dents are kept on (shallower
+    // then, the same volume).
+    const double bowl = std::max(std::sqrt(2.0 * volume / (kPi * d)), 1.5 * double(k::TERRAIN_EDIT_CELL));
+    d = 2.0 * volume / (kPi * bowl * bowl);
+    terrain_.dent(p.x, p.z, bowl, d);
+    if (bowl > 0.3 || d > 0.12) {  // deep enough to change the ground's shape for the physics and the renderers
+        const double r = bowl * 1.7;
+        physics_->groundChanged(p.x - r, p.z - r, p.x + r, p.z + r);
+        dentAreas_.push_back({p.x - r, p.z - r, p.x + r, p.z + r});
+    }
+}
+
+void World::takeDentAreas(std::vector<Area>& out) {
+    out.insert(out.end(), dentAreas_.begin(), dentAreas_.end());
+    dentAreas_.clear();
+}
+
+void World::crumble(const dvec3& at, double radius, double necroticKg) {
+    dust_.push_back({at, radius, 0.0});
+    if (necroticKg > 0.0) magic_->addMass(at, Aspect::Necrotic, necroticKg);
 }
 
 uint32_t World::addRune(Rune r) {
@@ -252,6 +469,12 @@ uint64_t World::stateHash() const {
     h = hashCombine(h, bits(fire_));
     for (const auto& [id, held] : held_) h = hashCombine(hashCombine(h, id), bits(held));
     h = hashCombine(h, bits(humanHeld_));
+    h = hashCombine(h, terrain_.editsVersion());
+    h = hashCombine(hashCombine(h, bits(humanWater_)), bits(humanNecrotic_));
+    for (const auto& [id, n] : ballNecrotic_) h = hashCombine(hashCombine(h, id), bits(n));
+    h = hashCombine(hashCombine(hashCombine(h, bits(player_.position.x)), bits(player_.position.y)), bits(player_.position.z));
+    h = hashCombine(h, bits(gathering_.kg));
+    for (const MagicBall& b : magicBalls_) h = hashCombine(hashCombine(h, b.id), bits(b.position.x));
     for (const Rune& r : runes_) {
         h = hashCombine(h, r.id);
         for (const double c : r.contents) h = hashCombine(h, bits(c));

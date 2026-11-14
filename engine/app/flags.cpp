@@ -1,6 +1,7 @@
 #include "app/flags.h"
 
 #include <cstdlib>
+#include <iterator>
 #include <vector>
 
 namespace taelia {
@@ -75,10 +76,10 @@ bool parseFlags(int argc, wchar_t** argv, LaunchFlags& f, std::string& error) {
             // aspect by name, then x, y (above the ground, or the water over a pond), z, kg/m3
             const size_t comma = val.find(',');
             if (comma == std::string::npos) return bad();
-            static const char* const names[] = {"earth", "water", "nature", "fire", "air", "lightning", "light", "neutral"};
+            static const char* const names[] = {"earth", "water", "life", "fire", "air", "lightning", "light", "neutral", "necrotic"};
             const std::string name = val.substr(0, comma);
             int aspect = -1;
-            for (int n = 0; n < 8; ++n)
+            for (int n = 0; n < int(std::size(names)); ++n)
                 if (name == names[n]) aspect = n;
             if (aspect < 0 || !toList(val.substr(comma + 1), list) || list.size() != 4 || list[3] <= 0) return bad();
             f.injects.push_back({aspect, list[0], list[1], list[2], list[3]});
@@ -124,6 +125,27 @@ bool parseFlags(int argc, wchar_t** argv, LaunchFlags& f, std::string& error) {
         } else if (key == "--menu") {
             if (val != "graphics" && val != "controls" && val != "world") return bad();
             f.menu = val;
+        } else if (key == "--player") {
+            if (!toList(val, list) || list.size() != 3) return bad();
+            f.player = LaunchFlags::PlayerPlace{list[0], list[1], list[2]};
+        } else if (key == "--player-camera") {
+            if (!toList(val, list) || list.size() != 3 || list[2] <= 0) return bad();
+            f.playerCamera = LaunchFlags::Orbit{list[0], list[1], list[2]};
+        } else if (key == "--first-person") {
+            f.firstPerson = true;
+        } else if (key == "--act") {
+            static const char* const acts[] = {"run", "crouch", "crouchrun", "jump", "dash", "swim", "tread", "fly", "hover", "gather", "throw", "land", "landrun"};
+            bool known = false;
+            for (const char* a : acts) known = known || val == a;
+            if (!known) return bad();
+            f.act = val;
+        } else if (key == "--aspect") {
+            static const char* const names[] = {"earth", "water", "life", "fire", "air", "lightning", "light", "neutral", "necrotic"};
+            int aspect = -1;
+            for (int n = 0; n < int(std::size(names)); ++n)
+                if (val == names[n]) aspect = n;
+            if (aspect < 0 || aspect == 7) return bad();
+            f.aspect = aspect;
         } else if (key == "--gaze") {
             if (!toList(val, list) || list.size() != 2) return bad();
             f.gazeX = list[0];

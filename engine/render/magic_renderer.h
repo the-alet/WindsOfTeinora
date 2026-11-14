@@ -1,6 +1,7 @@
 // The magic field on the GPU (step 5c): the field's two finer levels resampled into windows of absolute height around
 // the camera, as RGBA16F 3D textures (rgb: the aspects' colours weighted by their densities, a: the total density,
-// kg/m3), uploaded only when the field or the window changes. lighting.hlsl marches them for the free magic.
+// kg/m3), uploaded only when the field or the window changes. lighting.hlsl marches them for the free magic. A third
+// volume per window holds the necrotic magic the things there hold (it tints them).
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -28,6 +29,7 @@ private:
     struct Window {
         std::unique_ptr<rhi::Texture> volume;  // rgb: aspects' colours x density, a: total (kg/m3)
         std::unique_ptr<rhi::Texture> flow;    // xyz: how the field flows (m/s), w: air magic (kg/m3)
+        std::unique_ptr<rhi::Texture> held;    // r: necrotic magic the things hold (kg/m3)
         uint32_t version = ~0u;
         int64_t ox = 0, oz = 0, k0 = 0;  // world column of the min corner, absolute layer of the bottom
         double dx = 0, dy = 0;
@@ -35,7 +37,7 @@ private:
     };
     rhi::Device* device_ = nullptr;
     Window win_[2];
-    std::vector<uint16_t> texels_, flowTexels_;
+    std::vector<uint16_t> texels_, flowTexels_, heldTexels_;
 };
 
 }  // namespace taelia

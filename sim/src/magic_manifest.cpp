@@ -1,5 +1,5 @@
 // Manifestations (step 5f), after each tick of the finest level, serially in cell order (deterministic): earth and
-// nature condensate past MAGIC_SPAWN_KG grows a mineral or a sprout that stays (it holds its own magic like any object;
+// life condensate past MAGIC_SPAWN_KG grows a mineral or a sprout that stays (it holds its own magic like any object;
 // the rest goes back to the gas); light condensate shows as fireflies (3 at 40, one more for every 3 past it; ten merge
 // into a big one that sends out waves of light magic); air condensate spins a whirlwind; fire condensate burns.
 #include <algorithm>
@@ -41,7 +41,7 @@ void MagicField::Impl::manifest(int l, int64_t tick) {
         }
         // Minerals and sprouts: they stay.
         for (const auto [m, kind, aspect, vol] : {std::tuple{0, ManifestKind::Mineral, Aspect::Earth, double(k::MAGIC_MINERAL_VOLUME)},
-                                                  std::tuple{2, ManifestKind::Sprout, Aspect::Nature, double(k::MAGIC_SPROUT_VOLUME)}}) {
+                                                  std::tuple{2, ManifestKind::Sprout, Aspect::Life, double(k::MAGIC_SPROUT_VOLUME)}}) {
             float& cond = condOf(m, c);
             if (cond * volume < k::MAGIC_SPAWN_KG) continue;
             const uint64_t h = hashCombine(hashCombine(opt.seed, uint64_t(c)), uint64_t(tick) * 3 + uint64_t(m));

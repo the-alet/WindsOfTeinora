@@ -15,6 +15,10 @@
 
 namespace taelia {
 
+namespace gpu {
+struct FrameConstants;
+}
+
 class Terrain;
 
 // Six camera-relative planes (a, b, c, d): a*x + b*y + c*z + d >= 0 inside.
@@ -41,6 +45,13 @@ public:
     rhi::Buffer* pool() const { return pool_.get(); }
     // Pool slot of the finest tile (ix, iz) if it is uploaded, else -1 (grass reads the ground from it).
     int leafSlot(int64_t ix, int64_t iz) const;
+    // The finest uploaded tile holding leaf cell (ix, iz): its slot | its level << 24, or -1 (grass far out).
+    int coveringSlot(int64_t ix, int64_t iz) const;
+    // The ground changed here (a crater): its tiles are generated again and replace the old ones when ready.
+    void refresh(double x0, double z0, double x1, double z1);
+    // The fine texture of the dents round the eye (TERRAIN_EDIT_CELL cells), uploaded when they or the window change.
+    void updateDents(const dvec3& camera);
+    void dentsFrameData(gpu::FrameConstants& fc, const dvec3& camera) const;
     double leafSize() const { return leafSize_; }
     // Ray tracing: one instance per drawn tile (its structure is built when the tile is uploaded).
     void addInstances(std::vector<rhi::TlasInstance>& out) const;
@@ -76,6 +87,11 @@ private:
     double leafSize_ = 32.0, rangeFactor_ = 2.5;
     int levels_ = 8;  // level 0 = finest; levels_ - 1 = root
 
+    std::unique_ptr<rhi::Texture> dents_;  // R32F, kDentCells^2
+    uint64_t dentsVersion_ = ~0ull;
+    int64_t dentsI0_ = 0, dentsJ0_ = 0;     // the window's first cell
+    bool dentsAny_ = false;
+    std::vector<float> dentTexels_;
     std::unique_ptr<rhi::Buffer> pool_, indices_, positions_;  // positions_: float3 per vertex, tile-local, for ray tracing
     std::vector<std::unique_ptr<rhi::AccelerationStructure>> slotBlas_;
     bool rayTracing_ = false;

@@ -1,5 +1,5 @@
 // The human (step 6): one adult made in code, a closed skinned body, breathing slowly; balls bounce off it; it holds
-// nature magic like any object.
+// life magic like any object.
 #include <map>
 #include <utility>
 
@@ -115,7 +115,82 @@ TEST(human_stands_near_the_spawn_and_a_ball_bounces_off_it) {
     CHECK(!passed);
 }
 
-TEST(human_holds_nature_magic_like_any_object) {
+namespace {
+
+// The lowest point and the extent of the skinned body in a pose.
+void bodyBox(const HumanPose& pose, dvec3& lo, dvec3& hi) {
+    lo = {1e9, 1e9, 1e9};
+    hi = {-1e9, -1e9, -1e9};
+    for (const HumanVertex& v : humanMesh().vertices) {
+        const fvec3 q = humanSkin(pose, v);
+        lo = {std::min(lo.x, double(q.x)), std::min(lo.y, double(q.y)), std::min(lo.z, double(q.z))};
+        hi = {std::max(hi.x, double(q.x)), std::max(hi.y, double(q.y)), std::max(hi.z, double(q.z))};
+    }
+}
+
+}  // namespace
+
+TEST(human_runs_crouches_swims_flies_and_gathers_a_ball) {
+    const HumanMesh& m = humanMesh();
+    CHECK(m.loaded);
+    if (!m.loaded) return;
+    dvec3 lo, hi;
+    // Walking: a foot on the ground all through the cycle; running: never through the ground, a foot down at mid-stance
+    // (between, both are in the air: a run has a flight).
+    for (double gait = 0.0; gait < 1.0; gait += 0.125) {
+        HumanMotion walk, run;
+        walk.speed = 1.4;
+        walk.gait = run.gait = gait;
+        run.speed = k::PLAYER_SPEED;
+        bodyBox(humanPose(walk), lo, hi);
+        CHECK(lo.y > -0.03);
+        CHECK(lo.y < 0.12);
+        bodyBox(humanPose(run), lo, hi);
+        CHECK(lo.y > -0.03);
+    }
+    HumanMotion midStance;
+    midStance.speed = k::PLAYER_SPEED;
+    midStance.gait = 0.18;
+    bodyBox(humanPose(midStance), lo, hi);
+    CHECK(lo.y < 0.08);
+    // Crouching: its head drops about as far as its hips.
+    HumanMotion stand, crouch;
+    crouch.crouch = 1.0;
+    dvec3 slo, shi;
+    bodyBox(humanPose(stand), slo, shi);
+    bodyBox(humanPose(crouch), lo, hi);
+    CHECK(shi.y - hi.y > 0.3);
+    CHECK(lo.y > -0.03);
+    // Swimming and flying fast it lies along the way it goes; treading water it stands, its head out.
+    HumanMotion swim, fly, tread;
+    swim.swim = 1.0;
+    swim.swimSpeed = k::PLAYER_SWIM_SPEED;
+    fly.fly = 1.0;
+    fly.flySpeed = k::PLAYER_FLY_SPEED;
+    tread.swim = 1.0;
+    bodyBox(humanPose(swim), lo, hi);
+    CHECK(hi.z - lo.z > 1.3);
+    CHECK(hi.y < 0.6);  // at the surface
+    bodyBox(humanPose(fly), lo, hi);
+    CHECK(hi.z - lo.z > 1.3);
+    bodyBox(humanPose(tread), lo, hi);
+    CHECK(hi.y > 0.15);  // the head above the water
+    CHECK(hi.y < 0.6);
+    // Gathering: the ball sits in front of its chest, between its hands.
+    HumanMotion form;
+    form.form = 1.0;
+    form.ball = 1.0;
+    const dvec3 ball = humanBallPoint(form);
+    CHECK(ball.z > 0.2);
+    CHECK(ball.y > 1.0 && ball.y < 1.45);
+    // First person: the head is shrunk to a point.
+    HumanPose fp = humanPose(stand);
+    hideHumanHead(fp);
+    bodyBox(fp, lo, hi);
+    CHECK(hi.y < shi.y - 0.1);
+}
+
+TEST(human_holds_life_magic_like_any_object) {
     WorldDesc d;
     World w(d);
     for (int i = 0; i < 120; ++i) w.step();

@@ -189,7 +189,7 @@ float4 PSMain(VSOut i) : SV_Target0 {
 
     if (magicView()) {  // no reflections; the water glows with the magic it holds, the free magic in front of it
         const float dist = length(i.rel);
-        const float3 glow = waterMagicGlow(i.rel, n, V, dist) + magicMotes(-V, dist);
+        const float3 glow = necroticGlow(waterMagicGlow(i.rel, n, V, dist), necroticAmount(i.rel)) + magicMotes(-V, dist);
         const float4 f = marchFire(0, -V, dist, K_MAGIC_VIEW_DIM);
         return float4((magicDim(refracted) + glow + magicFreeGlow(-V, dist, i.pos.xy)) * f.a + f.rgb, 1);
     }
@@ -207,7 +207,7 @@ float4 PSMain(VSOut i) : SV_Target0 {
         const float glint = a2 / (3.14159 * d * d) * F * 0.25 * saturate(dot(n, L));
         glints += g_frame.sunLight[s].rgb * (1.0 - g_frame.suns[s].w) * sunTransmittance(L) * cloudShadow(s, i.rel) * min(glint, 60.0);
     }
-    float3 color = lerp(refracted, reflected, F) + glints;
+    float3 color = necroticTint(lerp(refracted, reflected, F), necroticAmount(i.rel)) + glints;  // what it holds of necrotic magic
     color = applyHaze(color, i.rel);
     const float4 f = marchFire(0, -V, length(i.rel), 1.0);  // the campfire between us and the water
     return float4(color * f.a + f.rgb, 1);

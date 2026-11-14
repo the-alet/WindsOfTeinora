@@ -16,7 +16,7 @@ namespace mf {
 constexpr int kV = MagicField::kValues;
 constexpr int kA = kAspects;
 constexpr int kB = 8;     // brick edge in cells
-constexpr int kDer = 12;  // derived per cell: rho, p - pBase, sound speed, kinematic viscosity, D per aspect
+constexpr int kDer = 4 + kA;  // derived per cell: rho, p - pBase, sound speed, kinematic viscosity, D per aspect
 enum Der : int { dRho = 0, dP = 1, dC = 2, dNu = 3, dD = 4 };
 
 inline int64_t floorDiv(int64_t a, int64_t b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
@@ -51,7 +51,7 @@ struct Level {
     std::vector<float> thetaBase;     // [cells] the temperature the cell's magic is held at (hot near a fire)
     std::vector<float> emit, heat;    // [cells] free fire magic made here (kg m^-3 s^-1), air heated here (K/s)
     std::vector<int32_t> heated;      // the cells hot things touched this tick
-    std::vector<float> cond;          // [6][cells] condensate (finest level): earth, water, nature, fire, air, light
+    std::vector<float> cond;          // [6][cells] condensate (finest level): earth, water, life, fire, air, light
     std::vector<int32_t> nb;          // [6][cells]: -x +x -y +y -z +z
     std::vector<uint8_t> covered;     // [cells]: a finer level holds this place (its average is copied here)
 

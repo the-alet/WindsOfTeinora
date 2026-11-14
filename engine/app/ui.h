@@ -29,6 +29,8 @@ public:
 
     Menu menu = Menu::None;
     int mainTab = 0;  // 0 graphics, 1 controls
+    bool playerMode = true;          // the camera rides the player (else the free camera of the checks)
+    int ballAspect = 3;              // the magic ball's aspect (number keys)
 
 private:
     void* hwnd_ = nullptr;

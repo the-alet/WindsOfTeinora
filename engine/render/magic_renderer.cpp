@@ -31,12 +31,13 @@ void aspectColor(int a, float rho, float out[3]) {
     static const float kColor[kAspects][3] = {
         {k::MAGIC_COLOR_EARTH[0], k::MAGIC_COLOR_EARTH[1], k::MAGIC_COLOR_EARTH[2]},
         {k::MAGIC_COLOR_WATER[0], k::MAGIC_COLOR_WATER[1], k::MAGIC_COLOR_WATER[2]},
-        {k::MAGIC_COLOR_NATURE[0], k::MAGIC_COLOR_NATURE[1], k::MAGIC_COLOR_NATURE[2]},
+        {k::MAGIC_COLOR_LIFE[0], k::MAGIC_COLOR_LIFE[1], k::MAGIC_COLOR_LIFE[2]},
         {k::MAGIC_COLOR_FIRE[0], k::MAGIC_COLOR_FIRE[1], k::MAGIC_COLOR_FIRE[2]},
         {k::MAGIC_COLOR_AIR[0], k::MAGIC_COLOR_AIR[1], k::MAGIC_COLOR_AIR[2]},
         {k::MAGIC_COLOR_LIGHTNING[0], k::MAGIC_COLOR_LIGHTNING[1], k::MAGIC_COLOR_LIGHTNING[2]},
         {k::MAGIC_COLOR_LIGHT[0], k::MAGIC_COLOR_LIGHT[1], k::MAGIC_COLOR_LIGHT[2]},
         {k::MAGIC_COLOR_NEUTRAL[0], k::MAGIC_COLOR_NEUTRAL[1], k::MAGIC_COLOR_NEUTRAL[2]},
+        {k::MAGIC_COLOR_NECROTIC[0], k::MAGIC_COLOR_NECROTIC[1], k::MAGIC_COLOR_NECROTIC[2]},
     };
     const float deep = a == int(Aspect::Water) ? std::clamp(rho / 3.0f, 0.0f, 1.0f) : 0.0f;
     for (int i = 0; i < 3; ++i) out[i] = kColor[a][i] + (k::MAGIC_COLOR_WATER_DEEP[i] - kColor[a][i]) * deep;
@@ -58,13 +59,17 @@ bool MagicRenderer::init(rhi::Device* device, std::string* error) {
         w.volume = device->createTexture(d);
         d.name = "magic.flow";
         w.flow = device->createTexture(d);
-        if (!w.volume || !w.flow) {
+        d.format = rhi::Format::R16_FLOAT;
+        d.name = "magic.held";
+        w.held = device->createTexture(d);
+        if (!w.volume || !w.flow || !w.held) {
             if (error) *error = "magic: could not create the volumes";
             return false;
         }
     }
     texels_.assign(size_t(kSide) * kSide * kLayers * 4, 0);
     flowTexels_.assign(texels_.size(), 0);
+    heldTexels_.assign(size_t(kSide) * kSide * kLayers, 0);
     return true;
 }
 
@@ -72,6 +77,7 @@ void MagicRenderer::shutdown() {
     for (Window& w : win_) {
         w.volume.reset();
         w.flow.reset();
+        w.held.reset();
     }
     device_ = nullptr;
 }
@@ -101,6 +107,9 @@ void MagicRenderer::update(const MagicField* field, const dvec3& camera) {
                     // Underground holds nothing; above the level's top the top cell carries on.
                     const int64_t local = k0 + k - v.columnBase[slot];
                     float rgb[3] = {0, 0, 0}, total = 0, u[3] = {0, 0, 0}, air = 0;
+                    // What the things hold: the ground holds what its lowest cell does, so its surface reads it whole.
+                    const int ch = int(std::clamp<int64_t>(local, 0, v.layers - 1)) * cols + slot;
+                    heldTexels_[size_t(k) * kSide * kSide + size_t(j) * kSide + i] = toHalf(v.state[size_t(MagicField::kNecroticHeld) * cells + ch]);
                     if (local >= 0) {
                         const int c = int(std::min<int64_t>(local, v.layers - 1)) * cols + slot;
                         for (int a = 0; a < kAspects; ++a) {
@@ -126,6 +135,7 @@ void MagicRenderer::update(const MagicField* field, const dvec3& camera) {
                 }
         device_->uploadTexture(w.volume.get(), texels_.data(), texels_.size() * sizeof(uint16_t));
         device_->uploadTexture(w.flow.get(), flowTexels_.data(), flowTexels_.size() * sizeof(uint16_t));
+        device_->uploadTexture(w.held.get(), heldTexels_.data(), heldTexels_.size() * sizeof(uint16_t));
         w.valid = true;
     }
 }
@@ -139,6 +149,7 @@ void MagicRenderer::frameData(gpu::FrameConstants& fc, const dvec3& camera) cons
     fc.magicInfo = {float(win_[0].dy), float(win_[1].dy), float(k::MAGIC_VIEW_REACH), win_[0].valid && win_[1].valid ? 1.0f : 0.0f};
     fc.magicVolume = {win_[0].volume ? win_[0].volume->srv() : 0u, win_[1].volume ? win_[1].volume->srv() : 0u,
                       win_[0].flow ? win_[0].flow->srv() : 0u, win_[1].flow ? win_[1].flow->srv() : 0u};
+    fc.magicHeld = {win_[0].held ? win_[0].held->srv() : 0u, win_[1].held ? win_[1].held->srv() : 0u, 0u, 0u};
 }
 
 }  // namespace taelia

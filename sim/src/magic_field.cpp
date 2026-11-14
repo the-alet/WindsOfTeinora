@@ -153,6 +153,7 @@ void MagicField::Impl::fillColumns(int l, const std::vector<int>& slots) {
                 L.st[L.at(kU + 2, c)] = float(from.u.z);
                 L.st[L.at(kTheta, c)] = float(from.theta);
                 L.st[L.at(kAirT, c)] = float(from.airT);
+                L.st[L.at(kNecroticHeld, c)] = float(from.necroticHeld);
             } else {
                 const dvec3 u = airAt(p, std::max(p.y - col.surface(), 0.0));
                 for (int a = 0; a < kA; ++a) L.st[L.at(a, c)] = b.rho[a];
@@ -161,6 +162,7 @@ void MagicField::Impl::fillColumns(int l, const std::vector<int>& slots) {
                 L.st[L.at(kU + 2, c)] = float(u.z);
                 L.st[L.at(kTheta, c)] = float(magic::theta0());
                 L.st[L.at(kAirT, c)] = 0.0f;
+                L.st[L.at(kNecroticHeld, c)] = 0.0f;
             }
         }
     });
@@ -258,6 +260,7 @@ void MagicField::Impl::refreshGhosts(int l) {
                 L.gv[L.gat(kU + 2, i)] = float(s.u.z);
                 L.gv[L.gat(kTheta, i)] = float(s.theta);
                 L.gv[L.gat(kAirT, i)] = float(s.airT);
+                L.gv[L.gat(kNecroticHeld, i)] = float(s.necroticHeld);
             } else {
                 const dvec3 u = wind ? wind->meanAt(std::max(p.y - L.gGround[size_t(i)], 0.0)) : dvec3{};
                 for (int a = 0; a < kA; ++a) L.gv[L.gat(a, i)] = L.gBase[L.gat(a, i)];
@@ -266,6 +269,7 @@ void MagicField::Impl::refreshGhosts(int l) {
                 L.gv[L.gat(kU + 2, i)] = float(u.z);
                 L.gv[L.gat(kTheta, i)] = float(magic::theta0());
                 L.gv[L.gat(kAirT, i)] = 0.0f;
+                L.gv[L.gat(kNecroticHeld, i)] = 0.0f;
             }
         }
     });
@@ -368,6 +372,7 @@ MagicSample MagicField::Impl::sampleLevel(int l, const dvec3& p, bool fromBase) 
     out.u = {acc[kU], acc[kU + 1], acc[kU + 2]};
     out.theta = acc[kTheta];
     out.airT = acc[kAirT];
+    out.necroticHeld = acc[kNecroticHeld];
     out.level = l;
     return out;
 }
@@ -543,12 +548,13 @@ bool MagicField::addDensity(const dvec3& p, Aspect a, double kgPerM3) {
     return false;
 }
 
-bool MagicField::cellAt(const dvec3& p, MagicDensities& out) const {
+bool MagicField::cellAt(const dvec3& p, MagicDensities& out, double* volume) const {
     for (int l = 0; l < impl_->levels; ++l) {
         const Level& L = impl_->lv[l];
         const int c = L.find(int64_t(std::floor(p.x / L.dx)), int64_t(std::floor(p.z / L.dx)), int64_t(std::floor(p.y / L.dy)));
         if (c < 0) continue;
         for (int a = 0; a < kAspects; ++a) out.rho[a] = L.st[L.at(a, c)];
+        if (volume) *volume = L.dx * L.dx * L.dy;
         return true;
     }
     return false;

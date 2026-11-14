@@ -27,7 +27,7 @@ static_assert(sizeof(GrassPush) == 64, "grass.hlsl push constants");
 
 bool GrassRenderer::init(rhi::Device* device, int detail, std::string* error) {
     device_ = device;
-    static const double kRadius[4] = {30, 45, 60, 80};
+    static const double kRadius[4] = {50, 75, 110, 150};  // the user: grass farther out
     radius_ = kRadius[std::clamp(detail, 0, 3)];
     blades_ = device_->createBuffer({uint64_t(maxBlades_) * 32, rhi::BufferUsage::Storage, rhi::Memory::GpuOnly, "grass.blades"});
     args_ = device_->createBuffer({16, rhi::BufferUsage::Storage | rhi::BufferUsage::Indirect, rhi::Memory::GpuOnly, "grass.args"});
@@ -85,7 +85,7 @@ void GrassRenderer::generate(rhi::CommandList* cmd, const TerrainRenderer& terra
     const uint32_t n = uint32_t(std::ceil(2.0 * radius_ / tile)) + 1;
     std::vector<int32_t> lookup(size_t(n) * n);
     for (uint32_t j = 0; j < n; ++j)
-        for (uint32_t i = 0; i < n; ++i) lookup[size_t(j) * n + i] = terrain.leafSlot(ix0 + int64_t(i), iz0 + int64_t(j));
+        for (uint32_t i = 0; i < n; ++i) lookup[size_t(j) * n + i] = terrain.coveringSlot(ix0 + int64_t(i), iz0 + int64_t(j));
     rhi::Transient lt = device_->allocTransient(lookup.size() * 4);
     std::memcpy(lt.cpu, lookup.data(), lookup.size() * 4);
 

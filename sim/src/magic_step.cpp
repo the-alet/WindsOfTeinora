@@ -18,14 +18,15 @@ namespace {
 inline float minmod(float a, float b) { return a * b <= 0.0f ? 0.0f : (std::fabs(a) < std::fabs(b) ? a : b); }
 
 constexpr int kTakes = 6;
-constexpr int kTakeAspect[kTakes] = {int(Aspect::Earth), int(Aspect::Water), int(Aspect::Nature), int(Aspect::Air), int(Aspect::Fire),
+constexpr int kTakeAspect[kTakes] = {int(Aspect::Earth), int(Aspect::Water), int(Aspect::Life), int(Aspect::Air), int(Aspect::Fire),
                                      int(Aspect::Light)};
-const double kTakeTau[kTakes] = {k::MAGIC_TAKE_TAU_EARTH, k::MAGIC_TAKE_TAU_WATER, k::MAGIC_TAKE_TAU_NATURE, k::MAGIC_TAKE_TAU_AIR,
+const double kTakeTau[kTakes] = {k::MAGIC_TAKE_TAU_EARTH, k::MAGIC_TAKE_TAU_WATER, k::MAGIC_TAKE_TAU_LIFE, k::MAGIC_TAKE_TAU_AIR,
                                  k::MAGIC_TAKE_TAU_FIRE, k::MAGIC_TAKE_TAU_LIGHT};
 constexpr int kFire = int(Aspect::Fire);
-constexpr int kCondAspect[6] = {int(Aspect::Earth), int(Aspect::Water), int(Aspect::Nature), int(Aspect::Fire), int(Aspect::Air),
+constexpr int kCondAspect[6] = {int(Aspect::Earth), int(Aspect::Water), int(Aspect::Life), int(Aspect::Fire), int(Aspect::Air),
                                 int(Aspect::Light)};
 constexpr int kNeutral = int(Aspect::Neutral);
+constexpr int kLife = int(Aspect::Life), kNecrotic = int(Aspect::Necrotic);
 
 }  // namespace
 
@@ -219,6 +220,8 @@ void MagicField::Impl::tick(int l) {
     for (int m = 0; m < 6; ++m) threshold[m] = float(magic::showThreshold(Aspect(kCondAspect[m])));
     const double thetaKeep = fmath::exp(-dt / double(k::MAGIC_THETA_TAU)), airTKeep = fmath::exp(-dt / double(k::MAGIC_AIR_T_TAU));
     const double theta0 = magic::theta0(), buoyancy = 9.81 / double(k::MAGIC_AIR_T_REF);
+    const double necroticFade = 1.0 - fmath::exp(-dt / double(k::MAGIC_NECROTIC_FADE_TAU));
+    const double heldKeep = fmath::exp(-dt / double(k::MAGIC_HELD_TAU));
 
     const auto forActive = [&](auto&& fn) {
         pool->run(chunks, [&](int ch) {
@@ -299,13 +302,26 @@ void MagicField::Impl::tick(int l) {
                             }
                         }
                     }
-                    // Nature drinks water magic: half of it grows nature, half goes back to neutral.
+                    // Life drinks water magic: half of it grows life, half goes back to neutral.
                     {
-                        const int w = int(Aspect::Water), nat = int(Aspect::Nature);
-                        const float drink = std::min(rho[w], float(double(k::MAGIC_NATURE_DRINK) * rho[nat] * rho[w] * dt));
+                        const int w = int(Aspect::Water), nat = int(Aspect::Life);
+                        const float drink = std::min(rho[w], float(double(k::MAGIC_LIFE_DRINK) * rho[nat] * rho[w] * dt));
                         rho[w] -= drink;
                         rho[nat] += 0.5f * drink;
                         rho[kNeutral] += 0.5f * drink;
+                    }
+                    // Necrotic magic slowly absorbs life magic, growing by only MAGIC_NECROTIC_GAIN of what it takes
+                    // (the rest goes back to neutral); with too little life round it to feed on, it slowly fades into
+                    // neutral.
+                    {
+                        const float eat = std::min(rho[kLife], float(double(k::MAGIC_NECROTIC_ABSORB) * rho[kNecrotic] * rho[kLife] * dt));
+                        rho[kLife] -= eat;
+                        rho[kNecrotic] += eat * float(k::MAGIC_NECROTIC_GAIN);
+                        rho[kNeutral] += eat * float(1.0 - double(k::MAGIC_NECROTIC_GAIN));
+                        const double hunger = std::max(0.0, 1.0 - double(rho[kLife]) / double(k::MAGIC_NECROTIC_FED));
+                        const float fade = float(double(rho[kNecrotic]) * necroticFade * hunger);
+                        rho[kNecrotic] -= fade;
+                        rho[kNeutral] += fade;
                     }
                     // Free fire magic rising from a fire, born hot.
                     double thetaIn = L.st[L.at(kTheta, c)];
@@ -333,6 +349,9 @@ void MagicField::Impl::tick(int l) {
                             }
                         }
                     }
+                    // What the things here hold of necrotic magic evens out with it like any held magic (it tints them).
+                    const float heldNecrotic = L.st[L.at(kNecroticHeld, c)];
+                    L.nx[L.at(kNecroticHeld, c)] = float(rho[kNecrotic] + (heldNecrotic - rho[kNecrotic]) * heldKeep);
                     for (int a = 0; a < kA; ++a) {
                         L.nx[L.at(a, c)] = rho[a];
                         nTot += rho[a] / mass[a];
@@ -395,6 +414,7 @@ void MagicField::Impl::tick(int l) {
                     for (int a = 0; a < kA; ++a) dev = std::max(dev, std::fabs(L.st[L.at(a, c)] - L.base[L.at(a, c)]));
                     if (!L.cond.empty())
                         for (int m = 0; m < 6; ++m) dev = std::max(dev, L.cond[size_t(m) * C + size_t(c)]);  // condensate waits to evaporate
+                    dev = std::max(dev, L.st[L.at(kNecroticHeld, c)]);  // things keep stepping until they let it go
                 }
         L.deviation[size_t(b)] = dev;
         // Going quiet: what the taking rule would still do, done at once (each aspect to its baseline, the
@@ -412,6 +432,9 @@ void MagicField::Impl::tick(int l) {
                         rho -= move;
                         neutral += move;
                     }
+                    // Necrotic magic this thin has faded into neutral.
+                    neutral += L.st[L.at(kNecrotic, c)];
+                    L.st[L.at(kNecrotic, c)] = 0.0f;
                 }
     });
     if (l == 0) manifest(l, stats.ticks[l]);

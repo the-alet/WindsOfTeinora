@@ -40,28 +40,31 @@ Put this file in the root of the new project as `SPEC.md`. Each session: read "R
 - A test executable for the simulation from day one, run through ctest.
 - Positions in double precision; render relative to the camera. Noise and hashes at large coordinates use integer mixing, not sin(), which runs out of precision and tears into straight edges far away.
 - A fixed simulation step, deterministic from a world seed: the same flags give the same frame, so shots and tests repeat. Time speed changes how many steps run, not their size; fast fields (magic, fire) take smaller sub-steps so x50 stays stable.
-- Launch flags for checks from the start: `--hour=`, `--time-step=` (x1 by default), `--camera=x,y,z,yaw,pitch`, `--ground=<m above ground>`, `--magic`, `--rain=0..1`, `--throws=N`, `--frames=N`, `--shot=<file>`. With `--frames` the game writes a screenshot and quits, without taking focus. All utility scripts (fetching the toolchain, running the game for frames, shrinking and measuring frames) live in `.utilities/`.
+- Launch flags for checks from the start: `--hour=`, `--time-step=` (x1 by default), `--camera=x,y,z,yaw,pitch`, `--ground=<m above ground>`, `--magic`, `--rain=0..1`, `--throws=N`, `--frames=N`, `--shot=<file>`, `--inject=aspect,x,y,z,kg`; for the player `--player=x,z,yaw`, `--player-camera=yaw,pitch,dist`, `--first-person`, `--act=run|crouch|crouchrun|jump|dash|swim|tread|fly|hover|gather|throw`, `--aspect=name` (`--camera` keeps the free camera of the checks instead). With `--frames` the game writes a screenshot and quits, without taking focus. All utility scripts (fetching the toolchain, running the game for frames, shrinking and measuring frames) live in `.utilities/`.
 
 ## The world
 
 ### Camera and controls
-- No player character yet: a free camera, speed fixed at 10 (no mouse wheel).
+- The human is the player (the user). The camera rides it: third person over its right shoulder, V for first person (from its eyes, its head not drawn). Checks with `--camera` keep a free camera, speed fixed at 10 (no mouse wheel).
+- Moves (the user), each with its own animation, blended: W A S D run (4.2 m/s), Space jumps (about 1.3 m), C or Ctrl crouches (slower), Shift dashes (a short burst), F flies (Space rises, C sinks), deep water swims (breaststroke; treading water when still). The body turns toward where it goes; it leans into turns.
 - The eye's focus moves first and the camera follows it with damping: inside a neutral circle of 5% around the camera's direction it doesn't turn; past 80% of the field of view it is pulled hard toward the gaze. Field of view about 10% narrower than usual; a generous focus area.
 - Nothing about the camera is abrupt (the user): turns ease in and out, flight eases to its speed and to a stop, the mouse moves the gaze at a moderate rate.
 - Blur outside the focus: almost none at the focus edge, strong at the screen edge, with 5% darkening at the very edge.
-- Ball: thrown along the gaze. Holding LMB longer throws harder; a quick click drops it.
+- Magic ball (the user): the number keys choose the magic (1 earth, 2 water, 3 life, 4 fire, 5 air, 6 lightning, 7 light, 8 necrotic). Holding LMB gathers a ball of it between the hands, drawing that aspect and neutral magic from the field round them (up to 8 m, more from nearer); from neutral magic it fills slower (0.3 as fast: it must take the aspect). Full at 240 kg. Letting go throws it at the ground under the gaze (a click's worth is let go where it is). Magic is weightless, so it flies straight until it hits the ground, water or a trunk (or 80 m out) and bursts, everything it holds going into the field there, where the usual rules act. Its own animations: palms round the growing ball, the throwing arm.
 - Esc: menu with graphics settings, a controls tab, exit. More polygons at the highest detail. `/`: world settings (wind, time speed and so on). `+`/`-`: time speed from x1/50 to x50; everything, magic and fire included, follows it. `M`: magic view.
 - A few lines in the top-left corner: time, wind, and the magic at the camera by aspect, in kg/m³.
 
 ### Physics
 - Rigid bodies with mass, friction, restitution, air drag and turbulence in the air. The user asked for PhysX: use it (inside `.local`) unless there is a strong reason not to, and say why.
 - Branches, leaves and other plants are elastic colliders that change a ball's path and speed. The ground is soft: a ball doesn't bounce as off a perfect surface.
+- The ground has insides (the user): about 10 m under the surface, in layers by depth: dark topsoil (0.3 m), clay (to 1.5 m), sand and gravel (to 4 m), weathered rock, then bedrock that nothing digs into. Sand or mud where the surface is sand or a pond bed, rock all the way down under rock.
+- Things deform where they hit, by their properties and the laws of physics (the user): a hit dents the ground by the energy it loses into it (0.6 of it pushes the ground aside) over the hardness of the layer there (topsoil yields under 0.2 MPa, sand 0.06, clay 0.5, gravel 1.5, rock 30): a bowl with part of its soil heaped in a rim, the layers under the turf laid bare, the grass gone, never deeper than the insides. Big dents reshape the ground for everything (physics, rendering). A hard landing presses the feet in (the legs take most of it). A ball squashes along where it hit, by how fast, and springs back.
 
 ### Land, water, plants
 - Uneven generated terrain with normal maps and textures.
 - Water is a liquid in basins with a shaped bed, not a plane at height 0. Separate ponds have no waves.
 - Water is see-through, from above and from under its surface (the user): the bed shows a few metres off with sunlight playing on it, things fade into the water's colour with distance; from below the world above shows through a window overhead and past it the surface mirrors the water.
-- Realistic trees. Grass as blade models with a blade texture, not green-painted ground.
+- Realistic trees. Grass as blade models with a blade texture, not green-painted ground, out to 150 m at the highest detail (the user: farther); past the finest terrain tiles the blades stand on coarser ones.
 - A campfire near the spawn point.
 
 ### Sky and time
@@ -85,15 +88,15 @@ Put this file in the root of the new project as `SPEC.md`. Each session: read "R
 
 ### What it is
 - A gas measured in kg/m³. Weightless: gravity ignores it, and in every formula its amount stands in for mass. It swirls and flows like air, with weak streams and diffusion. It exists everywhere up to about 2 km and is simulated around the camera.
-- Aspects and colours: earth brown, water light-to-deep blue, air green-turquoise, nature dark green, fire orange, lightning violet, light white, neutral.
+- Aspects and colours: earth brown, water light-to-deep blue, air green-turquoise, life dark green (the user: nature and life magic are one, life magic), necrotic grey-violet, fire orange, lightning violet, light white, neutral.
 - Neutral magic flows through space, takes an aspect from matter it passes through and slowly loses it afterwards. In air, about half is air magic and half neutral.
-- Near the ground earth magic dominates, near water water magic, each up to 2–3 kg/m³ and never dense away from its matter. Nature magic only near plants, weak.
-- Inertia, most to least: earth, water, nature, fire, air, light. Each aspect evens out its own density.
+- Near the ground earth magic dominates, near water water magic, each up to 2–3 kg/m³ and never dense away from its matter. Life magic only near plants, weak.
+- Inertia, most to least: earth, water, necrotic, life, fire, air, light. Each aspect evens out its own density.
 - Dew point 30: magic becomes present, bends light in plain sight. Below 50 it has no direct effect on the physics of things.
 
 ### As a gas: molecular-kinetic theory
 Describe magic by the kinetic theory of gases. Work it as a continuous field on a grid, with its coefficients taken from the theory; don't simulate particles, except the light drops.
-- Magic is made of tiny motes in random motion. Each aspect has its own mote mass m: earth heaviest, then water, nature, fire, air, light lightest. At the same magic temperature Θ lighter motes move faster (v = √(3Θ/m)): this is where the order of inertia comes from. m is inertia only; gravity still ignores magic.
+- Magic is made of tiny motes in random motion. Each aspect has its own mote mass m: earth heaviest, then water, necrotic (heavier than life: it creeps), life, fire, air, light lightest. At the same magic temperature Θ lighter motes move faster (v = √(3Θ/m)): this is where the order of inertia comes from. m is inertia only; gravity still ignores magic.
 - Each aspect has a partial pressure p = ρv²/3; the total is their sum (Dalton). Pressure differences drive the flow. The changes under pressure (fire to lightning, then to light) read this pressure.
 - Diffusion and viscosity come from the mean free path λ = 1/(√2·n·σ): D = vλ/3, viscosity = ρvλ/3. Light evens out fastest, earth slowest, each aspect at its own pace.
 - Magic temperature Θ: fire magic is born hot. Motes trade energy in collisions with each other and with the air's molecules, which is how fire magic heats the air while cooling itself.
@@ -111,17 +114,25 @@ Describe magic by the kinetic theory of gases. Work it as a continuous field on 
 - Lightning comes from friction of mixed water and air magic in clouds. A strike sets off nothing by script: whatever it causes comes through the fire magic it leaves.
 
 ### Dense aspects show
-- Air makes a whirlwind, water a current, earth minerals, fire fire, nature plants, light fireflies (light, not insects). Minerals and plants stay after the magic thins.
-- Thresholds per aspect (first numbers: light 40, air 35, nature 38, water 40, fire 45, earth 50).
+- Air makes a whirlwind, water a current, earth minerals, fire fire, life plants, light fireflies (light, not insects). Minerals and plants stay after the magic thins.
+- Thresholds per aspect (first numbers: light 40, air 35, life 38, water 40, fire 45, earth 50). Necrotic magic does not manifest.
 - Fireflies: 3 at a density of 40, plus 1 for every 3 more. Ten together merge into a big one that sends out waves of light magic of density 1.
 
 ### Light drops
 - The suns shoot small drops of light magic at a fixed 2/3 the speed of light; the planet reflects about 5% of what hits it.
-- Drops hit other magic, slow down and stir eddies, except nature magic, which absorbs them and grows. Nature also absorbs water magic, more slowly and with less growth.
+- Drops hit other magic, slow down and stir eddies, except life magic, which absorbs them and grows. Life also absorbs water magic, more slowly and with less growth.
 
 ### Objects and wind
-- Every object holds magic of its own, of the aspect it is made of (first number: 3 kg/m³ of its volume); without it, it falls apart. What it holds slowly evens out with the magic around it, and it falls apart below 5% of its share, so in ordinary places nothing does. Every grass blade holds nature magic.
+- Every object holds magic of its own, of the aspect it is made of (first number: 3 kg/m³ of its volume); without it, it falls apart. What it holds slowly evens out with the magic around it, and it falls apart below 5% of its share, so in ordinary places nothing does. Every grass blade holds life magic. Living things hold water magic too (the user: there is water in them): the human 2 kg/m³, plants 1.5 in their sap.
 - Moving air magic makes the wind, and the wind is not one vector everywhere.
+
+### Necrotic magic (the user; first numbers)
+- An aspect of its own, grey-violet, its motes heavier than life's. It mixes with the other aspects like any of them.
+- It very slowly absorbs life magic (at 0.00005 x necrotic x life per second), growing by only 0.7 of what it takes (the user); the rest goes back to neutral.
+- Without life magic round it to feed on (less than 0.05 kg/m³) it very slowly fades into neutral (over about an hour).
+- Things take it up like any held magic (evening out with it over about 10 minutes) and take on its tint by how much they hold: half at 0.5 kg/m³ (nothing makes it yet, so any of it shows), in plain sight and in the magic view.
+- Living things lose their life magic to the necrotic magic they hold. A thing filled only with life magic (a thrown ball, a sprout) crumbles to dust when it falls apart, and the necrotic magic in it goes out into the field round it (the user). The human and plants hold water too, so they do not crumble.
+- It comes from death (the user): a living thing that dies with life magic still in it leaves that as necrotic magic where it was (a sprout withering away). Not by fire: a burnt-out tree or burnt grass leaves none (the user). `--inject=necrotic,...` for checks.
 
 ### Clouds and rain
 - Clouds form where water magic gathers aloft with air or neutral magic. The sky draws them from the same map the weather reads.
@@ -129,8 +140,8 @@ Describe magic by the kinetic theory of gases. Work it as a continuous field on 
 - During rain, where clouds collide, a storm starts above 50. A storm means rain and a heavy sky.
 
 ### Magic view (`M`)
-- The world goes grey and dim. Each thing glows in its own shape, in the colour of the magic it holds: ground and rocks brown, trees and grass green, water blue, lava orange. Fire dims in this view.
-- Magic glows by its own light: the same by day and by night, and it lights nothing. The view reaches 100 m. No reflections. Rain is blue.
+- The world goes grey and dim. Each thing glows in its own shape, in the colour of the magic it holds: ground and rocks brown, trees and grass green (with blue streams of water in their sap), water blue, lava orange. Fire dims in this view.
+- Magic glows by its own light: the same by day and by night, and it lights nothing. The view reaches 250 m (the user: farther than the first 100). No reflections. Rain is blue.
 - Free magic in the air is a cloud inside the scene: nearer hills, trees and things hide it. Never a spot painted over the finished picture.
 - Air magic shows too (the user; air counts as a thing): a faint haze with wisps that the field's own flow carries, the air's the brightest (its currents are the wind), and motes glinting near the eye. Never a flat tint.
 - Magic streams inside every thing (the user): pulses in the colour of what it holds run along where its mesh says its streams go: up a tree from the root out to the leaves, up grass blades, in slow veins through the ground, in ribbons on water; the lighter the aspect, the faster. Outlines glow, bright magic has a soft halo. Nothing looks like a flat fill.
@@ -139,12 +150,13 @@ Describe magic by the kinetic theory of gases. Work it as a continuous field on 
 ## Next: a human model
 - One adult, about 1.75 m, ordinary proportions, plain clothes. No customisation yet: one fixed body and face.
 - A normal, realistic person (the user), not a figure sculpted in code: the body, eyes, brows, lashes, hair, skin and clothes come from MakeHuman's CC0 assets (the user approved the download), converted by `.utilities/makehuman.py` into our own format in `assets/human/`, the same file for both builds.
-- More moving parts than 20 (the user): MakeHuman's full skeleton of 163 bones (the spine, neck, jaw, lips, tongue, eyes and lids, every finger and toe), so it can be animated later. For now an idle pose: it breathes slowly, shifts its weight, blinks and glances about.
+- More moving parts than 20 (the user): MakeHuman's full skeleton of 163 bones (the spine, neck, jaw, lips, tongue, eyes and lids, every finger and toe), so it can be animated: procedurally, legs and arms by two-bone IK. Standing it breathes slowly, shifts its weight, blinks and glances about; it also walks and runs, jumps and lands, crouches, dashes, swims, flies and hovers, gathers a ball between its hands and throws it (the user).
 - Skin that lets light spread under it.
 - No other downloaded models without asking. MetaHuman's licence ties it to Unreal, so it can't go into our own engine.
-- It stands near the spawn point; the camera stays free. Ask before giving the player control of it.
-- A capsule collider, so a thrown ball bounces off it. It holds life magic (nature, the aspect of living things) like every object and glows in its shape in the magic view.
+- It is the player (the user) and starts at the spawn point.
+- A capsule collider, so a thrown ball bounces off it. It holds life magic (the aspect of living things) and water magic like every object and glows in its shape in the magic view.
 - Its life magic is densest in the heart and the brain (the user), and flows like blood (the user; simplified for now): out from the heart through the arteries with each heartbeat (to the brain, the arms and hands, the legs and feet), back through the veins. In the magic view the vessels glow through the body, pulses running down them with each beat.
+- Lungs and air magic (the user): two lungs either side of the heart, airways from the nose and mouth down the windpipe into them. Air magic flows in with each breath and out again (faster breaths when it runs); in the magic view the airways glow turquoise with beads riding the air, and the lungs fill.
 
 ## Next: runes (first numbers, tune them)
 A rune is a sign carved or drawn on a thing that holds magic as a closed system: very dense inside, but up to its seal none of it reaches the world.
@@ -158,7 +170,7 @@ A rune is a sign carved or drawn on a thing that holds magic as a closed system:
 - No keys to make runes. Ask before putting one in the world.
 
 ## Proposals from Claude (not agreed: ask the user before building any)
-- A magic budget: name every source (heat, the suns, ...) and every sink (growth of nature, manifestations, runes, ...), show the total around the camera in the corner, and test that a closed box keeps it. Without it densities run away, as the storm sheet did in the first attempt.
+- A magic budget: name every source (heat, the suns, ...) and every sink (growth of life, manifestations, runes, ...), show the total around the camera in the corner, and test that a closed box keeps it. Without it densities run away, as the storm sheet did in the first attempt.
 - Manifestations are made of the magic that formed them and give it back as they fade: a whirlwind holds its air magic, a firefly its light magic, a mineral its earth magic.
 - Sound: wind, rain, the crackle of fire, and thunder that comes late by its distance at the speed of sound.
 - In the magic view, a way to see one aspect at a time.

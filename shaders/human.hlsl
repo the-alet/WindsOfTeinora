@@ -13,7 +13,9 @@ struct HumanPush {
     float4 place;  // xyz: its feet relative to the camera, w: which way it faces (radians, +z turned toward +x)
     float4 info;   // x: how full its share of held magic is (0..1), y: the heartbeat (0..1), z: seconds (wrapped), w: roughness
     float4 heart;  // xyz: where its heart is (model space), w: specular
-    float4 brain;  // xyz: the middle of its brain, w: unused
+    float4 brain;  // xyz: the middle of its brain, w: last frame's bones (their offset, as bits)
+    float4 prevPlace;  // last frame's feet relative to last frame's camera, which way it faced
+    float4 breath;     // x: where it is in a breath (0..1: in, then out), y: its water magic (0..1 of its share)
 };
 [[vk::push_constant]] ConstantBuffer<HumanPush> g_push : register(b1, space0);
 
@@ -27,11 +29,13 @@ struct VSOut {
     float3 rest : TEXCOORD1;  // the point on the body at rest (model space): the magic is laid out by it
     float3 rel : TEXCOORD2;   // relative to the camera
     float ao : TEXCOORD3;
+    float4 curClip : TEXCOORD4;   // unjittered, this frame
+    float4 prevClip : TEXCOORD5;  // last frame's pose and place
 };
 
-float3x4 boneMatrix(uint b) {
+float3x4 boneMatrix(uint b, uint offset) {
     ByteAddressBuffer bones = g_buffers[g_push.bonesSrv];
-    const uint at = g_push.bonesOffset + b * 48;
+    const uint at = offset + b * 48;
     return float3x4(asfloat(bones.Load4(at)), asfloat(bones.Load4(at + 16)), asfloat(bones.Load4(at + 32)));
 }
 
@@ -47,13 +51,16 @@ VSOut VSMain(uint vid : SV_VertexID) {
     const uint bones = vb.Load(base + 28);
     const float4 w = unpackUnorm8x4(vb.Load(base + 32));
     const uint extra = vb.Load(base + 36);
-    float3 sp = 0, sn = 0, st = 0;
+    float3 sp = 0, sn = 0, st = 0, pp = 0;
+    const uint prevOffset = asuint(g_push.brain.w);
     [unroll] for (uint i = 0; i < 4; ++i) {
         if (w[i] <= 0.0) continue;
-        const float3x4 m = boneMatrix((bones >> (8 * i)) & 255u);
+        const uint b = (bones >> (8 * i)) & 255u;
+        const float3x4 m = boneMatrix(b, g_push.bonesOffset);
         sp += w[i] * mul(m, float4(p, 1.0));
         sn += w[i] * mul((float3x3)m, n);
         st += w[i] * mul((float3x3)m, t);
+        pp += w[i] * mul(boneMatrix(b, prevOffset), float4(p, 1.0));
     }
     // Turned to face its way (+z toward +x, as the trees), then stood on its spot.
     const float c = cos(g_push.place.w), s = sin(g_push.place.w);
@@ -66,6 +73,13 @@ VSOut VSMain(uint vid : SV_VertexID) {
     o.rest = p;
     o.rel = rel;
     o.ao = float(extra & 255u) / 255.0;
+    // Its own motion on screen (DLSS): this frame unjittered against last frame's pose and place.
+    o.curClip = o.pos;
+    o.curClip.x -= 2.0 * g_frame.jitter.x / g_frame.jitter.z * o.pos.w;
+    o.curClip.y += 2.0 * g_frame.jitter.y / g_frame.jitter.w * o.pos.w;
+    const float pc = cos(g_push.prevPlace.w), ps = sin(g_push.prevPlace.w);
+    const float3 prevRel = g_push.prevPlace.xyz + float3(pp.x * pc + pp.z * ps, pp.y, -pp.x * ps + pp.z * pc);
+    o.prevClip = mul(g_frame.prevViewProj, float4(prevRel, 1));
     return o;
 }
 
@@ -87,7 +101,7 @@ float3 coresGlow(float3 r, float3 dir, float fill, float beat) {
     const uint steps = 12;
     const float reach = 0.30, dt = reach / float(steps);
     [unroll] for (uint k = 0; k < steps; ++k) sum += max(lifeMagicAt(r + dir * ((float(k) + 0.5) * dt), beat) - K_MAGIC_HELD, 0.0) * dt;
-    return (K_MAGIC_COLOR_NATURE * 1.6 + 0.12) * sum * fill * K_MAGIC_SURFACE_GLOW * 0.9;
+    return (K_MAGIC_COLOR_LIFE * 1.6 + 0.12) * sum * fill * K_MAGIC_SURFACE_GLOW * 0.9;
 }
 
 // The heartbeat at a moment (sim/human.cpp humanHeartbeat): two close knocks a beat.
@@ -130,8 +144,50 @@ float3 vesselsGlow(float3 r, float3 dir, float fill) {
             vein += seen * (0.22 + 0.35 * beads);
         }
     }
-    const float3 col = K_MAGIC_COLOR_NATURE;
+    const float3 col = K_MAGIC_COLOR_LIFE;
     return ((col * 2.2 + 0.10) * artery + (col * 1.2 + float3(0.0, 0.03, 0.06)) * vein) * fill * K_MAGIC_SURFACE_GLOW;
+}
+
+// Air magic through its airways with each breath (the user): drawn in from the nose down to the lungs while it breathes
+// in, out again after, in beads that move with the air; the lungs either side of the heart fill with it.
+float3 breathGlow(float3 r, float3 dir, float fill) {
+    const uint airways = g_push.flags >> 16;
+    if (airways == 0) return 0;
+    ByteAddressBuffer vs = g_buffers[g_push.vesselsSrv];
+    const float phase = g_push.breath.x;
+    const float full = 0.5 - 0.5 * cos(6.2831853 * phase);  // how much air is in it
+    const float moving = abs(sin(6.2831853 * phase));        // how fast it moves now
+    float air = 0;
+    for (uint i = 0; i < airways; ++i) {
+        const uint at = (g_push.vesselCount + i) * 32;
+        const float4 A = asfloat(vs.Load4(at)), Bv = asfloat(vs.Load4(at + 16));
+        const float3 a = A.xyz, v = Bv.xyz - A.xyz;
+        const float vv = max(dot(v, v), 1e-8);
+        float s = saturate(dot(r - a, v) / vv);
+        float along = max(dot(a + v * s - r, dir), 0.0);
+        s = saturate(dot(r + dir * along - a, v) / vv);
+        along = max(dot(a + v * s - r, dir), 0.0);
+        const float3 gap = r + dir * along - (a + v * s);
+        const float d2 = dot(gap, gap);
+        const float f = lerp(A.w, Bv.w, s);  // m from the nose
+        const float width = lerp(0.009, 0.004, saturate((f - 0.25) / 0.15));  // the windpipe, then the bronchi
+        if (d2 > 9.0 * width * width) continue;
+        const float seen = exp(-d2 / (width * width)) * exp(-along / 0.08);
+        // Beads riding the air: in as it fills, back out as it empties.
+        const float beads = pow(0.5 + 0.5 * cos(6.2831853 * (f - 0.25 * full * K_HUMAN_AIR_SPEED) / 0.05), 4.0);
+        air += seen * (0.3 + 1.1 * beads * (0.3 + 0.7 * moving));
+    }
+    // The lungs: through each along the ray, fuller as it breathes in.
+    float lungs = 0;
+    const uint first = g_push.vesselCount + airways;
+    [unroll] for (uint s = 0; s < 2; ++s) {
+        const float3 c = asfloat(vs.Load3((first + s) * 32));
+        [unroll] for (uint k = 0; k < 8; ++k) {
+            const float3 q = (r + dir * ((float(k) + 0.5) * 0.035) - c) / (K_HUMAN_LUNG_RADII * (0.92 + 0.08 * full));
+            lungs += exp(-dot(q, q) * 1.5) * 0.035;
+        }
+    }
+    return K_MAGIC_COLOR_AIR * (2.2 * air + 18.0 * lungs * (0.3 + 0.7 * full)) * fill * K_MAGIC_SURFACE_GLOW;
 }
 
 // ---------------------------------------------------------------- the surface
@@ -171,14 +227,24 @@ GBufferOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
         const float3 v = normalize(i.rel);  // the view ray, world; into the model's frame
         const float3 dir = float3(v.x * c - v.z * s, v.y, v.x * s + v.z * c);
         const float local = min(lifeMagicAt(i.rest, beat) / K_MAGIC_HELD, 2.5);
-        const float3 glow = heldMagicGlow(MAGIC_HELD_NATURE, fill * local * 0.6, length(i.rest - g_push.heart.xyz) * 1.15, 1.0) +
-                            coresGlow(i.rest, dir, fill, beat) + vesselsGlow(i.rest, dir, fill);
+        // Its water magic (the user: it is mostly water) streams through it too, slower, in its own blue.
+        const float waterFlow = i.rest.y * 0.8 + length(i.rest.xz) * 2.0;
+        const float waterThreads = pow(0.5 + 0.5 * cos(i.rest.x * 40.0 + i.rest.z * 25.0 + i.rest.y * 6.0), 2.0);
+        const float3 glow = heldMagicGlow(MAGIC_HELD_LIFE, fill * local * 0.6, length(i.rest - g_push.heart.xyz) * 1.15, 1.0) +
+                            heldMagicGlow(MAGIC_HELD_WATER, g_push.breath.y * K_HUMAN_WATER / K_MAGIC_HELD * 0.3, waterFlow, waterThreads * 0.7) +
+                            coresGlow(i.rest, dir, fill, beat) + vesselsGlow(i.rest, dir, fill) + breathGlow(i.rest, dir, 1.0);
         o.albedo = magicViewAlbedo(a.rgb, glow);
     } else {
         o.albedo = float4(a.rgb, i.ao);
     }
     o.normal = float4(N, rough);
-    o.material = float4(translucency, specular, subsurface, packMagic(MAGIC_HELD_NATURE, g_push.info.x, false));
-    o.motion = 0;  // it barely moves: the motion pass uses the camera's
+    o.material = float4(translucency, specular, subsurface, packMagic(MAGIC_HELD_LIFE, g_push.info.x, true));
+    float2 motion = 0;
+    if (g_frame.cameraDelta.w > 0 && i.prevClip.w > 1e-6) {
+        const float2 cur = i.curClip.xy / i.curClip.w * float2(0.5, -0.5) + 0.5;
+        const float2 prev = i.prevClip.xy / i.prevClip.w * float2(0.5, -0.5) + 0.5;
+        motion = prev - cur;
+    }
+    o.motion = motion;  // its own motion (it runs, swims, flies)
     return o;
 }

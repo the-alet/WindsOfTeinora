@@ -1,5 +1,8 @@
 #include "render/terrain_renderer.h"
 
+#include "gpu_types.h"
+#include "taelia/shared_constants.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -131,6 +134,9 @@ void TerrainRenderer::shutdown() {
     tiles_.clear();
     results_.clear();
     pipeline_.reset();
+    dents_.reset();
+    dentsVersion_ = ~0ull;
+    dentsAny_ = false;
     slotBlas_.clear();
     positions_.reset();
     indices_.reset();
@@ -248,6 +254,7 @@ void TerrainRenderer::select(const dvec3& cam, const Frustum& f, bool wait) {
                 it->second.minH = t.minH;
                 it->second.maxH = t.maxH;
                 it->second.generated = true;
+                it->second.uploaded = false;  // (again, after a refresh: into the same slot)
             }
             results_.clear();
         }
@@ -303,7 +310,7 @@ void TerrainRenderer::upload(rhi::CommandList* cmd) {
             if (rayTracing_) cmd->barrier(positions_.get(), rhi::State::CopyDst);
             any = true;
         }
-        t.slot = allocSlot();
+        if (t.slot < 0) t.slot = allocSlot();
         if (t.slot < 0) continue;
         rhi::Transient src = device_->allocTransient(kTileBytes);
         std::memcpy(src.cpu, t.data.data(), kTileBytes);
@@ -400,6 +407,76 @@ namespace taelia {
 int TerrainRenderer::leafSlot(int64_t ix, int64_t iz) const {
     auto it = tiles_.find(makeKey(0, ix, iz));
     return (it != tiles_.end() && it->second.uploaded) ? it->second.slot : -1;
+}
+
+void TerrainRenderer::refresh(double x0, double z0, double x1, double z1) {
+    std::vector<uint64_t> keys;
+    auto sext = [](uint64_t v) { return int64_t(v << 34) >> 34; };
+    for (const auto& [key, t] : tiles_) {
+        if (!t.generated) continue;  // still on its way: it reads the new heights anyway
+        const int level = int(key >> 60);
+        const int64_t ix = sext((key >> 30) & 0x3fffffffull), iz = sext(key & 0x3fffffffull);
+        const double size = tileSize(level), tx = double(ix) * size, tz = double(iz) * size;
+        if (tx > x1 || tx + size < x0 || tz > z1 || tz + size < z0) continue;
+        keys.push_back(key);
+    }
+    if (keys.empty()) return;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const uint64_t k : keys) jobs_.push_back(k);
+    }
+    wake_.notify_all();
+}
+
+namespace {
+constexpr int kDentCells = 512;  // the dent window: 32 m round the eye
+}
+
+void TerrainRenderer::updateDents(const dvec3& cam) {
+    if (!terrain_) return;
+    const double cell = k::TERRAIN_EDIT_CELL;
+    // The window moves in steps of 64 cells (4 m), so it is not uploaded every frame.
+    const int64_t i0 = (int64_t(std::floor(cam.x / cell)) - kDentCells / 2) / 64 * 64, j0 = (int64_t(std::floor(cam.z / cell)) - kDentCells / 2) / 64 * 64;
+    const uint64_t version = terrain_->editsVersion();
+    if (version == 0) {
+        dentsAny_ = false;
+        return;
+    }
+    if (dents_ && version == dentsVersion_ && i0 == dentsI0_ && j0 == dentsJ0_) return;
+    if (!dents_) {
+        rhi::TextureDesc d;
+        d.width = kDentCells;
+        d.height = kDentCells;
+        d.format = rhi::Format::R32_FLOAT;
+        d.usage = rhi::TextureUsage::Sampled;
+        d.name = "terrain.dents";
+        dents_ = device_->createTexture(d);
+        if (!dents_) return;
+    }
+    terrain_->editsInArea((double(i0) + 0.5) * cell, (double(j0) + 0.5) * cell, kDentCells, dentTexels_);
+    device_->uploadTexture(dents_.get(), dentTexels_.data(), dentTexels_.size() * sizeof(float));
+    dentsVersion_ = version;
+    dentsI0_ = i0;
+    dentsJ0_ = j0;
+    dentsAny_ = true;
+}
+
+void TerrainRenderer::dentsFrameData(gpu::FrameConstants& fc, const dvec3& cam) const {
+    fc.dents = {0, 0, 0, 0};
+    if (!dentsAny_ || !dents_) return;
+    const double cell = k::TERRAIN_EDIT_CELL;
+    const uint32_t srv = dents_->srv();
+    float bits;
+    std::memcpy(&bits, &srv, 4);
+    fc.dents = {float(double(dentsI0_) * cell - cam.x), float(double(dentsJ0_) * cell - cam.z), float(kDentCells * cell), bits};
+}
+
+int TerrainRenderer::coveringSlot(int64_t ix, int64_t iz) const {
+    for (int level = 0; level < std::min(levels_, 6); ++level) {
+        auto it = tiles_.find(makeKey(level, ix >> level, iz >> level));
+        if (it != tiles_.end() && it->second.uploaded) return it->second.slot | (level << 24);
+    }
+    return -1;
 }
 
 }  // namespace taelia

@@ -46,7 +46,7 @@ struct DropSource {
     double rate = 0;
 };
 
-// What dense magic leaves and keeps: a mineral (earth) or a sprout (nature). It holds its own magic like any object.
+// What dense magic leaves and keeps: a mineral (earth) or a sprout (life). It holds its own magic like any object.
 enum class ManifestKind : uint8_t { Mineral, Sprout };
 struct Manifestation {
     uint32_t id = 0;
@@ -54,6 +54,7 @@ struct Manifestation {
     dvec3 position;    // its foot
     float volume = 0;  // m3
     float held = 0;    // kg/m3 of its aspect it holds
+    float necrotic = 0;  // kg/m3 of necrotic magic it has taken up (it eats a sprout's life magic)
     uint32_t seed = 0; // its shape
 };
 struct Firefly {  // light, not insects
@@ -76,6 +77,7 @@ struct MagicSample {
     dvec3 u;           // m/s
     double theta = 0;  // J
     double airT = 0;   // K over the air's own temperature
+    double necroticHeld = 0;  // kg/m3 of necrotic magic the things here hold (it tints them)
     int level = -1;    // -1: no field here, the baseline
 };
 
@@ -101,7 +103,16 @@ struct MagicLevelView {
 
 class MagicField {
 public:
-    enum Value : int { kRho = 0, kU = 8, kTheta = 11, kAirT = 12, kValues = 13 };
+    // Per cell: the densities in Aspect order, the velocity, Theta, the air's temperature, and what the things there
+    // hold of necrotic magic (it evens out with the necrotic magic round them like any held magic).
+    enum Value : int {
+        kRho = 0,
+        kU = kAspects,
+        kTheta = kAspects + 3,
+        kAirT = kAspects + 4,
+        kNecroticHeld = kAspects + 5,
+        kValues = kAspects + 6
+    };
 
     MagicField(const Terrain* terrain, const WindField* wind, const MagicOptions& o = {});
     ~MagicField();
@@ -129,8 +140,9 @@ public:
     bool addDensity(const dvec3& p, Aspect a, double kgPerM3);
     // Adds kg of an aspect to the finest cell holding p (a lightning strike's fire). False if none.
     bool addMass(const dvec3& p, Aspect a, double kg);
-    // The densities in the finest cell holding p, as they are (no blending with its neighbours). False if none.
-    bool cellAt(const dvec3& p, MagicDensities& out) const;
+    // The densities in the finest cell holding p, as they are (no blending with its neighbours), and its volume (m3).
+    // False if none.
+    bool cellAt(const dvec3& p, MagicDensities& out, double* volume = nullptr) const;
     // Rain over the camera now (0..1): raindrops carry water magic down.
     void setRain(double rain);
 

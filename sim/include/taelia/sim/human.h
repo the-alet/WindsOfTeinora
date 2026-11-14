@@ -4,7 +4,7 @@
 // spine, neck, jaw, lips, tongue, eyes and lids, every finger and toe). For now it stands in an idle pose: it breathes
 // slowly, shifts its weight, blinks and glances about.
 //
-// It holds life (nature) magic, densest in the heart and the brain, and the magic flows like blood (simplified): out
+// It holds life magic, densest in the heart and the brain, and the magic flows like blood (simplified): out
 // from the heart through the arteries with each heartbeat, back through the veins. Engine-free: every front end shares it.
 #pragma once
 #include <cstdint>
@@ -53,6 +53,7 @@ struct HumanSubmesh {
 };
 
 // A stretch of blood vessel: from a to b, how far along the vessels each end is from the heart (m), artery or vein.
+// Airways the same way, from the nose and mouth down to the lungs (m along them).
 struct HumanVessel {
     fvec3 a, b;
     float fromHeartA = 0, fromHeartB = 0;
@@ -66,6 +67,8 @@ struct HumanMesh {
     std::vector<uint32_t> indices;  // triangles, counter-clockwise seen from outside
     std::vector<HumanSubmesh> submeshes;
     std::vector<HumanVessel> vessels;
+    std::vector<HumanVessel> airways;  // nose and mouth, throat, windpipe, bronchi into each lung (fromHeart: from the nose)
+    dvec3 lungs[2];                    // the lungs' middles (left, right); HUMAN_LUNG_RADII across
     dvec3 heart, brain;             // where its life magic is densest
     float height = 0;               // the top of the hair above the soles
     std::string directory;          // where it was read from (its textures are there)
@@ -85,17 +88,55 @@ struct HumanBoneMatrix {
 };
 using HumanPose = std::vector<HumanBoneMatrix>;
 
-// The idle pose at this moment (simulated seconds): standing, arms hanging, fingers relaxed; it breathes slowly (the
-// chest fills, the shoulders rise a little), shifts its weight, blinks now and then and glances about. The feet stay put.
+// What its body is doing (the player drives it, sim/player.h): each part 0..1 unless said, eased in and out by the
+// caller so poses blend without jumps. Model space as the mesh's: the feet's point on the ground at the origin.
+struct HumanMotion {
+    double seconds = 0;      // simulated: breathing, blinking, glances, strokes
+    double gait = 0;         // the gait's phase in cycles (two steps), integrated as speed / humanGaitCycle(speed)
+    double speed = 0;        // m/s over the ground
+    double crouch = 0;       // crouching
+    double air = 0;          // off the ground (a jump, a fall) ...
+    double rise = 0;         // ... rising this fast (m/s; < 0 falling)
+    double land = 0;         // just landed: the knees take it (1 .. 0)
+    double swim = 0;         // swimming (the origin is the point of the surface it floats at) ...
+    double swimSpeed = 0;    // ... this fast (m/s)
+    double fly = 0;          // flying ...
+    double flySpeed = 0;     // ... this fast (m/s) ...
+    double flyClimb = 0;     // ... climbing (+1) or diving (-1)
+    double dash = 0;         // the burst of a dash
+    double form = 0;         // its hands gathering a ball ...
+    double ball = 0;         // ... this full (0..1)
+    double toss = -1;        // seconds since it threw one (< 0: none lately)
+    double lookYaw = 0;      // where it looks, from its body's facing (radians, + to its left) ...
+    double lookPitch = 0;    // ... and up (+)
+    double lean = 0;         // into a turn (radians, + to its left)
+};
+
+// The pose for a motion: standing (arms hanging, fingers relaxed, breathing, shifting its weight, blinking, glancing
+// about), walking and running, crouching, jumping and landing, dashing, swimming (breaststroke; treading water when
+// still), flying (streamlined at speed, upright when hovering), gathering a ball between its hands and throwing it.
+// Legs and arms reach their targets by two-bone IK; feet stay flat on the ground while they stand on it.
+HumanPose humanPose(const HumanMotion& motion);
+// How far it goes in one gait cycle (two steps) at this speed (m): longer strides the faster it goes.
+double humanGaitCycle(double speed);
+// The idle pose at this moment (simulated seconds): humanPose of a body standing still.
 HumanPose humanIdlePose(double seconds);
+// Where the ball it gathers sits between its hands for this motion (model space).
+dvec3 humanBallPoint(const HumanMotion& motion);
+// Where its eyes are in a pose (model space, between them): the camera in first person.
+dvec3 humanEyes(const HumanPose& pose);
+// First person: its head (and all on it: eyes, hair, brows) shrunk to a point, so the eye inside sees out.
+void hideHumanHead(HumanPose& pose);
 
 // Where a rest-space vertex goes in a pose, skinned like the mesh.
 fvec3 humanSkin(const HumanPose& pose, const HumanVertex& v);
 
-// The life (nature) magic it holds at a point of its body (model space, kg/m3) when its share is full: its share
+// The life magic it holds at a point of its body (model space, kg/m3) when its share is full: its share
 // everywhere, far denser in the heart and the brain. Scale by how full its share is.
 double humanLifeMagicAt(const dvec3& p);
 // The heartbeat now: 0 between beats, up to 1 at each of the two close knocks of a beat.
 double humanHeartbeat(double seconds);
+// Where it is in a breath (0..1: breathing in up to 0.5, out after), as the pose breathes (faster when it runs).
+double humanBreathPhase(const HumanMotion& motion);
 
 }  // namespace taelia

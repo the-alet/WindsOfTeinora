@@ -1,4 +1,4 @@
-// What dense magic shows (step 5f): minerals (clusters of amber crystals, earth) and sprouts (small leafy plants, nature)
+// What dense magic shows (step 5f): minerals (clusters of amber crystals, earth) and sprouts (small leafy plants, life)
 // in the G-buffer, minerals also in the ray-traced scene; fireflies (light, not insects) as soft glowing sprites; and
 // for the frame constants, the box where magic is past the dew point.
 #pragma once

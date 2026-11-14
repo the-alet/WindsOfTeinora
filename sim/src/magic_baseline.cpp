@@ -27,7 +27,7 @@ double freeMagic(double y) { return 1.0 - smoothstep(k::MAGIC_FREE_TOP0, k::MAGI
 
 double earthFactor(const MagicColumn& c) { return 0.9 + 0.3 * clampd(c.rockSand, 0.0, 1.0); }
 
-double crownNature(const std::vector<MagicCrown>* crowns, double x, double y, double z) {
+double crownLife(const std::vector<MagicCrown>* crowns, double x, double y, double z) {
     if (!crowns) return 0;
     double best = 0;
     for (const MagicCrown& c : *crowns) {
@@ -35,7 +35,7 @@ double crownNature(const std::vector<MagicCrown>* crowns, double x, double y, do
         const double q = dx * dx + dy * dy + dz * dz;
         if (q < 1.0) best = std::max(best, 1.0 - smoothstep(0.5, 1.0, q));
     }
-    return best * k::MAGIC_NATURE_CROWN;
+    return best * k::MAGIC_LIFE_CROWN;
 }
 
 // Crown ellipsoids of the grown skeletons (per kind and variant, at scale 1), measured once from their leaves.
@@ -127,10 +127,10 @@ MagicDensities MagicBaseline::point(const MagicColumn& c, double x, double y, do
         water = k::MAGIC_WATER_NEAR * fmath::exp(-c.shoreDistance / k::MAGIC_WATER_SCALE) *
                 fmath::exp(-std::max(0.0, yy - c.shoreLevel) / k::MAGIC_WATER_SCALE);
     d[Aspect::Water] = float(water);
-    double nature = 0;
+    double life = 0;
     if (yy >= c.surface())
-        nature = k::MAGIC_NATURE_MEADOW * c.meadow * fmath::exp(-(yy - c.ground) / k::MAGIC_NATURE_SCALE);
-    d[Aspect::Nature] = float(std::max(nature, crownNature(crowns, x, yy, z)));
+        life = k::MAGIC_LIFE_MEADOW * c.meadow * fmath::exp(-(yy - c.ground) / k::MAGIC_LIFE_SCALE);
+    d[Aspect::Life] = float(std::max(life, crownLife(crowns, x, yy, z)));
     const double free = k::MAGIC_AMBIENT_FREE * freeMagic(yy);
     d[Aspect::Air] = float(0.5 * free);
     d[Aspect::Neutral] = float(0.5 * free);
@@ -149,9 +149,9 @@ MagicDensities MagicBaseline::average(const MagicColumn& c, double x, double z, 
         water = k::MAGIC_WATER_NEAR * fmath::exp(-c.shoreDistance / k::MAGIC_WATER_SCALE) *
                 avgExp(a, b, c.shoreLevel, k::MAGIC_WATER_SCALE);
     d[Aspect::Water] = float(water);
-    double nature = 0;
-    if (!c.underwater()) nature = k::MAGIC_NATURE_MEADOW * c.meadow * avgExp(a, b, c.ground, k::MAGIC_NATURE_SCALE);
-    d[Aspect::Nature] = float(std::max(nature, crownNature(crowns, x, 0.5 * (a + b), z)));
+    double life = 0;
+    if (!c.underwater()) life = k::MAGIC_LIFE_MEADOW * c.meadow * avgExp(a, b, c.ground, k::MAGIC_LIFE_SCALE);
+    d[Aspect::Life] = float(std::max(life, crownLife(crowns, x, 0.5 * (a + b), z)));
     const double free = k::MAGIC_AMBIENT_FREE * freeMagic(0.5 * (a + b));
     d[Aspect::Air] = float(0.5 * free);
     d[Aspect::Neutral] = float(0.5 * free);

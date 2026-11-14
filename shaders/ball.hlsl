@@ -22,16 +22,22 @@ struct VSOut {
 VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     const float3 p = asfloat(g_buffers[g_push.vbSrv].Load3(vid * 12));
     ByteAddressBuffer inst = g_buffers[g_push.instSrv];
-    const uint base = g_push.instOffset + iid * 64;
+    const uint base = g_push.instOffset + iid * 80;
     const float3 rel = asfloat(inst.Load3(base));
     const float4 q = asfloat(inst.Load4(base + 16));
     const float3 prevRel = asfloat(inst.Load3(base + 32));
     const float4 prevQ = asfloat(inst.Load4(base + 48));
+    const float4 squash = asfloat(inst.Load4(base + 64));
 
     VSOut o;
-    o.normal = rotateByQuat(q, p);
+    const float3 dir = rotateByQuat(q, p);
+    // Where it hit it squashes along the ground's normal and bulges round it (its volume kept), its bottom staying put.
+    const float s = saturate(squash.w), along = 1.0 - s, across = rsqrt(max(along, 0.05));
+    const float a = dot(dir, squash.xyz);
+    const float3 shape = squash.xyz * (a * along) + (dir - squash.xyz * a) * across - squash.xyz * s;
+    o.normal = normalize(squash.xyz * (a / along) + (dir - squash.xyz * a) / across);
     o.local = p;
-    o.pos = mul(g_frame.viewProj, float4(rel + o.normal * g_push.radius, 1));
+    o.pos = mul(g_frame.viewProj, float4(rel + shape * g_push.radius, 1));
     // The scene renders jittered (DLSS); motion is measured without it.
     o.curClip = o.pos;
     o.curClip.x -= 2.0 * g_frame.jitter.x / g_frame.jitter.z * o.pos.w;
@@ -53,10 +59,10 @@ GBufferOut PSMain(VSOut i) {
     o.albedo = float4(a.rgb, 1.0 - 0.4 * a.w);  // the seam groove is a little shaded
     if (magicView()) {  // its magic swirls round it in bands
         const float flow = atan2(local.z, local.x) * 0.6 + local.y * 0.8;
-        o.albedo = magicViewAlbedo(a.rgb, heldMagicGlow(MAGIC_HELD_NATURE, 1.0, flow, pow(0.5 + 0.5 * cos(local.y * 10.0), 3.0)));
+        o.albedo = magicViewAlbedo(a.rgb, heldMagicGlow(MAGIC_HELD_LIFE, 1.0, flow, pow(0.5 + 0.5 * cos(local.y * 10.0), 3.0)));
     }
     o.normal = float4(normalize(i.normal), BALL_ROUGHNESS);
-    o.material = float4(0, BALL_SPECULAR, 0, packMagic(MAGIC_HELD_NATURE, 1.0, true));  // its own motion in the motion target
+    o.material = float4(0, BALL_SPECULAR, 0, packMagic(MAGIC_HELD_LIFE, 1.0, true));  // its own motion in the motion target
     o.motion = motion;
     return o;
 }

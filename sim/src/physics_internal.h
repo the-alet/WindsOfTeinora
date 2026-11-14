@@ -119,7 +119,8 @@ struct Physics::Impl {
     std::vector<TreeInstance> scratchTrees;
     std::vector<phys::PlantHit> plantHits;
     std::map<uint32_t, physx::PxRigidStatic*> rocks;
-    std::map<uint32_t, physx::PxRigidStatic*> capsules;
+    std::map<uint32_t, physx::PxRigidDynamic*> capsules;
+    std::vector<Impact> impacts;  // since the last takeImpacts
     Physics::MagicSampler magic;
     PhysicsStats stats;
 

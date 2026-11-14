@@ -11,15 +11,17 @@ namespace taelia {
 
 namespace {
 
-constexpr float kMassMu[kAspects] = {k::MAGIC_MASS_EARTH, k::MAGIC_MASS_WATER,     k::MAGIC_MASS_NATURE, k::MAGIC_MASS_FIRE,
-                                     k::MAGIC_MASS_AIR,   k::MAGIC_MASS_LIGHTNING, k::MAGIC_MASS_LIGHT,  k::MAGIC_MASS_NEUTRAL};
-constexpr float kShow[kAspects] = {k::MAGIC_SHOW_EARTH, k::MAGIC_SHOW_WATER,     k::MAGIC_SHOW_NATURE, k::MAGIC_SHOW_FIRE,
-                                   k::MAGIC_SHOW_AIR,   k::MAGIC_SHOW_LIGHTNING, k::MAGIC_SHOW_LIGHT,  0.0f};
+constexpr float kMassMu[kAspects] = {k::MAGIC_MASS_EARTH, k::MAGIC_MASS_WATER,     k::MAGIC_MASS_LIFE, k::MAGIC_MASS_FIRE,
+                                     k::MAGIC_MASS_AIR,   k::MAGIC_MASS_LIGHTNING, k::MAGIC_MASS_LIGHT,  k::MAGIC_MASS_NEUTRAL,
+                                     k::MAGIC_MASS_NECROTIC};
+constexpr float kShow[kAspects] = {k::MAGIC_SHOW_EARTH, k::MAGIC_SHOW_WATER,     k::MAGIC_SHOW_LIFE, k::MAGIC_SHOW_FIRE,
+                                   k::MAGIC_SHOW_AIR,   k::MAGIC_SHOW_LIGHTNING, k::MAGIC_SHOW_LIGHT,  0.0f,
+                                   k::MAGIC_SHOW_NECROTIC};
 
 }  // namespace
 
 const char* aspectName(Aspect a) {
-    static const char* const names[kAspects] = {"earth", "water", "nature", "fire", "air", "lightning", "light", "neutral"};
+    static const char* const names[kAspects] = {"earth", "water", "life", "fire", "air", "lightning", "light", "neutral", "necrotic"};
     return int(a) < kAspects ? names[int(a)] : "?";
 }
 
@@ -123,7 +125,15 @@ double heldAfter(double held, double around, double dt) {
     return target + (held - target) * fmath::exp(-dt / double(k::MAGIC_HELD_TAU));
 }
 
+double heldToward(double held, double target, double dt) {
+    return target + (held - target) * fmath::exp(-dt / double(k::MAGIC_HELD_TAU));
+}
+
 bool fallsApart(double held) { return held < double(k::MAGIC_FALL_APART) * k::MAGIC_HELD; }
+
+double lifeLeft(double held, double necrotic, double dt) {
+    return held * fmath::exp(-double(k::MAGIC_NECROTIC_ABSORB) * std::max(necrotic, 0.0) * dt);
+}
 
 int fireflyCount(double light) {
     if (light < k::MAGIC_SHOW_LIGHT) return 0;
